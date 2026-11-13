@@ -1,0 +1,170 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 1fb333d52..e456084c6 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -136351,11 +136351,11 @@ def t_situation_rule_android_run_cmd_check():
+                                  ("-D 的值不算任務", "./gradlew -D test app:testDebugUnitTest", ["app:testDebugUnitTest"]),
+                                  ("--console 的值不算任務", "./gradlew --console plain test", ["test"]),
+                                  ("--tests=帶等號只跳自己", "./gradlew --tests=x test", ["test"]),
+                                  ("--tests 的值不算任務", "./gradlew :app:testDebugUnitTest --tests test", [":app:testDebugUnitTest"]),
+                                  ("cd 之後那段的 gradle", "cd sub && ./gradlew app:test --tests x", ["app:test"])):
+-            got = m._gradle_task_list(cmd)
++            got = [t for _pdir, ts in m._gradle_task_list(cmd) for t in ts]   # r2 起每個 gradle 段一組 (專案目錄, 任務)
+             check(f"S6 ⑬任務清單 {label}", got == want, f"{cmd!r} → {got}")
+         for label, tasks, want in (("feature:search:test(Android、無開頭冒號)→ 擋", ["feature:search:test"], ["feature:search:test"]),
+                                    ("core:domain:test(純 JVM、無開頭冒號)→ 不擋", ["core:domain:test"], []),
+                                    (":core:domain:test(純 JVM)→ 不擋", [":core:domain:test"], []),
+                                    ("..:test 不認", ["..:test"], []),
+@@ -136393,10 +136393,152 @@ def t_situation_rule_android_run_cmd_check():
+         for x in roots:
+             _ksp_sh.rmtree(x, ignore_errors=True)
+         _ksp_sh.rmtree(cat.parent, ignore_errors=True)
+ 
+ 
++def t_situation_rule_android_run_cmd_segments():
++    """[代碼審 code-人裁殺傷力android r2 c1、b1、t1、g1、b2、b3] 任務清單看 run_cmd 的每一個 gradle 段、shell 註解不算、`-p` 換專案目錄、
++    `:test` 是根專案的 test、run_cmd 不是字串照設定錯拒絕。平台根是 Android 版面(app、lib 是 Android 模組,core 純 JVM;android/ 底下另一個
++    Gradle 專案:android/mobile 是 Android、android/core 純 JVM;平台根的 core 是 Android),直接問人裁的 run_cmd 檢查(_situation_rule_android_cmd_problem):
++    ①擋:`clean && test`、`--stop; test`、`:app:test || :lib:test`(兩個都要點名)、註解後換行的下一行 `test`、`:test`、`-p android :mobile:test`、
++    `--project-dir=android mobile:test`;②不擋(★對照★):`# test only` 行尾註解、註解裡的 `&& ./gradlew test`、`clean && :app:testDebugUnitTest`、
++    `-p android :core:test`(android/core 純 JVM);③端到端:兩個 gradle 段的 run_cmd → rc2、殺傷力沒跑;run_cmd 是清單、數字(Android 版面)或清單
++    (profile 是 python)→ rc2、講 run_cmd 不是字串、沒有 traceback、殺傷力沒跑。
++    判準來源:計劃〈用詞〉任務清單與擋下的 test 任務、r2-intake R1(POSIX 註解、Gradle -p 與 :test 的說明);應抓到的錯:只看第一個 gradle 段、
++    把 # 之後的詞當任務、-p 的值被跳過而照平台根找模組、:test 不擋、run_cmd 不是字串時丟例外。"""
++    m = _load_lumos_inproc()
++    proot = Path(tempfile.mkdtemp(prefix="gctl-sra-seg-"))
++    roots = []
++    cat = _srl_cat()
++    try:
++        # -p 那幾格要分得出「照 android/ 找模組」與「照平台根找模組」:mobile 只在 android/ 底下(Android);core 在平台根是 Android、
++        # 在 android/ 底下是純 JVM
++        for rel, txt in (("settings.gradle.kts", 'include(":app", ":lib", ":core")\n'), ("app/build.gradle.kts", _SRA_BUILD_ANDAPP),
++                         ("lib/build.gradle.kts", _SRA_BUILD_ANDLIB), ("core/build.gradle.kts", _SRA_BUILD_ANDLIB),
++                         ("android/settings.gradle.kts", 'include(":mobile", ":core")\n'), ("android/mobile/build.gradle.kts", _SRA_BUILD_ANDAPP),
++                         ("android/core/build.gradle.kts", _SRA_BUILD_JVM)):
++            (proot / rel).parent.mkdir(parents=True, exist_ok=True)
++            (proot / rel).write_text(txt, encoding="utf-8")
++
++        def why(cmd):
++            pdata = {"default_platform": "kotlin", "multiplatform": True,
++                     "platforms": {"kotlin": {"profile_name": "kotlin-junit", "root": str(proot), "run_cmd": cmd}}}
++            return m._situation_rule_android_cmd_problem(pdata, str(proot / "app" / "src" / "main" / "A.kt")) or ""
++        for label, cmd, words in (("兩段 clean && test", "./gradlew clean && ./gradlew test --tests '*{method}'", ["任務 test "]),
++                                  ("兩段 --stop; test", "./gradlew --stop; ./gradlew test", ["任務 test "]),
++                                  ("兩段 :app:test || :lib:test(兩個都點名)", "./gradlew :app:test || ./gradlew :lib:test", ["任務 :app:test ", "任務 :lib:test "]),
++                                  ("註解只到行尾:下一行的 test", "./gradlew :app:testDebugUnitTest # 註解\n./gradlew test", ["任務 test "]),
++                                  (":test 根專案的 test", "./gradlew :test --tests '*{method}'", ["任務 :test "]),
++                                  ("-p android :mobile:test(android/mobile 是 Android)", "./gradlew -p android :mobile:test --tests '*{method}'",
++                                   ["任務 :mobile:test "]),
++                                  ("--project-dir=android mobile:test", "./gradlew --project-dir=android mobile:test", ["任務 mobile:test "])):
++            got = why(cmd)
++            check(f"r2 R1 擋 {label}", bool(got) and all(w in got for w in words), f"{cmd!r} → {got!r}")
++        for label, cmd in (("# test only 行尾註解", "./gradlew :app:testDebugUnitTest --tests '*{method}' # test only"),
++                           ("註解裡的 && ./gradlew test", "./gradlew :app:testDebugUnitTest # 不要 && ./gradlew test"),
++                           ("兩段都沒有擋下的任務", "./gradlew clean && ./gradlew :app:testDebugUnitTest --tests '*{method}'"),
++                           ("-p android :core:test(android/core 純 JVM;平台根的 core 是 Android)", "./gradlew -p android :core:test --tests '*{method}'")):
++            got = why(cmd)
++            check(f"r2 R1 ★對照★不擋 {label}", got == "", f"{cmd!r} → {got!r}")
++
++        def go(run_cmd, **kw):
++            root, _plan, sha, path = _sra_android_repo(run_cmd, **kw)
++            roots.append(root)
++            seg = _sra_seg(root, cat, sha, 4, path=path)
++            return _srl_run(root, cat, *_srl_args(seg or "x", **{"--file": path})), root
++        r, root = go("./gradlew clean && ./gradlew test --tests '*{method}'")
++        check("r2 R1 端到端:兩個 gradle 段、第二段是頂層 test → rc2、殺傷力沒跑", r.returncode == 2 and not _srl_kill(root)
++              and "任務 test " in r.stderr, f"rc={r.returncode} {r.stderr[-600:]}")
++        for label, cmd, kw in (("清單", ["./gradlew", "test"], {}), ("數字", 123, {}), ("清單、profile 是 python", ["python3", "-m", "pytest"],
++                                                                                   {"profile": "python"})):
++            r, root = go(cmd, **kw)
++            check(f"r2 R1 run_cmd 是{label} → rc2、講 run_cmd 不是字串、沒有 traceback、殺傷力沒跑",
++                  r.returncode == 2 and "run_cmd" in r.stderr and "不是字串" in r.stderr and "Traceback" not in r.stderr
++                  and not _srl_kill(root), f"rc={r.returncode} {r.stderr[-600:]}")
++    finally:
++        _ksp_sh.rmtree(proot, ignore_errors=True)
++        for x in roots:
++            _ksp_sh.rmtree(x, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_header_scan_strip():
++    """[代碼審 code-人裁殺傷力android r2 a1、z1] 檔頭區照既有 Kotlin 剝註解與字串(_strip_c_comments kotlin=True)判,不另寫一套:
++    ①多行 @file: 裡的三引號字串有一行 `import x.Y` → 不算已有、插在檔頭的 import q.Q 之後;同一支檔 --import q.Q → 講已經 import;
++    ②多行 @file: 的三引號字串第二行有 `(` → 括號照收、插在 import b.C 之後;③import 行同一行開了三引號字串(行尾在字串裡)→ 不當插入點、
++    字串裡的 `import q.Q` 不算已有;④巢狀區塊註解、⑤檔首 BOM 加 shebang 照舊;⑥檔頭只有 package 加 20 萬行空行 → 記憶體峰值
++    (tracemalloc)不超過原文的 40 倍(每行建一筆會到上百倍)、結果照舊插在 package 之後;⑦結構:檔頭掃描呼叫 _strip_c_comments、
++    自寫的逐行剝註解(_situation_rule_code_of_line)拿掉。
++    判準來源:r2-intake R2(單一剝註解入口、只留 import 與 package 行);應抓到的錯:自寫逐行掃描不認三引號字串(括號數錯、字串裡的 import 當真)、
++    行尾在字串裡的行當插入點、每行建一筆。"""
++    import tracemalloc
++    m = _load_lumos_inproc()
++    imp = "import q.Q"
++    for label, src, new, imps, want_old in (
++            ("①@file: 三引號字串裡的 import x.Y 不算已有", '@file:Suppress("""\nimport x.Y\n""")\npackage a\nimport q.Q\nclass X\n', "Y.f",
++             ["import x.Y"], "import q.Q\n"),
++            ("②@file: 三引號字串第二行有 (", '@file:Suppress(\n    """x\n(y"""\n)\npackage a\nimport b.C\nclass X\n', "Q.f", [imp], "import b.C\n"),
++            ("③import 行開了三引號字串、字串裡的 import q.Q 不算", 'package a\nimport x.Y\nimport z.W; val s = """\nimport q.Q\n"""\n', "Q.f", [imp],
++             "import x.Y\n"),
++            ("④巢狀區塊註解", "package a\nimport x.Y\n/* a /* b */ import old.Q\n*/\nimport z.W\nclass C\n", "Q.f", [imp], "import z.W\n"),
++            ("⑤BOM 加 shebang", "﻿#!/usr/bin/env kotlin\npackage a\nimport x.Y\nfun f() {}\n", "Q.f", [imp], "import x.Y\n")):
++        got, why = m._situation_rule_imports_problem(src, new, imps)
++        check(f"r2 R2 {label} → also 插在 {want_old!r} 之後", why is None and got == [{"old": want_old, "new": want_old + imps[0] + "\n"}],
++              f"{got} {why}")
++    got, why = m._situation_rule_imports_problem('@file:Suppress("""\nimport x.Y\n""")\npackage a\nimport q.Q\nclass X\n', "Q.f", [imp])
++    check("r2 R2 ①同一支檔 --import q.Q → 講已經 import", got is None and "已經 import" in (why or ""), f"{got} {why}")
++    src = "package a\n" + "\n" * 200_000
++    tracemalloc.start()
++    try:
++        got, why = m._situation_rule_imports_problem(src, "Q.f", [imp])
++        _cur, peak = tracemalloc.get_traced_memory()
++    finally:
++        tracemalloc.stop()
++    check("r2 R2 ⑥20 萬行空行 → 結果照舊插在 package 之後", why is None and got == [{"old": "package a\n", "new": "package a\n" + imp + "\n"}],
++          f"{got} {why}")
++    check("r2 R2 ⑥20 萬行空行 → 峰值不超過原文 40 倍(不每行建一筆)", peak <= 40 * len(src), f"peak={peak} src={len(src)}")
++    import inspect as _inspect
++    body = _inspect.getsource(m._situation_rule_header_scan)
++    check("r2 R2 ⑦結構:檔頭掃描呼叫 _strip_c_comments(kotlin=True)、自寫的逐行剝註解拿掉",
++          "_strip_c_comments(" in body and "kotlin=True" in body and not hasattr(m, "_situation_rule_code_of_line"), body[:300])
++
++
++def t_situation_rule_diff_no_git():
++    """[代碼審 code-人裁殺傷力android r2 a2] --diff 兩端照既有的 _lens_full_sha 解析(有逾時、git 跑不起來回 None):
++    ①git 在 PATH 上:`main..HEAD` → 收(None);左端解析不到 → 講解析不到;②PATH 換成空資料夾(git 不在)→ 回原因字串、不丟例外;
++    ③端到端:PATH 換成空資料夾跑人裁 → rc2、沒有 traceback;④結構:_situation_rule_diff_problem 呼叫 _lens_full_sha、不自己叫 subprocess。
++    判準來源:r2-intake R3;應抓到的錯:自叫 git 沒接 OSError(git 不在時 traceback)、沒逾時。"""
++    import os, inspect as _inspect
++    m = _load_lumos_inproc()
++    cat = _srl_cat()
++    root, _plan, sha = _sra_repo(_SRL_KT)
++    empty = Path(tempfile.mkdtemp(prefix="gctl-sra-nogit-"))
++    try:
++        check("r2 R3 ①main..HEAD → 收", m._situation_rule_diff_problem(root, "main..HEAD", sha) is None, "")
++        got = m._situation_rule_diff_problem(root, "nope-zzz..HEAD", sha)
++        check("r2 R3 ①左端解析不到 → 講解析不到", "解析不到" in (got or ""), repr(got))
++        o_path = os.environ.get("PATH", "")
++        os.environ["PATH"] = str(empty)
++        try:
++            try:
++                got = m._situation_rule_diff_problem(root, "main..HEAD", sha)
++            except Exception as e:   # 要的就是「不丟例外」:丟了就把例外當結果,下面的斷言紅
++                got = e
++        finally:
++            os.environ["PATH"] = o_path
++        check("r2 R3 ②git 不在 PATH → 回原因字串、不丟例外", isinstance(got, str) and "--diff" in got, repr(got))
++        seg = _sra_seg(root, cat, sha, 4)
++        r = _srl_run(root, cat, *_srl_args(seg or "x"), "--diff", "main..HEAD", env={"PATH": str(empty)})
++        check("r2 R3 ③端到端:git 不在 PATH → rc2、沒有 traceback", r.returncode == 2 and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stderr[-600:]}")
++        body = _inspect.getsource(m._situation_rule_diff_problem)
++        check("r2 R3 ④結構:呼叫 _lens_full_sha、不自己叫 subprocess", "_lens_full_sha(" in body and "subprocess" not in body, body[:300])
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(empty, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
+ def t_guard_kill_runs_at_platform_root():
+     """[代碼審 code-人裁殺傷力android r1 g1] 平台根是 repo 的子資料夾(sub/)時,guard kill 在隔離工作樹裡的平台根跑 run_cmd,跟推送前的合約測試閘
+     (_run_bound_tests 在平台根跑)同一處:①run_cmd 不帶 cd(`python3 test_guard.py`,測試檔只在 sub/ 底下)→ 基準在平台根跑得綠、壞法紅、判 killed,
+     跑的資料夾是工作樹裡的 sub;②同一條 run_cmd 合約測試閘也綠;③★對照★平台根就是 repo 最上層 → 照舊在工作樹本身跑;
+     ④平台根在 HEAD 那一版不存在(沒提交)→ 判 error、講平台根、基準沒跑。

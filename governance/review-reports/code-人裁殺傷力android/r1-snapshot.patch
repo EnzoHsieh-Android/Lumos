@@ -1,0 +1,1973 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/人裁殺傷力在真實Android專案跑得起來_計劃.md b/docs/lumos-toolchain-knowledge/Projects/人裁殺傷力在真實Android專案跑得起來_計劃.md
+new file mode 100644
+index 000000000..b5967b6d3
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/人裁殺傷力在真實Android專案跑得起來_計劃.md
+@@ -0,0 +1,155 @@
++---
++type: project
++status: doing
++created: 2026-11-13
++updated: 2026-11-13
++tags:
++  - type/project
++  - status/doing
++  - scope/stack-knowledge
++lands_in:
++  - Systems/guard-kill
++  - Systems/棧別提問表態閘
++  - Systems/lumos-cli-lifecycle
++---
++# 人裁殺傷力在真實Android專案跑得起來_計劃
++
++## 白話
++
++[[Projects/情境題答案要引規格出處與回寫循環_計劃]] 做好的人裁循環(規格沒寫 → 人點頭 → 先證明「把這段換成同一列另一種寫法、綁的測試會紅」→ 寫回條款),2026-11-13 第一次在真的 Gradle Android 專案跑,循環本身走通,但最常見的情境跑不動:把 `flatMapLatest` 換成 `flatMapConcat` 驗殺傷力時,檔頭逐一寫的 import 沒跟著換,換完編譯失敗,判成弱證據、人裁一律被拒。另外 `lumos init` 給 Android 的跑單支測試指令是壞的、錯誤訊息指向不存在的旗標、殺傷力帳本看不出失敗原因。這份計劃把這四個缺口補掉,讓人裁在真實 Android 專案用得起來;它也是 [[Projects/雙向追溯_需求與語法選擇點互證_計劃]] 正反兩向共用的「換成兄弟寫法會紅」零件的地基。缺口原文在 [[Issues/人裁殺傷力在真實Android專案跑不動的四個缺口]]。
++
++設計審 r1 後換了形狀:import 不再由工具猜(型錄觸發字混著成員名、點號寫法、跨套件名稱,猜套件會補出不存在的 import),改由給壞法的人或 AI 用 `--import` 明寫;跑測試指令不再由工具推模組(Android 的單元測試任務是每模組、每 flavor 各一條),改成偵測到 Android 就說明格式、要人照自己的任務填。
++
++PRIOR-ART: Android 單元測試要跑單支,得對變體任務加 `--tests`(`:app:testDebugUnitTest --tests …`),頂層 `test` 不收 `--tests`;有 product flavor 時變體是 `<flavor><BuildType>`,任務名跟著變(`testFreeDebugUnitTest`),AGP 9 起預設只建受測建置類型的單元測試任務——所以任務名只能照專案實際填,工具不猜;Kotlin 編譯器不對沒用到的 import 報警、`-Werror` 也不擋,所以「多加一行 import、舊的不刪」編譯安全;變異測試工具 PIT 在位元碼層改所以沒有 import 問題,但不產 API 層兄弟寫法、且在 Kotlin 上雜訊大(2026-11-13 實驗,見雙向追溯計劃〈待驗〉)——這一版留在原始碼層、import 由人明寫,位元碼層的自訂變異外掛留給雙向追溯計劃。
++RETIRE-IF: 雙向追溯計劃改用位元碼層變異引擎(PIT 自訂外掛)取代原始碼層壞法後,`--import` 就該撤掉;或上線兩個月內實際人裁沒有一次用到 `--import`(真實專案都用整包 import)也撤掉。
++
++## 舊否決比對
++
++- 「壞法人宣告、不做自動變異生成」([[Projects/guard殺傷力驗證_計劃]] d1,理由兩軸:工具不內建語言知識、自動生成有等價變異不可判定):r1 草稿讓工具依觸發字自動補 import,設計審四席判它碰到第一軸(語言知識進工具)、也不再全是人宣告;改成 `--import` 由人明寫之後,壞法(含補的 import)全由人宣告,工具只驗格式——兩軸都不碰。
++- 「另抽一支共用的殺傷力函式」([[Systems/guard-kill]] 那條否決):沿用 `recipes_override` 臨時配方那條路,只多一個 `also` 欄位;格式檢查照 `_kill_old_issue`/`_kill_new_issue` 的先例抽一支小檢查函式給人裁與殺傷力共用,不是另一套殺傷力函式。
++- 「從程式的 import 猜功能歸屬」([[Systems/android-e2e-acceptance]] 那條否決):新形狀不從 import 猜任何東西。
++
++## 用詞
++
++- **補 import**:人裁用 `--import` 明寫、要在殺傷力壞法裡多加的 import 行;整行 fullmatch `import [A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+`(ASCII 識別字,不收 `*`、`as`、反引號、尾隨空白),最後一段是 `<名稱>`。
++- **連帶替換(`also`)**:人裁臨時配方除了段內那一處 `old → new`,在同一支檔額外做的替換,資料形狀是清單(這一版最多一筆);只由 `--import` 產生,使用者不能直接給。行一律只用 `\n` 切(不用 `splitlines`)。
++- **檔頭區**:檔案開頭到第一個既不是空行、註解、`@file:` 註記、`package`、`import` 的行之前。
++- **Android 專案**:預設平台的根(`load_platforms` 給的 `root`,不是 repo 根)往下的建置檔裡,`_android_build_texts` 剝完註解後有 `_KT_BUILD_ANDROID` 認得的 Android 外掛宣告——跟既有 Android 現成檢查提醒(`_lint_android_ci_advisories`)同一套判法。
++- **任務清單**:run_cmd 用 shlex 切詞後,第一個檔名是 `gradlew` 或 `gradle`(去掉路徑)的詞之後、不以 `-` 開頭的詞;`-x`、`--exclude-task`、`-p`、`--project-dir`、`--tests` 後面那個詞是選項的值、不算任務;遇到 `&&`、`;`、`|` 就停。
++- **擋下的 test 任務**:任務清單裡,(a) 沒有模組前綴、剛好是 `test`,而且是 Android 專案;或 (b) `:<模組>:test`,而那個模組是 Android 模組(模組資料夾的 `build.gradle(.kts)` 剝完註解後 `_KT_BUILD_ANDROID` 認得)。純 JVM 模組的 `:core:domain:test` 不擋;`testDebugUnitTest` 這類變體任務不擋。
++- **觸發字**:沿用 [[Projects/情境題答案要引規格出處與回寫循環_計劃]] 的定義(Kotlin 型錄〈情境決策表〉每列的觸發字)。
++
++## 範圍
++
++1. **人裁收 `--import`**(`lumos situation-rule`,可重複給):
++   - 每個 `--import` 先驗形狀(〈用詞〉補 import);`<名稱>` 要在 `--new` 裡以識別字整字出現(`\b<名稱>\b`),而且 HEAD 那支檔的檔頭區沒有 import 它(同一行、同名不同套件、或 `<套件>.*` 都算已有);不合一律 rc 2、殺傷力不跑。名稱不必是觸發字(D-5 換成 `SharingStarted.Lazily` 要補 `SharingStarted`)。
++   - 插入點:HEAD 那支檔**檔頭區**裡最後一行 `import ` 開頭的行之後(逐行比對、取行號,不用子字串);檔頭區沒有 import 就插在 `package` 那一行之後;兩者都沒有就拒絕。檔頭區以外的行一律不看(多行字串裡的 `import ` 開頭行不算)。舊 import 不刪(Kotlin 不因沒用到的 import 失敗)。
++   - 產生一筆 `also`(old 是插入點那一整行加換行,new 是那一行加換行再加所有 `--import` 行),交給殺傷力驗證;人裁在跑殺傷力前先用範圍 2 的同一支檢查驗一次。
++   - 確認畫面多印「補 import」那幾行;治理帳 situation-rule 那筆多一欄 `imports`(清單);kill-log 那筆的 `note` 帶上補的 import。
++2. **殺傷力驗證認 `also`**(`cmd_guard_kill` 的 `recipes_override` 路徑):
++   - 只有臨時配方(`recipes_override`)認 `also`;筆記宣告的配方格式不變、帶了也不理。
++   - 一支小檢查函式(`_kill_also_issue`,人裁與殺傷力共用,照 `_kill_old_issue` 先例):每筆 `also` 的 `old` 要是一整行(以換行結尾、只有一行),`new` 要以 `old` 開頭、多出來的每一行都是〈用詞〉補 import 的形狀。
++   - 套用:主替換套好之後在記憶體裡對字串逐行找 `old` 那一行(整行相等),恰好一行才替換;不合判 `error`(不是 `drifted`:`also` 每次由這次的 HEAD 現算,不會因舊配方漂移而對不上,對不上就是錯),不寫檔、不跑壞法那一次(基準在這之前可能已跑過——跟 old 不合的既有判法同一處)。
++   - 還原照舊用 git checkout 整支檔還原,`also` 一起還原。
++3. **init 偵測到 Android 時給可用的格式**:`lumos init` 判斷是 Android 專案時,kotlin-junit 與 java-junit 兩個 profile 的骨架 run_cmd 改成 `./gradlew :YOUR_MODULE:testDebugUnitTest --tests '*{method}'`(佔位用 `YOUR_MODULE`,不用角括號——角括號在 shell 是轉向),同一份骨架的 `_請先確認` 說明多一句:換成測試所在模組;有 product flavor 時任務名是 `test<Flavor>DebugUnitTest`,`./gradlew tasks --all` 看實際名稱。單平台與多平台兩條骨架路徑都改;不是 Android 照舊。
++4. **人裁先查 Android 的 run_cmd**:預設平台的 profile(`load_platforms` 的 `profile_name`,不是平台鍵名)是 kotlin-junit 或 java-junit,而 run_cmd 的任務清單有〈用詞〉擋下的 test 任務、或 run_cmd 含 `YOUR_MODULE` 佔位時,在跑殺傷力之前拒絕(rc 2),印出:要改哪個設定檔的哪個鍵、正確格式(平台根不是 `.` 時前面加 `cd <平台根> && `,因為殺傷力在工作樹最上層執行 run_cmd)`./gradlew :<模組>:test<Variant>UnitTest --tests '*{method}'`、這段所在檔推出的模組候選(從 `--file` 往上找最近一層有 `build.gradle` 或 `build.gradle.kts` 的資料夾,相對平台根轉成 `:a:b`;資料夾名不合 `^[A-Za-z0-9_.-]+$` 就不印候選)、flavor 與 `./gradlew tasks --all` 的提示。不自動改設定。「Android 專案」從平台根判(既有 lint 提醒從 repo 根判,這裡要的是跑測試那個 Gradle 專案,刻意不同)。
++5. **人裁補 `--diff`**:`lumos situation-rule --diff <A..B>` 跟 `code-loop check --diff` 同一套規則(`_codeloop_disp_range`):分支找得到主線分岔點(或分支頂端已在主線)時一律照共用函式、`--diff` 不生效,這時印一行「你給的 --diff 沒採用,改用 <實際範圍>」(只要給了 `--diff` 而共用函式回的範圍字串不等於它就印);只在算不出分岔點時用 `--diff`。入口另驗:值不准以 `-` 開頭(同 `impact`、`pitfalls` 的先例),只收兩點寫法 `A..B`(三點寫法拒絕),兩端都要解析得到提交,右端要等於 HEAD 的提交,否則 rc 2。不改那支共用函式。
++6. **殺傷力帳本留失敗摘錄**:判定是 `killed_unattributed`、`timed_out_weak` 或 `abort`(基準非綠)時,kill-log 那筆多一欄 `fail_excerpt`(跟既有 `tail` 分開,`tail` 不改):取那次執行的輸出(`_kill_run` 回的全文,本來就有 256KB 上限、超過砍中段),**先遮路徑**——隔離工作樹路徑(字面與 realpath 兩種,macOS 的 `/var/…` 與 `/private/var/…`)換成 `<worktree>`、使用者家目錄換成 `~`——再挑錯誤行:以 `e: `、`error:`、`E  `、`FAILED ` 開頭,以 ` FAILED` 結尾,或 `* What went wrong:` 之後到下一個空行;每行截到 200 字、依原順序取到 800 字;一行都挑不到才退回取結尾 800 字。`result_out` 每列也帶 `fail_excerpt`;人裁被拒時訊息印它(經 `_kill_esc`,最多 12 行)。
++7. **文件**:[[Systems/guard-kill]] 加一行 WHY 講 `also` 與 `fail_excerpt`;[[Systems/棧別提問表態閘]] 人裁那段補 `--import`、`--diff`、Android run_cmd 檢查;[[Systems/lumos-cli-lifecycle]](init 骨架的家)加一行 WHY 講 Android 骨架。
++
++## 不做
++
++- 不做位元碼層變異(PIT 自訂外掛):留給 [[Projects/雙向追溯_需求與語法選擇點互證_計劃]]。
++- 不自動猜 import 的套件、不自動推 Gradle 模組與任務名:設計審 r1 四席證明兩者在型錄現有觸發字與常見 Android 版面上都會猜錯。
++- 不自動改已接入專案的 `.lumos/config.json`:範圍 4 只拒絕並印正確寫法。
++- 不處理 import 別名(`import … as X`)與 Java 的 import:別名少見、Java 不在情境決策表。
++- 不改筆記宣告配方的格式、不改既有 `tail` 欄的語意。
++
++## 實務隱患
++
++- `--import` 給錯(套件寫錯):殺傷力會編譯失敗、判 killed_unattributed 被拒,`fail_excerpt` 會印出 `Unresolved reference`,人看得懂、改了重跑;工具不替人驗套件存在(那要跑編譯器)。
++- 連帶替換放寬了「只改這一段」:只准多加 import 行、不准刪改既有行;`_kill_also_issue` 要有「多出來不是 import 行就 error」的反向案例。
++- 隔離工作樹不含 git 忽略的檔(`local.properties` 的 `sdk.dir`、`google-services.json`):沒設 `ANDROID_HOME` 的機器基準會 abort;`fail_excerpt` 會印出 SDK 找不到之類的原因。2026-11-13 實驗副本在設了 `ANDROID_HOME` 的機器上不帶 `local.properties` 照跑得起來。
++- Gradle daemon:`_kill_run` 收的是測試程序群組,Gradle daemon 自己 setsid、不在群組裡,中斷或逾時後會閒置到 daemon 自己的逾時才結束;不另處理(daemon 是使用者機器上本來就常駐的東西)。
++- 冷建構時間與磁碟:每次殺傷力都在新工作樹冷建構,基準加壞法可能十幾分鐘,`build/` 與 `.gradle` 留在暫存工作樹裡、跑完照 `_isolated_worktree` 收尾刪掉(被強殺的留給清殘骸)。
++- `fail_excerpt` 進殺傷力帳本,而 `docs/.kill-log.jsonl` 在工具鏈 repo 是進版控的:摘錄可能含測試輸出(路徑、測試名、測試印的東西),已把工作樹路徑遮成 `<worktree>`、家目錄遮成 `~`(例:SDK 找不到時的 `/Users/<帳號>/Library/Android/sdk`);不宣稱不含祕密,800 字上限與只在弱證據判定時存讓量很少。
++- 新舊版本混用:`also` 只在同一次執行內傳、不落帳;`fail_excerpt` 是新欄位,舊版讀帳不認得就略過;治理帳 situation-rule 多 `imports` 欄,舊版讀帳略過不認得的欄。
++- 已排除:金流:不碰付款與金額。
++- 已排除:對外送出:只在本機隔離工作樹改檔跑測試、寫本機帳。
++- 已排除:不可逆:連帶替換只發生在隔離工作樹、跑完整支檔還原;寫回的條款與帳本行為不變。
++
++## 依據來源
++
++| 機制 | 依據 | 出處 |
++|---|---|---|
++| Android 跑單支單元測試要用變體任務加 --tests | 頂層 test 不收 --tests,要 :app:testDebugUnitTest | https://kaweah.freedombox.rocks/kiwix/stackoverflow.com_en_all_2023-11/questions/51823185/how-to-run-single-test-class-in-android-using-gradle-command |
++| Android 跑單支單元測試要用變體任務加 --tests | Gradle 測試過濾 --tests 是測試任務的選項 | https://docs.gradle.org/current/userguide/java_testing.html |
++| 任務名照專案實際填、工具不猜 | 變體是 flavor 加建置類型,任務名跟著變 | https://android-developers.googleblog.com/2015/12/leveraging-product-flavors-in-android.html |
++| 任務名照專案實際填、工具不猜 | AGP 9 起預設只建受測建置類型的單元測試任務 | https://slack-chats.kotlinlang.org/t/33344942/i-m-upgrading-to-agp-9-from-8-are-testreleaseunittest-not-go |
++| 補 import、舊的不刪 | 沒用到的 import 只是 IDE 檢查,編譯器不報 | https://jetbrains.com/help/inspectopedia/KotlinUnusedImport.html |
++| 補 import、舊的不刪 | Kotlin 維護者:編譯器沒有也不打算有這個警告 | https://slack-chats.kotlinlang.org/t/452679/i-see-that-kotlin-compiler-doesn-t-issue-a-warning-for-unuse |
++| import 由人明寫、不由工具猜套件 | 設計審 r1 四席:型錄觸發字混著成員名、點號寫法、跨套件名稱,猜會補出不存在的 import | 實測 2026-11-13:設計審 r1 邊界與正確性席用 `_KT_DT_ROWS` 逐列列出觸發字,D-5、D-7、D-16 的成員名與跨套件名都會補出不存在的 import |
++| 失敗摘錄挑錯誤行而不是只取結尾 | Gradle 失敗時結尾是固定提示,編譯錯誤行在前面(設計審 r1 三席) | 實測 2026-11-13:實驗副本 Gradle 編譯失敗輸出,`e:` 錯誤行在 FAILURE 與 Try 區塊之前 |
++| 缺口來源 | 2026-11-13 真實 Gradle 專案實跑 | [[Issues/人裁殺傷力在真實Android專案跑不動的四個缺口]] |
++| 先做 A 再做 B | 使用者對話裁定 | 使用者 2026-11-13:「好,先做 A,再做 B」 |
++
++## 驗收條款
++
++- [S1] 當人裁帶 --import 而且那一行是新寫法觸發字的 import,人裁的殺傷力壞法 應 在檔頭最後一行 import 之後加上那一行 [test:t_situation_rule_import_flag]
++- [S2] 當 --import 的名稱不是這次新寫法才有的觸發字、或形狀不合、或檔裡已有同一行,人裁指令 應 在跑殺傷力之前拒絕 [test:t_situation_rule_import_flag_rejects]
++- [S3] 當臨時配方的連帶替換多出來的不是 import 行,殺傷力驗證 應 判 error 而且不寫檔、不跑壞法那一次 [test:t_guard_kill_also_rejects_non_import]
++- [S4] 當筆記宣告的配方帶了 also 欄位,殺傷力驗證 應 不理會那個欄位 [test:t_guard_kill_also_only_override]
++- [S5] 當 lumos init 判斷是 Android 專案,骨架 應 給 testDebugUnitTest 格式並以 YOUR_MODULE 佔位、說明 flavor [test:t_init_android_run_cmd]
++- [S6] 當預設平台的 profile 是 kotlin-junit 或 java-junit、是 Android 專案而 run_cmd 含頂層 test 任務或 YOUR_MODULE 佔位,人裁指令 應 在跑殺傷力之前拒絕並印出正確格式與模組候選 [test:t_situation_rule_android_run_cmd_check]
++- [S7] 當人裁帶 --diff 而算不出主線分岔點,人裁指令 應 用那個範圍算情境段 [test:t_situation_rule_diff_flag]
++- [S8] 當殺傷力判定是 killed_unattributed、timed_out_weak 或 abort,殺傷力帳本 應 存下挑出錯誤行的失敗摘錄 [test:t_kill_log_fail_excerpt]
++- [S9] 當假平台在檔頭缺少新寫法觸發字的 import 時編譯失敗,人裁帶對的 --import 應 判 killed 並寫回條款 [test:t_situation_rule_import_e2e]
++- [S10] 當在真實 Android 專案以逐一 import 的檔跑人裁(flatMapLatest 換 flatMapConcat、帶 --import、綁連送兩次值的測試),人裁指令 應 判 killed 並寫回條款 [manual:測試品質實驗室 Android 副本(或重建同樣的副本),SearchViewModel 改回逐一 import 後帶 --import 跑 lumos situation-rule,看判定是 killed、計劃多一條]
++
++## 預期值表
++
++| 條款 | 輸入 | 預期 | 來源 |
++|---|---|---|---|
++| S1 | 檔頭有 `import kotlinx.coroutines.flow.flatMapLatest` 等三行 import,`--old` 含 flatMapLatest、`--new` 含 flatMapConcat,`--import "import kotlinx.coroutines.flow.flatMapConcat"` | 臨時配方帶一筆 also:最後一行 import 之後多一行 flatMapConcat 的 import;確認畫面印出這一行;治理帳 imports 欄有它 | 〈範圍〉1;2026-11-13 實跑缺口 |
++| S1 | 同上但檔裡沒有任何 import、只有 package 行 | also 插在 package 那一行之後 | 〈範圍〉1 插入點 |
++| S1 | 檔頭三行 import,函式裡的多行字串有一行 `import foo.Bar` | also 插在檔頭第三行 import 之後,不插進字串 | 〈用詞〉檔頭區 |
++| S1 | D-5:`--old` 含 `WhileSubscribed(5000)`、`--new` 含 `SharingStarted.Lazily`、檔頭沒 import SharingStarted,`--import "import kotlinx.coroutines.flow.SharingStarted"` | 收下、產生 also | 〈範圍〉1 名稱不必是觸發字 |
++| S2 | `--import "import kotlinx.coroutines.flow.flatMapLatest"`(檔頭已 import flatMapLatest) | rc 2、殺傷力不跑 | 〈範圍〉1 檔頭已有就拒絕 |
++| S2 | `--import "import kotlinx.coroutines.flow.debounce"`,`--new` 裡沒有 debounce | rc 2 | 〈範圍〉1 名稱要在 --new 出現 |
++| S2 | `--import "import kotlinx.coroutines.flow.*"` 或帶 `as` | rc 2、殺傷力不跑 | 〈用詞〉補 import 形狀 |
++| S2 | 檔裡已有 `import kotlinx.coroutines.flow.flatMapConcat`、又給同一行 | rc 2(多餘) | 〈範圍〉1 已有就拒絕 |
++| S3 | also 的 new 多一行 `val x = 1` | 判 error、檔不動、不跑壞法那一次 | 〈範圍〉2;〈實務隱患〉只准多加 import |
++| S4 | 筆記配方帶 also,guard kill 正常呼叫 | also 不套用,結果跟沒帶一樣 | 〈範圍〉2 只有臨時配方認 |
++| S5 | 平台根有 `app/build.gradle.kts` 宣告 com.android.application | run_cmd 是 `./gradlew :YOUR_MODULE:testDebugUnitTest --tests '*{method}'`,_請先確認 提到 flavor 與 tasks --all | 〈範圍〉3;Gradle 與 Android 文件 |
++| S5 | 建置檔寫 `alias(libs.plugins.android.application)`(`_KT_BUILD_ANDROID` 認得的寫法) | 同上 | 〈用詞〉Android 專案沿用既有判法 |
++| S5 | 不是 Android 的 Kotlin 專案 | run_cmd 照舊 `./gradlew test --tests '*{method}'` | 〈範圍〉3 不是 Android 照舊 |
++| S6 | 多平台設定平台鍵 `kotlin`(profile kotlin-junit)、run_cmd `./gradlew test --tests '*{method}'`、Android 專案、`--file` 在 `feature/search/src/main/…`(`feature/search/build.gradle.kts` 存在) | rc 2、殺傷力不跑、印格式與模組候選 `:feature:search` | 〈範圍〉4 看 profile 名、從檔推模組 |
++| S6 | run_cmd `./gradlew clean test --tests '*{method}'` | 同樣 rc 2(任務清單裡有頂層 test) | 〈用詞〉頂層 test 任務 |
++| S6 | run_cmd 是 `./gradlew :YOUR_MODULE:testDebugUnitTest --tests '*{method}'`(沒改佔位) | rc 2、要人換成實際模組 | 〈範圍〉4 佔位未改 |
++| S6 | run_cmd `./gradlew :app:testDevDebugUnitTest --tests '*{method}'` | 不擋,照舊跑殺傷力 | 〈用詞〉變體任務不擋 |
++| S6 | run_cmd `./gradlew :core:domain:test --tests '*{method}'`,`core/domain/build.gradle.kts` 只套 `kotlin("jvm")` | 不擋(純 JVM 模組的 test 收 --tests) | 〈用詞〉擋下的 test 任務只擋 Android 模組 |
++| S6 | 平台根是 `android`,run_cmd `./gradlew test --tests …` | rc 2,印的格式以 `cd android && ` 開頭 | 〈範圍〉4 殺傷力在工作樹頂層跑 |
++| S7 | repo 沒有 main 也沒有 master、分支是 develop,帶 `--diff develop~2..HEAD` | 用那個範圍算出情境段,不印算不出範圍 | 〈範圍〉5;2026-11-13 實跑缺口 |
++| S7 | 分支找得到主線分岔點,另帶 `--diff` 指一個不同範圍 | 照分岔點算,印「--diff 沒採用」那一行 | 〈範圍〉5 同 _codeloop_disp_range |
++| S7 | `--diff=--output=x` 或右端不是 HEAD | rc 2 | 〈範圍〉5 入口驗 |
++| S8 | 壞法編譯失敗,輸出依序是三行 `e: file:///private/var/…/wt/app/…kt:12:5 Unresolved reference: flatMapConcat`、FAILURE、What went wrong、Try 四行、BUILD FAILED | fail_excerpt 含三行 e:(路徑變成 `<worktree>`)與 What went wrong 區塊;tail 欄不變;人裁拒絕訊息印出摘錄 | 〈範圍〉6;設計審 r1 三席 |
++| S8 | 紅燈來自別支測試,Gradle 輸出有 `OtherTest > foo() FAILED` | fail_excerpt 含那一行 | 〈範圍〉6 行尾 FAILED |
++| S9 | 假平台的 run_cmd 腳本:被改檔用到 `flatMapConcat` 卻沒有它的 import 就印 `e: Unresolved reference` 並回 1,否則跑測試(基準用 flatMapLatest、照常綠);不帶 `--import` 跑人裁 → killed_unattributed;帶 `--import` → killed | 不帶時 rc 2、計劃不動;帶時寫回條款 | 〈範圍〉1 端到端;設計審 r1 整合席 |
++| S10 | 實驗副本逐一 import、帶 `--import`、綁 onlyLatestQueryShown | killed、計劃多一條條款 | 〈範圍〉1 真實專案 |
++
++## 回退
++
++還原這次的提交即可:連帶替換只在隔離工作樹裡發生、跑完還原;init 只影響之後新產生的骨架;kill-log 多的 `fail_excerpt` 欄與治理帳多的 `imports` 欄,舊版照讀(略過不認得的欄)。
++
++## 天花板
++
++1. `--import` 只驗形狀與名稱,不驗套件真的存在;寫錯會編譯失敗、判弱證據被拒(有摘錄可看),不會誤放行。
++2. 原始碼層壞法只換文字;簽名不同的兄弟寫法(參數不同)換了會編譯失敗,這一版不處理,留給位元碼層的雙向追溯計劃。
++3. Android 專案判法沿用 `_android_build_texts` + `_KT_BUILD_ANDROID`,它也讀 `gradle/libs.versions.toml`:約定外掛專案只要版本目錄宣告了 AGP 就判得到;反過來,版本目錄列了 AGP 的非 Android 專案會被判成 Android——所以範圍 4 的 `:<模組>:test` 只在那個模組自己的建置檔是 Android 時才擋。建置檔深過三層判不到,照舊骨架、人裁不先擋(壞的 run_cmd 在基準 abort,摘錄看得到原因)。
++5. `testDebugUnitTest` 不帶模組前綴、在多模組專案會讓沒有那支測試的模組因 No tests found 失敗,這一版不擋(要跑完基準才 abort,摘錄看得到);`gradle`、`gradlew` 以外的建置指令不判。
++4. 模組候選只看 `--file` 往上最近的建置檔資料夾;用 `projectDir` 改目錄的模組候選會不對,所以只當「候選」印,不寫進設定。
++
++## 審計修正紀錄
++
++- r1(2026-11-13,4 席):29 條/blocking 11(席報告總結句加總)/前掃 12 條先折;四席一致指出工具猜 import 套件與猜 Gradle 模組都會猜錯——換形狀成 `--import` 由人明寫、run_cmd 只偵測 Android 並說明格式;失敗摘錄改挑錯誤行;`--diff` 補忽略提示與入口驗;偵測沿用 `_android_build_texts`;init 骨架說明落到 Systems/lumos-cli-lifecycle;加假平台端到端測試。席報告在 governance/review-reports/人裁殺傷力在真實android專案跑得起來/。
++- r1 收斂後複審(2026-11-13,1 席通才,不記帳):12 條/blocking 2/全修;頂層 test 只擋 Android 模組、平台根在子目錄時格式加 cd、插入點限檔頭區、摘錄規則細化、--import 名稱放寬到 --new 出現且未 import 的識別字。報告在 governance/review-reports/人裁殺傷力在真實android專案跑得起來/r1-收斂後複審.md。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+index a51cdccda..cd9c56e7f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
++++ b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+@@ -37,20 +37,21 @@ summary: |-
+   WHY:[2026-10-02 [[Projects/殺傷力配方當場試跑_計劃]]]rtb 修配方時重加一條要跑整篇才知道殺不殺得掉,P2 也看不出「原文對得上卻殺不掉」。guard kill 加 --id(對整篇比對、規則跟 kill-rm 同一支,在合約片段過濾之前;對到格式壞的回 2 叫人先 kill-rm,判法跟 P2 同一支 _kill_recipe_judge,不讓人照列表抄短身分踩進既有的崩潰;代碼審 r1 抓到原本只擋不是物件、r2 抓到另寫一支判法跟 P2 結論不同);kill-add --try 寫完只跑那一條,回傳碼照 guard kill、★不看 weak★(筆記剛寫沒提交、weak 一定是 true,看它的話回傳碼分不出殺不殺得掉),另印背書不採信;doctor P2 另列最近一次真跑判 survived 的配方,閘名另開 check-p2s(照 check-s/check-s2 先例,kind 用 warned 治理帳的多日沒人理與折疊才算得到) [test:t_guard_kill_only_ids] [test:t_guard_kill_add_try] [test:t_doctor_p2_lists_survived]
+   WHY:[2026-10-02 同上 設計審 r1 正確性席]P2 的 survived 清單取每條配方「最近一筆」比 ts、不比檔內順序:本 repo 的 kill-log 進版控,多個會談各自追加再合併後檔內順序可能倒。跟合約背書刻意不同——背書判 survived 看這版任何一筆、跟順序無關;同 ts 取先出現的,跟背書取最新那筆同一個規則。ts 是當地時間不帶時區,guard kill 寫 ts 那句改成帶時區時一起改
+   PITFALL:[2026-10-02 同上 代碼審 r1–r3]guard kill --id 擋格式壞的配方,同一類問題連三輪:r1 只擋不是物件、r2 另寫一套判法跟 P2 結論不同、r3 改用 P2 判法但它在 file 不是正式寫法時停在 path、不看 old/new。第三次換形狀:guard kill 在當掉的兩步原地擋(數原文前、原文恰好一次之後,記 error「配方欄位格式不對」),第四輪(另開一輪)發現原地擋只抄了判法的一部分,改成判法與 guard kill 共用 _kill_old_issue/_kill_new_issue 兩支——同一個判斷只寫一次;落單替身字元那一類試過讓寫 kill-log 與印 --json 經 _kill_esc,上限輪發現壞字元會寫進進版控的帳、讓 lumos gov 當掉,撤回、整類留在 [[Issues/guard kill遇到格式壞的配方整支崩潰]];--id 只擋判法說的 malformed;對照測試把「配方欄位格式不對」也算 malformed ↔ error [test:t_guard_kill_only_ids] [test:t_kill_recipe_check_matches_guard_kill]
+   PITFALL:[2026-10-02 同上 設計審 r1 三席實測]「原文那段已列過的不重複列」原本收所有不是 ok 的配方,設定檔壞時每條都判「設定讀不了」→ survived 清單整段變空;只收真的逐條列出的狀態碼,cfg 與 noroot 不收 [test:t_doctor_p2_lists_survived]
+   PITFALL:[2026-10-01 設計審 r2–r3 正確性席實跑]在工作目錄用 realpath 前綴判圍欄,跟 guard kill 判得不一樣:它的工作樹是「暫存資料夾/wt」、從 HEAD 檢出,所以 `../wt/x` 爬回來算在內、解析到 repo 頂本身算逃逸、連結迴圈是開檔失敗不是逃逸、沒提交/被忽略/子模組裡的檔它沒有。判斷函式原本照這些重演,代碼審四輪都被抓到新的對不上(大小寫、Unicode 寫法、檔案連結還原、記憶體),2026-10-01 改成規定 `file` 必須是提交裡的正式路徑、其他一律提醒改寫不預測;對照測試每一格用獨立 repo 真跑 guard kill(同一組的格子會被 guard kill 的還原互相污染) [test:t_kill_recipe_check_matches_guard_kill]
+   WHY:合約審計第 3 問的反例可以記成「殘留」:`lumos guard residual-ask` 記第二個獨立代理的判定(治理帳閘名 residual-ask;同一條合約——節點加去標記、NFKC、空白壓成一個、剝零寬與控制字元(Unicode 類別 Cf、Cc)、去頭尾空白與句尾標點後的宣稱文字指紋(句尾加句號不算新合約,改字詞、改句中的小數點負號括號都算)——同一個反例只准一筆(編號比正規形:NFKC、casefold、連續非字母數字合成一個 -、去頭尾 -、再拿掉夾在字母與數字之間的 -,c1/C1/c-1/c_1 同一個、c1.1 與 c1-1 同一個、c11 不同);判過 testable 的反例記在同一把鍵(節點、指紋、編號)上——只准問一次是方便不是保證,換編號、改節點名、改字重問,靠推送分級的「新增了殘留」升 high 給高風險代碼審看([[Systems/pitfalls-code-loop]]);判定值不認得的帳列當成沒問過),`lumos guard residual --add/--remove/--reindex` 在合約行尾寫 `[residual:<資料夾>/<節點>#dN]` 並重寫殘留索引(每條帶殘留的合約一筆:節點、指紋、殘留決策、about_code、綁定測試所在的檔、殘留決策所在筆記 notes——解不出時記 {"unresolved": 原因},代碼審 r5、r6)。寫入當下驗:決策在且沒翻案(跟待決問題共用 _pq_decision_state)、內容非空且含每個 --case 那筆問答的 checker:、問答判 untestable、只收帶資料夾全名、合約行已有 [audit:];殘留指標比正規形(_pq_decision_target 解出的正式路徑+#dN;寫進合約行的也是正規形);--checker 只收半形真日期;已有同一個指標也照驗這次 --case 的問答;驗法只有一份 _residual_check(--add、--reindex、doctor 共用);寫入形狀照 guard audit(鎖、_contract_locate——guard audit、kill-add 也走它——、atomic_write_verify);每條路(含已經有了、沒有這個標記)結束前都重算索引、跟重算結果相同就不碰檔案(沒事可做的路補好了印「索引原本沒跟上,已補好」),索引寫不進去回 1、照實說合約行已改、跑 --reindex;--add 另驗這條合約最近一次 guard audit 的治理帳事件(閘名 guard-audit,guard audit 每次蓋戳記都記一筆;帳是捷徑或有別的硬連結時不寫、印「這次審計沒記進治理帳」——寫入端會跟著捷徑寫到別處、讀帳的一律拒收,代碼審 r4)晚於那個反例最晚一筆 untestable 問答(比完整時間戳記、ts 解析走共用的 _gov_ts、同一秒看帳裡先後;找不到事件或問答時間讀不出就擋;手冊順序 問答 → guard audit → decision-add → --add);residual 進 INV_TAG_RE,guard audit 重審只換 [audit:] 那段 [出處:[[Projects/審查收斂規則_計劃]]] [因:第 3 問只要肯重寫設計永遠構造得出壞法,2026-10-13 後端示範只能靠人喊停;分類與同意要由想收斂以外的一方做、而且留痕可回溯] [不選:把殘留塞在 [audit:] 值裡(第二種行內寫法、重審會抹掉,設計審 r1)] [test:t_guard_residual_write]
+   WHY:doctor 在 Check T 未審那段旁多驗三件事:每個 [residual:] 過 _residual_check(問答、checker:、[audit:],手寫的標記在這裡現形);每個 [residual:] 指到的決策還在、沒被翻案(錯了印「去 <節點> 補回那筆決策,或 guard residual --remove」);殘留索引跟圖譜一致(整份比多重集合,鍵是節點、指紋、殘留決策、about_code、綁定測試所在的檔、殘留決策所在筆記(notes 欄,代碼審 r5)——代碼審 r4:原本拿節點加指紋當字典鍵,同一篇插一條同句合約、手寫索引只留舊的那筆就對得上;舊索引的 tests 欄不比;找測試所在的檔先剝註解,跟 discover_test_methods 同一支 _strip_test_comments),對不上給 guard residual --reindex;條目沒有 notes 欄的舊格式另報一行「舊格式,跑 --reindex 補上」,那幾筆的 notes 不算進不一致(代碼審 r6 通才席) [出處:[[Projects/審查收斂規則_計劃]]〈做法〉3、5] [因:pitfalls 分級只讀索引不載圖譜,索引漂掉就會漏升 high] [test:t_doctor_checks_residual_ref] [test:t_doctor_residual_index_legacy_format]
+   TEST:殘留那一套另有 t_guard_residual_ask_once(只准問一次這個方便、索引一致性)+t_guard_residual_index_records_decision_note(索引記決策所在筆記、doctor 比這欄)+t_guard_audit_residual_hardlink_ledger(帳有硬連結不寫)+t_doctor_residual_index_multiset(索引比多重集合)+t_residual_ev_order_extreme_ts(極端 ts 不崩)+t_guard_audit_residual_symlink_ledger(捷徑帳不寫)+t_residual_ask_block_message_honest(擋下訊息照實講)+t_guard_audit_keeps_residual(重審不抹殘留)+t_inv_tag_strips_residual(剝標記)+t_residual_identity_normalized(身分正規形)+t_guard_residual_index_write_failure(索引寫一半)+t_residual_check_shared(三處同一套驗法)+t_residual_test_files_skip_comments+t_residual_decision_shared_resolve+t_guard_audit_and_kill_add_share_contract_locate+t_contracts_shows_residual+t_residual_identity_keeps_meaningful_punct(句中符號與編號分隔符不抹)+t_residual_testable_sticks_to_case(同一條合約判過 testable 不准改判,改字重問交給推送分級)+t_guard_residual_noop_keeps_index(沒事可做不碰索引)+t_residual_unknown_verdict_ignored+t_residual_add_audit_after_ask(審計在問答之後)+t_residual_add_audit_event_order(比 guard-audit 事件的時間戳記、取最晚一筆問答)+t_residual_case_key_joins_letter_digit(c-1 與 c1 同一個)+t_residual_claim_fp_strips_invisible(指紋剝零寬與控制字元)
+   WHY:cmd_guard_kill 多一個選用參數 recipes_override(一串臨時配方,給了就不讀筆記的配方、只跑這幾條,建隔離工作樹前清殘骸),搭既有 result_out 交回判定(rows 多 detail、weak_why 與殺傷力帳本那筆實際的 log_recipe_id,人裁照抄進治理帳、兩本帳接得起來);那幾筆殺傷力帳本多帶 source: situation-rule,doctor P2 最近一次 survived、表態背書、資安背書都經 _backing_kill_rows 讀帳、碰到就跳過(只認筆記宣告的配方);_kill_run 被 Ctrl-C 打斷時收掉測試的程序群組再往上丟(人裁那段另把 SIGTERM、SIGHUP 轉成同一條收尾);keep=True(--keep-worktree)保留的現場寫保留標記 .lumos-keep,清殘骸跳過。其他呼叫端不傳、行為不變 [出處:[[Projects/情境題答案要引規格出處與回寫循環_計劃]] 範圍 4] [因:人裁要當場證明這一段換寫法測試會紅,判法要跟 guard kill 同一支] [不選:另抽一支共用的殺傷力函式(判法逐項對齊 cmd_guard_kill 的既有約定)] [test:t_guard_kill_recipes_override] [test:t_kill_log_situation_rule_rows_skipped]
+   WHY:人裁的訊號處理(_situation_rule_signals)照業界兩段式:第一個 SIGTERM、SIGHUP、Ctrl-C 印「再按一次…強制結束」並轉成 KeyboardInterrupt,經過 _isolated_worktree 的 finally 溫和收尾(worktree remove、刪暫存資料夾);第二個訊號強制結束——收掉還在跑的測試程序群組(_KILL_RUN_LIVE)、刪自己建的寫入鎖檔、印目前進度(計劃已寫帳沒記時先印補記事件)後 os._exit,工作樹與暫存資料夾留給一天後的清殘骸(人裁開 sweep_repo);寫回段只從拿到寫入鎖之後才把第一個訊號延後到檢查點,等鎖時照樣中斷;跟 lint 工作樹(_lint_wt_on_term,任何地方都立刻 os._exit)不同的只在第一個訊號:人裁的收尾在 finally 裡,只有轉成例外才經過;keep=True 但樹沒建起來時不寫保留標記、照一般收掉、on_keep 給 None(guard kill 印沒建成) [出處:governance/review-reports/code-情境題引規格出處/r3-intake.md 分組 1、4;https://github.com/h3js/srvx/pull/163] [因:os._exit 不跑 finally;r2 把第二個訊號改成只記下後,收尾卡住時實測 20 秒停不下來、等寫入鎖時最長 60 秒不理 Ctrl-C] [不選:第二個以後只記下(r2 做法,沒有逃生口);抽一支兩邊共用的訊號處理(要不要經過 finally 是兩邊需求不同)] [代價:強制結束留工作樹殘骸,一天後才被清] [test:t_situation_rule_double_signal] [test:t_situation_rule_force_kills_live_group] [test:t_situation_rule_write_phase_signals] [test:t_situation_rule_signal_during_write] [test:t_isolated_worktree_keep_failed_build]
++  WHY:臨時配方(recipes_override,只有人裁在用)多認一欄連帶替換 also(清單、這一版最多一筆,只由人裁 --import 產生):主替換之後在記憶體逐行套,old 那一行要恰好一行整行相等;格式不合(共用小檢查 _kill_also_issue:old 是一整行、new 以 old 開頭、多出來每一行都是 import 行)或套不上判 error、不寫檔、不跑壞法那一次;筆記宣告的配方帶了也不理。判定是 killed_unattributed、timed_out_weak、abort 時,kill-log 那筆與 result_out 每列多 fail_excerpt:先把工作樹的字面與 realpath 遮成 <worktree>、家目錄遮成 ~,再挑 e:、error:、E  、FAILED 開頭與 FAILED 結尾的行和 What went wrong 區塊,每行 200 字、總共 800 字,挑不到才退回結尾;既有 tail 欄不動 [出處:[[Projects/人裁殺傷力在真實Android專案跑得起來_計劃]] 範圍 2、6] [因:真實 Android 專案逐一 import 時換成兄弟寫法編譯失敗、人裁一律被拒,而帳本只留 Gradle 固定的結尾提示、看不出原因] [不選:工具依觸發字猜 import 的套件(設計審 r1 四席:型錄觸發字混著成員名與跨套件名,會補出不存在的 import);另抽一支共用的殺傷力函式] [代價:連帶替換放寬了只改這一段,所以只准多加 import 行] [test:t_guard_kill_also_rejects_non_import] [test:t_guard_kill_also_only_override] [test:t_kill_log_fail_excerpt]
+ related:
+   - "[[Projects/guard殺傷力驗證_計劃]]"
+   - "[[Systems/check-t-sentinel]]"
+   - "[[Systems/test-profile-multiplatform]]"
+   - "[[Verification/2026-07-10_guard殺傷力驗證]]"
+   - "[[Projects/併發與效能表態要合約背書_計劃]]"
+   - "[[Projects/殺傷力配方失配提醒_計劃]]"
+ aliases:
+   - 殺傷力驗證
+ decisions:
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+index 1e248d8c7..fd9765313 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: done
+ created: 2026-06-26
+-updated: 2026-11-07
++updated: 2026-11-13
+ self_audit: sonnet/2026-08-21
+ about_code_stamp: batch-2026-08-23/2026-08-23/de8e7c27fa36
+ responsibility: 負責 lumos 的安裝、更新、初始化與拆除(install、uninstall、update、bootstrap、init、deinit、teardown)以及把工具檔複製進消費專案,連同安裝入口腳本;不負責掛鉤本身的檢查邏輯、也不負責找 3.14 的做法(那是 Systems/python直譯器選擇)
+ tags:
+   - type/system
+   - status/done
+   - risk/不可逆
+   - scope/platform
+ summary: |-
+   WHY:update --dry-run 用目前的工具來源預覽、不拉來源、不寫任何檔,結尾教人帶 --source 與 --no-pull 套用同一份 [出處:[[Projects/update預覽規範檔變更_計劃]]] [因:rtb 規定規範檔改動要先經使用者同意;預覽若先拉來源,會跑拉之前載入的舊程式算、且換掉全機共用工具] [不選:預覽時拉來源再算;每次 update 停下來問] [test:t_update_dry_run_writes_nothing]
+@@ -39,20 +39,21 @@ summary: |-
+   DEP:scripts/lumos cmd_install/cmd_uninstall/cmd_bootstrap/cmd_init/cmd_update/cmd_deinit/cmd_teardown｜_vendor_toolchain/_install_skills/_install_hooks_py/_sync_global_claude/_teardown_global_claude/_link_or_copy/_scaffold_project｜merge-claude-settings.py(--prune-only)｜_VENDORED_TOOLKIT/_SKILLS 常數｜_lumos_src/_vault_in
+   TEST:258 passed(t_install_skills/t_install_includes_skills/t_install_hooks_py/t_scaffold_project/t_link_or_copy_idempotent/t_hooks_python_fallback + t_deinit_*)
+   KEY:★2026-09-04 Codex 完全支援 S0★:install/uninstall/teardown 多一家——skills 也連到 ~/.agents/skills(開放共用目錄:既有非我方真目錄跳過不刪,只重建帶 .lumos-managed 標記的複製物)、hook 同一批檔 copy 到 ~/.codex/hooks + 合併器 --target codex 寫 ~/.codex/hooks.json(matcher 對照 apply_patch/SubagentStart,命令列帶 --harness codex);_sync_global_hooks 回三態 ok/probe/merge-failed/absent(壞 JSON 不再印假成功);紀律區塊注入/剝除/Check D 三端共用目標清單 CLAUDE.md+AGENTS.md(有 AGENTS.override.md 寫它;插檔首);Codex 的 hook 要人在互動 codex 審過才跑,install 印提示。設計 [[Projects/Codex完全支援_計劃]]
+   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]安裝入口(install.sh、get.sh、get.ps1、install-hooks.sh、install-graph-toolchain.sh)只負責找一支任何版本的 python 把 lumos 叫起來,找 3.14 交給 lumos 開頭的檢查([[Systems/python直譯器選擇]]);原本寫死 python3,只裝了 python3.14 的機器進不去。get.ps1 與 Windows 的 lumos.cmd 用「真的執行成功」挑,因為商店替身 python.exe 找得到卻跑不起來
+   WHY:[2026-09-29 代碼審 r1 外家席]安裝入口與 git 掛鉤內嵌的那段第一步先認 LUMOS_PYTHON(設了而且能執行就用它叫 lumos):找不到時的說明叫人設它,第一步不認的話,只把 3.14 裝在自訂位置的人照說明設了仍被擋在門外
+   WHY:lumos 的 `main()` 一進來(洗完 PATH 之後)就設 `GIT_NO_REPLACE_OBJECTS=1`、`GIT_GRAFT_FILE` 指到不存在的路徑、拿掉 `GIT_DIFF_OPTS` 與 `GIT_EXTERNAL_DIFF`,所有子命令與它起的子行程都繼承;範圍外:`GIT_DIR`/`GIT_WORK_TREE` 不清——git 跑掛鉤時本來就設它們,同一設定也讓真正的推送推到假 repo,CI 在乾淨環境重算 [出處:governance/review-reports/code-派工鏡頭可指定目標repo/r1-資安-sonnet.md(替身讓提交寫法讀到假計劃)、r2-合約-sonnet.md 第七條(入口只寫在派工鏡頭節點)] [因:git replace、grafts 與差異選項環境變數會讓讀起點版本、檔名清單、差異的閘看到假歷史或少了前後文(`GIT_DIFF_OPTS` 會蓋掉明寫的 -U0)] [不選:逐個 git 呼叫各自帶 env(呼叫點上百個,天生會漏)] [代價:lumos 起的所有子行程都繼承,含 bound-tests、fix-check 跑的使用者專案測試;使用者自己設的 GIT_DIFF_OPTS/GIT_EXTERNAL_DIFF 在 lumos 底下不生效] [test:t_dispatch_lens_spec_commit_ignores_git_replace] [test:t_dispatch_lens_ignores_git_grafts] [test:t_dispatch_lens_ignores_git_diff_opts] [test:t_dispatch_lens_ignores_git_external_diff] [test:t_lumos_inproc_main_keeps_git_entry_env]
+   WHY:[2026-09-29 Projects/存量漂移改法_計劃]簿記名單多一個修復帳 governance/drift-fixes.jsonl(跟表態檔一樣是人對發現的處理紀錄,不是程式改動);舊版 lumos 的名單裡沒有它,只改帳檔的提交在舊版會被當成程式改動、推送前跑全套——修復帳本來就跟筆記一起提交,影響只是多跑測試
+   SEE:[[Systems/回合結束寫法檢查]]
+   WHY:四支安裝腳本內嵌的找 python 段(跟三支 git 掛鉤逐字相同)取到的不是絕對路徑就當找不到、印原因:安裝腳本自己不洗 PATH,PATH 有空項時 command -v 會回 ./python3.14 這種相對路徑 [出處:governance/review-reports/code-android寫法回合結束檢查/r6-資安-sonnet.md F1] [因:信任邊界見 [[Systems/hook信任邊界]]] [test:t_r6sh_launcher_relative]
+   WHY:紀律範本〈設計與排查〉的 PRIOR-ART 那句後面只接一個短子句「每個機制的依據另寫進計劃〈依據來源〉表(新計劃規格閘與推送前會擋)」,機制定義、出處五種、三處分工寫進 lumos-project-notes skill 第 2 節;消費專案照既有重新注入流程拿到 [出處:[[Projects/計劃依據來源必填_計劃]] 範圍 4] [因:範本每回合注入、已超過瘦身門檻,細節搬進 skill] [test:t_graph_discipline_sources_line]
++  WHY:init 的設定骨架判斷是 Android 專案(建置檔剝完註解後認得 Android 外掛宣告,跟 Android 現成檢查提醒同一套)時,kotlin-junit 與 java-junit 的 run_cmd 給 ./gradlew :YOUR_MODULE:testDebugUnitTest --tests '*{method}',_請先確認 多一句(YOUR_MODULE 換成測試所在模組、有 flavor 時任務名是 test<Flavor>DebugUnitTest、用 ./gradlew tasks --all 看實際名稱);單平台與多平台兩條骨架路徑都改,不是 Android 照舊;佔位用 YOUR_MODULE 不用角括號(在 shell 是轉向) [出處:[[Projects/人裁殺傷力在真實Android專案跑得起來_計劃]] 範圍 3] [因:Android 的頂層 test 不收 --tests,原本的骨架在 Android 專案跑不了單支測試、人裁殺傷力一定失敗] [不選:工具推模組與任務名(任務是每模組、每 flavor 各一條,AGP 9 起只建受測建置類型的任務,會猜錯)] [代價:佔位沒改的話人裁跑殺傷力前會擋下,要人照專案實際填] [test:t_init_android_run_cmd]
+ decisions:
+   - content: 機器層 vs 專案層二分:install/uninstall/bootstrap 動機器共用項(~/.local/bin 全域 lumos、~/.claude skills+hooks);init/update/deinit 只動本 repo
+     id: d1
+     context: 同事 onboarding 與多 repo 使用需要分清「一輩子裝一次的機器設定」與「每個 repo 各自要做的」;deinit 反安裝若誤碰機器共用項會傷到其他 repo
+     why_chosen: bootstrap 一鍵把機器層全裝(clone Lumos+全域+skills+repo hooks);init/deinit 對稱只在本 repo 增刪,deinit 明確不碰 ~/.claude,降低反安裝爆炸半徑
+     decided: 2026-06-26
+     valid: true
+   - content: 全域 lumos 與 skills 用 symlink/junction 指向來源 clone(非 copy),graph-discipline.md 則 per-project 注入
+     id: d2
+     context: 工具更新如何傳到夥伴機器;若全 copy 則每次更新都要重裝
+diff --git a/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md b/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md
+index 2e22f7000..be7864a8b 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md
+@@ -77,20 +77,21 @@ summary: |-
+   WHY:盲判旗標跟其他子指令一樣平著傳進 cmd_code_loop(bj_file、bj_template、bj_mode、bj_arbiter、bj_part),組合檢查寫在 _cmd_codeloop_blind_judge 裡,--part 照傳(0 與負數回 2 講超出份數);沒給範圍時的「預設起點..版本」只有 _codeloop_default_range 一支,check 與盲判共用;合併那一側的帳由 _merge_side_ledger_cached 交出,判定函式不碰快取的鍵;那一側讀不到給空帳、不退工作目錄的帳 [出處:代碼審 code-android情境題盲判 r2 丙、丁、戊(正確性 F2、測試 F1–F4、架構對齊 F1–F3)] [因:打包成 dict 與多一層檢查函式只有盲判這樣寫;--part 0 被 or 1 換成第 1 份;預設範圍兩邊各寫一份] [test:t_blind_judge_flat_args] [test:t_blind_judge_part_zero_rejected] [test:t_blind_judge_default_range_one_helper] [test:t_codeloop_merge_side_ledger_handle] [test:t_blind_judge_merge_side_ledger_missing] [test:t_blind_judge_range_mainline_push] [test:t_blind_judge_disagreements_without_first] [test:t_blind_judge_agree_summary_line]
+   PITFALL:治理帳最後一行沒換行時,表態與盲判寫成功卻讀不回、前一筆留痕被黏掉 [出處:2026-11-07 代碼審 code-android情境題盲判 r3 通才席 F1] [根因:_codeloop_gov_append 當時直接追加、不看帳尾;標記檔拿掉後治理帳是唯一路徑才露出來] [修法:寫入前先補帳尾換行] [test:t_codeloop_writers_add_missing_tail_newline]
+   REVISIT:2026-11-21 pass/skip 留痕(_codeloop_read)仍是本機標記檔優先、壞了才退治理帳,跟表態與盲判的只讀治理帳規則並存;決定要不要也改成只讀治理帳(代碼審 code-android情境題盲判 r3 架構對齊席 F2)
+   PITFALL:真的表態判定加參數後,第二批收集模式測試的替身 _ClkgFakes.disp 不認得新參數、拋例外,推送檢查把它記成 fail-open 放行,二十條斷言一起紅 [出處:2026-11-07 第三批搬到含第二批的主線後全套] [根因:替身手抄真判定的參數表,真判定加了 diff_range、merge_ledger 沒跟上] [test:t_code_loop_check_keep_going]
+   REVISIT:2026-11-14 表態核對拋例外時推送檢查記 fail-open 放行(不擋);決定要不要改成無法驗證擋下,跟情境段算不出來一律擋的做法對齊
+   WHY:改檔前推決策列併進 cmd_impact 算棧別題那一段、同一組啟用條件,只多一個輸出鍵 decision_rows;伺服端判法是平台排除集合含情境題 _KT_SIT_QID(代碼審 r1 架構對齊席 F5:原寫 kt-compose,同一組 Android 專屬判斷不借別題題號);.kts 不推(r1 合約席 F6 裁定);比對用 _kt_sit_rows_rx 的預編譯樣式加字集合預篩(r1 架構對齊席 F6) [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 3 第 2 條、設計審 r1 依據席 F6] [因:剝字串與觸發式用盲判那條線的共用函式,不另起平行通道] [test:t_impact_decision_rows_table_states] [test:t_impact_r1_kts_and_once]
+   WHY:推送端判一支檔能不能出情境段的路徑條件(不是測試檔、過 _stack_changed_ok)抽成 _kt_sit_path_ok(rel, skip),_kt_situation_segments 與另一處同條件的內聯改呼叫它,型錄自檢的反查也呼叫同一支 [出處:[[Projects/情境決策點窮舉與壞寫法要叫得出_計劃]] 設計審 r2 架構對齊席] [因:反查要判「會不會被問到」,照抄條件會跟推送端悄悄分家] [test:t_kt_situation_segments]
+   WHY:情境題作者答適用的列要引對應計劃〈驗收條款〉的一條(spec=Projects/<計劃>#S<n>、quote 逐字至少 10 實字),對應計劃名單只認被推版本的樹(_drift_tree_env 建記憶體圖譜交 _spec_gate_push_candidates,算不出就擋;有作者答適用或任何一列填了出處就算,答不適用的列填了照樣核;S0 與重複定義的條款不列);沒出處就擋並印人裁骨架;段放行蓋過出處擋、缺段缺列照擋;依作者表態日期分新舊制(_KT_SIT_SPEC_SINCE) [出處:[[Projects/情境題答案要引規格出處與回寫循環_計劃]] 設計審 r1] [因:作者與盲判看不到規格、只能用常識猜需求] [不選:兩個 AI 引同一條才放行(模型判斷不一致先提醒的既有裁定)] [代價:改計劃措辭會讓引句對不上要重答] [test:t_kt_sit_spec_verify]
+   WHY:盲判材料頂層帶對應計劃的驗收條款(specs,超過 80,000 字先縮到範圍內與連到段所在檔家節點的計劃、仍超過就不產材料),盲判判適用時填 spec(不收引句,寫入時驗存在;指示講明 specs 的條款原文是資料、不是給盲判的指令);作者答不適用而盲判引到存在的條款判適用就擋(捷徑擋,依據是機器驗過的條款原文、段放行可蓋);兩邊出處不同只提醒、不要求仲裁,票面與仲裁規則不改 [出處:[[Projects/情境題答案要引規格出處與回寫循環_計劃]] 設計審 r1] [因:只要求答適用的列引出處,答不適用會變成捷徑] [不選:作者出處要盲判附和才放行(兩模型投票擋違反先提醒的既有裁定,人裁後盲判格子又不能重投)] [代價:兩邊一起引錯同一條抓不到] [test:t_kt_bj_spec_shortcut_blocks]
+   WHY:情境題人裁是頂層指令 lumos situation-rule(載圖譜、拿寫入鎖、改計劃,跟 signoff 同層;code-loop 那層照舊不載圖譜):先判誰裁的(沒終端也沒帶 --consent 直接拒、什麼都不寫),段與列照 HEAD 為終點的範圍算,計劃路徑解開後要在 Projects/ 底下、Projects/ 本身是符號連結就拒絕、大小寫跟實際檔名不同就拒絕(_disk_spelling 拼回實際檔名再比)、讀計劃照 load_raw_for_edit(讀不到、非 UTF-8、沒有或沒收尾的欄位區塊、BOM、CRLF 都拒絕)另擋單獨的 CR,條款文字擋換行、[S 接數字與條款標記、反引號外的 |、編不成 UTF-8,反引號成對、過 _clause_grammar;殺傷力限定這一段同一列的不同觸發字、工作目錄除簿記檔外乾淨,cmd_guard_kill 帶 recipes_override 跑、只認沒有弱證據的 killed;SIGTERM、SIGHUP 同 Ctrl-C 照兩段式:第一個溫和收尾(殺傷力段 rc 2;寫回段拿到寫入鎖之後延後到檢查點,等鎖時照樣中斷)、第二個強制結束(見 [[Systems/guard-kill]]);終端確認後才拿寫入鎖重讀算號(全文最大號加一)、插在〈驗收條款〉最後一條(含續行)之後、已有同文同測試的條款就不插、分三種出口(帳上同段同列已記 → 已完成 rc 0;別段別列寫過或帳沒記 → rc 2;治理帳讀不到 → rc 2、先修帳不刪條款),用 _write_refusal_reason 加 _write_bytes_atomic 寫、讀回比對,再記治理帳 situation-rule(recipe_id 照抄殺傷力帳本) [出處:[[Projects/情境題答案要引規格出處與回寫循環_計劃]] 範圍 4] [因:規格沒寫時要把人的決定寫回規格並用會紅的測試守住,lint-waive 不做這兩件] [不選:code-loop situation-waive 子指令(要載圖譜改計劃,code-loop 那層不載)] [代價:殺傷力要真跑測試,Gradle 專案可能十幾分鐘] [test:t_situation_rule_writes_clause] [test:t_situation_rule_already_seg_row] [test:t_situation_rule_plan_disk_spelling] [test:t_situation_rule_write_phase_signals]
++  WHY:情境題人裁多三件:①--import(可重複)由人明寫殺傷力壞法要補的 import 整行(形狀 import 套件.名稱、名稱要在 --new 裡整字出現、檔頭區還沒 import 它——同一行、同名不同套件或套件 .* 都算已有),插在檔頭區最後一行 import(沒有就 package 那一行)之後成一筆連帶替換交給殺傷力,確認畫面、治理帳 situation-rule 的 imports 欄、殺傷力帳本的 note 都帶;②--diff 只在算不出主線分岔點時用(跟 code-loop check 同一套範圍,給了而沒採用印一行;入口擋 - 開頭、三點、兩端解析不到、右端不是 HEAD);③預設平台的 profile 是 kotlin-junit 或 java-junit 時跑殺傷力前查 run_cmd:還有 YOUR_MODULE 佔位、Android 專案的頂層 test、或 Android 模組的 :模組:test 就拒絕,印要改的設定鍵、正確格式(平台根不是 repo 最上層時前面加 cd)、從 --file 推的模組候選與 flavor 提示;殺傷力被拒時另印失敗摘錄 [出處:[[Projects/人裁殺傷力在真實Android專案跑得起來_計劃]] 範圍 1、4、5] [因:2026-11-13 第一次在真實 Gradle Android 專案跑人裁:逐一 import 的檔換兄弟寫法編譯失敗、頂層 test 不收 --tests、擋下訊息叫人用不存在的 --diff] [不選:工具猜 import 套件與 Gradle 模組、任務名(設計審 r1 四席證明會猜錯);自動改 .lumos/config.json] [代價:Android 判法沿用建置檔掃描,版本目錄列了 AGP 的非 Android 專案會被當成 Android,所以 :模組:test 只看那個模組自己的建置檔] [test:t_situation_rule_import_flag] [test:t_situation_rule_import_flag_rejects] [test:t_situation_rule_android_run_cmd_check] [test:t_situation_rule_diff_flag] [test:t_situation_rule_import_e2e]
+   RULE:盲判紀錄多了選填的 spec 欄,舊版 lumos 讀到帶這欄的 blind-judge 事件會整筆略過(既有 set(v) - _KT_BJ_ROW_KEYS 判法)而報缺第一盲判;推上主線後各台機器都要 lumos update [依據:相容] [since:2026-11-13] [retire:人裁] [until:2027-01-08] [confirmed:2026-11-13]
+   WHY:gov --stats 情境題段多一行「情境題引出處」四個數:作者引出處的列、沒出處而擋的列(兩者只看生效日後的表態、以(段,列)去重;後者是答適用而 spec 空的格,段放行事件不記段身分所以扣不掉放行的段)、出處不同提醒數(verdict spec-differ)、人裁次數(human 與帶 consent 的 ai 分開) [出處:[[Projects/情境題答案要引規格出處與回寫循環_計劃]] 範圍 7] [因:RETIRE-IF 三條要用這四個數判要不要降級] [test:t_gov_stats_situation_spec_counts]
+ verified_by:
+   - "[[Verification/2026-09-09_棧別提問表態閘實作測試]]"
+   - "[[Verification/2026-09-09_兩席相反時端出張力實作測試]]"
+   - "[[Verification/2026-09-12_Java補棧合成樣本測試]]"
+   - "[[Verification/2026-09-13_Flutter補棧合成樣本測試]]"
+   - "[[Verification/2026-10-03_外部回應碼接線實作測試]]"
+   - "[[Verification/2026-10-15_React補棧合成樣本測試]]"
+   - "[[Verification/2026-11-06_Android情境題盲判實驗專案實跑]]"
+@@ -149,21 +150,21 @@ lumos code-loop check --diff <merge-base>..HEAD        # 自查;pre-push/CI 會
+ 
+ 設計在 [[Projects/Android寫法語意情境表態與盲判_計劃]];2026-11-06 落地的是範圍 1 到 3(型錄證據樣式欄、情境題接進表態、表態對程式),代碼審 r1 後把範圍 5 的段放行提前(形狀改成沿用 lint-waive);同日第二次實作範圍 4、6、7(盲判紀錄與核對、提示、統計)。升擋的回頭條件在計劃〈天花板〉的 REVISIT 行。
+ 
+ - kt 題組多一題 `kt-situation`,觸發字在 lumos 載入時從 Kotlin 型錄〈情境決策表〉讀出(讀表借用 [[Systems/kotlin規則包]] 自檢程式的同一支,只有一套);型錄與自檢程式從工具鏈來源找(來源 repo 裡的 lumos 用旁邊那份,複製進消費專案的走 LUMOS_HOME 或 ~/harness/lumos-toolchain),用到時 stderr 印用的是哪一份。型錄讀不到或格式壞就不加這一題:`pitfalls --diff` 碰到 kt 改動印一行提醒;推送前表態那一道對 Android 的 kt 改動,型錄或自檢程式的檔找不到算環境不可用(照新增告警閘「工具沒裝 → 自動放行並記帳」的先例:提醒、記一筆 code-loop 閘的 fail-open 帳、不擋,消費專案 CI 沒裝工具鏈時也不會整片紅),檔在但讀表失敗判無法驗證、擋下。
+ - 出不出這題看切不切得出情境段:只看被推版本的增行、整支檔剝掉註解與字串、同一個 diff 區塊且同一份段材料且行號差不超過 4 才併段、一段最多 40 行。段材料是從命中行往上最近一個頂層或類別層宣告(函式、屬性或類別,大括號前面那段宣告頭的最後一個宣告關鍵字是 class/object/interface 才算類別本體),最多 120 行;找不到或太長時用段前後各 20 行——所以類別屬性與方法、介面與呼叫端是不同的段材料。段身分綁段材料原文、候選列與出現序號。`pitfalls --diff --json` 多一欄 `situation_segments`,人讀輸出每段一行。
+ - 表態只收 satisfied,欄位是 `segments`(不用頂層 evidence);樣板替每段列好身分、檔:行範圍與候選列。推送前在表態那一道重算段,逐段逐列核對:缺段缺列擋;適用時 evidence 要落在段範圍內;那一列那個寫法的證據樣式不是 `(無)` 時,第一條要在 evidence 那一行、其餘在段材料裡,對不上**不擋**:印一則提醒(哪一段、哪一列、哪條樣式,附那列的寫法與照抄就能用的段放行指令),記治理帳(閘 code-loop、kind warned、scope kt-situation、pending blind-judge;由 code-loop check 那一層寫,以 (版本,段,列) 去重,每次最多逐筆 20 筆其餘併成一筆總數)當待盲判清單;「不適用時」標了 `(換列)` 的列不准選例外寫法(這是答案形狀,照擋)。推送前照擋的只剩缺段、缺列、答案形狀不對與無法驗證(代碼審 r2 換形狀:字面樣式兩輪被型錄自己的合法變體打穿,照 Semgrep 規則政策先提醒、量真陽性率再談擋)。
+ - 段算不出來(git 失敗、範圍或版本不存在、檔名讀不出、單支檔超過 4MB)判無法驗證擋下(型錄檔找不到例外,見上);超過時間預算照表態閘既有的 over_budget 規則(已查出問題照擋、沒有就放行並記帳)。段放行(`lumos lint-waive kt-situation:<段身分> …`)記在新增告警閘的放行檔,讓那段不再出證據提醒、印 ⚠,也蓋過情境題出處的三道擋(內容核對、答適用沒出處、捷徑擋;沒有測試平台、沒有計劃或人裁被拒的專案的出口),缺段缺列、缺盲判照擋;放行檔讀不了就當沒有放行並印一行提醒;doctor 與推送前小結把情境段放行跟新增告警放行分開數。
+ - 盲判(`lumos code-loop blind-judge`):`--template` 印給盲判代理的材料——每段的身分、檔名、段範圍與命中行、帶行號的段材料、候選列的情境/標準寫法/不適用時,加上那一列在型錄的出處(決策表「來源」格與對應檢查的名稱、來源縮寫展開成網址,跟著那一列從 [[Systems/kotlin規則包]] 自檢程式的 `dt_table` 同一輪讀出);不含任何表態內容。每份最多 30 段,`--part` 選份;`--missing` 只印還缺第一盲判的格,`--disagreements` 只印作者與第一盲判對不上又沒仲裁的格(給仲裁代理,也不含第一盲判的理由)。結果檔整份驗證(段身分對得上被推版本、列在候選列、票是布林、沒有多的欄位、同一段只出現一次,仲裁只收已有第一盲判的格),有一筆不合整份不寫;合格就追加治理帳一筆 `blind-judge`(帶 role、written_at),同一格已有值的不算數,整份都是已有的格就不寫、回 2 講明沒生效(票面要重判只能等段材料變;盲判引到條款造成的捷徑擋不用重判——依那條重答或段放行,出處不同只提醒,作者改引人裁寫回的新條款後不需要盲判附和)。紀錄只有治理帳一份:讀側按分支名完全相同的 `blind-judge` 事件依行序折出、驗票形狀,形狀不對的那筆整筆跳過,不寫也不讀本機標記檔(代碼審 r1 甲)。範圍與分支跟 `code-loop check` 同一套(`_codeloop_disp_range`;合併提交認合進來那一側的表態時,盲判也讀那一側)。
+ - 推送前在表態那一道裡接著核盲判:每段每個候選列要有第一盲判,沒有就擋並印四步指令;作者票(適用=宣稱照做)跟第一盲判票不同又沒有仲裁就擋並印 `--disagreements` 指令;仲裁同作者放行、印一行仲裁採作者;兩位盲判一致判照做或不適用(跟作者不同)放行、印一行不用改碼(例外:作者答不適用、第一盲判或仲裁判適用而且引到對應計劃裡存在的條款 → 捷徑擋,要作者依那條重答或段放行;作者與判適用的盲判都有出處但不同 → 只提醒一行 spec-differ、記 code-loop warned 帳);兩位盲判一致判「適用但沒照做」(三方多數判作者沒照做)不擋,印三方的票與理由、記一筆 `verdict: majority-against-author` 的提醒帳;三方各異不擋,印「沒有多數,要人裁」、記一筆 `verdict: no-majority`(兩種都跟證據提醒同一套去重封頂),有段放行的段不出這兩種提醒。gov --stats 對這兩種只數則數(盲判自己產生的提醒,升擋前要人抽樣)。`pitfalls --diff` 有情境段時也印這四步(跟著 stack_questions.gate:設 high-only 而這次不是 high 就不印)。
+ - 問題句、提醒與樣板 where 欄位裡的檔名照 `_kill_esc` 跳脫。
+-- 情境題人裁(`lumos situation-rule --seg <段> --row D-<n> --plan Projects/<計劃名> --clause "<條款>" --test <測試> --file <檔> --old "<原文>" --new "<壞法>" [--consent "<使用者原話>"] [--branch <分支>]`):答適用卻引不到條款、人在對話裡裁定之後跑。殺傷力驗證過了(把這一段換成同一列另一種寫法,綁的測試在斷言上紅、沒有弱證據)才把條款寫回那份計劃〈驗收條款〉節最後一條之後,並在治理帳記一筆 `situation-rule`(規格閘據此把這條當既有行為,見 [[Systems/規格閘]]);沒有互動終端時要帶 `--consent` 使用者原話(對話核可),沒帶什麼都不寫。寫回後要提交計劃、重答那一列的出處、重跑表態與代碼審留痕(計劃不是簿記檔)。專案沒宣告 `run_cmd` 時人裁一定被拒,出口是段放行。`--plan` 的大小寫要跟實際檔名一字不差、圖譜的 `Projects/` 本身是符號連結也會拒絕(帳上記的路徑要對得上規格閘)。計劃已有同文同測試的條款時不再插,分三種出口:帳上那筆是同段同列 → 已完成、什麼都不用做(rc 0);是別段別列寫回的或帳上沒有 → 拒絕(rc 2;別段的要另證就換一段條款文字,帳沒記的照補記事件補或先刪那一行再跑);治理帳讀不出來 → 拒絕(rc 2),先修帳再重跑、不用刪條款。中斷照兩段式:第一個 Ctrl-C(或終止訊號)溫和收尾、印「再按一次強制結束」,第二個強制結束(工作樹殘骸留給一天後的清殘骸;計劃已寫、帳沒記時先印補記事件)。
++- 情境題人裁(`lumos situation-rule --seg <段> --row D-<n> --plan Projects/<計劃名> --clause "<條款>" --test <測試> --file <檔> --old "<原文>" --new "<壞法>" [--consent "<使用者原話>"] [--branch <分支>] [--import "import <套件>.<名稱>"]… [--diff <起點>..HEAD]`):答適用卻引不到條款、人在對話裡裁定之後跑。殺傷力驗證過了(把這一段換成同一列另一種寫法,綁的測試在斷言上紅、沒有弱證據)才把條款寫回那份計劃〈驗收條款〉節最後一條之後,並在治理帳記一筆 `situation-rule`(規格閘據此把這條當既有行為,見 [[Systems/規格閘]]);沒有互動終端時要帶 `--consent` 使用者原話(對話核可),沒帶什麼都不寫。寫回後要提交計劃、重答那一列的出處、重跑表態與代碼審留痕(計劃不是簿記檔)。專案沒宣告 `run_cmd` 時人裁一定被拒,出口是段放行。`--plan` 的大小寫要跟實際檔名一字不差、圖譜的 `Projects/` 本身是符號連結也會拒絕(帳上記的路徑要對得上規格閘)。計劃已有同文同測試的條款時不再插,分三種出口:帳上那筆是同段同列 → 已完成、什麼都不用做(rc 0);是別段別列寫回的或帳上沒有 → 拒絕(rc 2;別段的要另證就換一段條款文字,帳沒記的照補記事件補或先刪那一行再跑);治理帳讀不出來 → 拒絕(rc 2),先修帳再重跑、不用刪條款。中斷照兩段式:第一個 Ctrl-C(或終止訊號)溫和收尾、印「再按一次強制結束」,第二個強制結束(工作樹殘骸留給一天後的清殘骸;計劃已寫、帳沒記時先印補記事件)。換成兄弟寫法要多一行 import 才編譯得過時(檔頭逐一 import 的 Kotlin 檔),用 `--import` 明寫那一整行(可重複給;工具不猜套件):名稱要在 `--new` 裡、檔頭還沒 import 它,壞法在檔頭區最後一行 import(沒有就 `package` 那一行)之後多加這幾行、舊的不刪;確認畫面、治理帳那筆的 `imports` 欄與殺傷力帳本的 note 都帶。範圍跟 `code-loop check` 同一套:找得到主線分岔點時照分岔點算,算不出來(repo 沒有 main、master)才用 `--diff <起點>..HEAD`(給了而沒採用會印一行)。預設平台的 profile 是 kotlin-junit 或 java-junit 時,跑殺傷力前先查 `run_cmd`:還留著 `YOUR_MODULE` 佔位、Android 專案的頂層 `test`、或 Android 模組的 `:<模組>:test`(都不收 `--tests`)就拒絕,印要改的設定鍵、正確格式 `./gradlew :<模組>:test<Variant>UnitTest --tests '*{method}'`(平台根不在 repo 最上層時前面加 `cd <平台根> && `)、從 `--file` 推的模組候選與 flavor、`./gradlew tasks --all` 的提示,不自動改設定。殺傷力判定是弱證據或基準非綠被拒時,另印殺傷力帳本存的失敗摘錄(見 [[Systems/guard-kill]])。
+ - 版本混用:盲判作答多了選填的 `spec` 欄,舊版 lumos 讀到帶這欄的 blind-judge 事件會整筆略過、報缺第一盲判;推上主線後各台機器要 `lumos update`。
+ 
+ ## 外部回應碼題(2026-10-03)
+ 
+ - 題目表 sql 以外的八棧各多一題 `<棧>-extcode`,全表 id 集合 50→58 題(這是當時的數字;之後各棧陸續加題,2026-10-15 加 react 八題(見下面〈React 題組〉)與 infra 六題後實際是 74 題,以 _STACK_QUESTION_SPECS 實數為準);題目文字與觸發形狀共用一組常數,形狀字串也給派工鏡頭的外部碼表補選用,見 [[Systems/派工鏡頭]]。(react 加進來後是九棧各多一題 extcode)
+ - 這題帶 `shape_only`:只在改動行命中外部碼比對形狀時才適用——某棧改動超過行數門檻時不跟著「全表適用」,也不進舊語意的命中棧整組清單(那份給審查員當效能追問)。命名照 `needs_backing` 的慣例。
+ - 表態樣板的自動「不適用」理由改成同時列 `when` 與 `when_raw`,不然這題的理由會缺引號數字那幾組。
+ - 編輯時與推送前提示的標題仍寫「效能檢核」,這題會出現在那個標題下;題目文字開頭寫明「外部回應碼」,標題改名牽涉受錨點保護的掛鉤檔,另案。
+ - 推送前用三個 repo 各最近 200 個提交實測形狀:真命中 41 行、誤觸發 1 行,見 [[Verification/2026-10-03_外部回應碼接線實作測試]]。
+ 
+diff --git a/scripts/lumos b/scripts/lumos
+index e3322dfc9..ef1aa640b 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -18210,20 +18210,22 @@ _GOV_FIELD_TYPES = {
+     **dict.fromkeys(("pairs", "findings_set", "refuted_set", "folded_set", "accepted_set"), (list, type(None))),
+     **dict.fromkeys(("finding_kinds", "refute_verdicts", "dispositions", "finding_sources", "blind_judge"), (dict, type(None))),
+     # 情境題盲判與提醒(代碼審 r1 架構對齊 F4):seg/row 下游當集合元素與字典鍵、keys 逐項拆,型別錯會讓整個 gov 當掉
+     **dict.fromkeys(("role", "seg", "row"), (str, type(None))),
+     "keys": (list, type(None)),
+     # 預期值表簽核(高風險測試證據加嚴_計劃 做法 4)
+     **dict.fromkeys(("plan", "table_sha", "origin"), (str,)),
+     "row_count": (int,),
+     # 情境題人裁寫回規格(Projects/情境題答案要引規格出處與回寫循環_計劃 範圍 4):規格閘拿 plan、clause_id、clause_sha 比對,型別錯就當沒有
+     **dict.fromkeys(("clause_id", "clause_text", "clause_sha", "test_name", "consent", "kill_verdict", "recipe_id"), (str,)),
++    # 人裁補的 import(Projects/人裁殺傷力在真實Android專案跑得起來_計劃 範圍 1):清單
++    "imports": (list,),
+ }
+ 
+ 
+ def _gov_event_types_ok(d):
+     """治理事件物件的欄位型別合不合 _GOV_FIELD_TYPES(外加 pairs 每項成對、finding_kinds/refute_verdicts 的值是字串、finding_sources 的值是字串清單)。"""
+     for k, types in _GOV_FIELD_TYPES.items():
+         if k in d and not isinstance(d[k], types):
+             return False
+     if any(not (isinstance(x, list) and len(x) == 2) for x in d.get("pairs") or []):
+         return False
+@@ -26712,20 +26714,124 @@ def _kill_old_issue(r):
+ 
+ def _kill_new_issue(r):
+     """原文恰好一次之後、套壞法之前:guard kill 改用 r["old"]、r["new"] 取值、寫回 UTF-8——old 沒寫(數的時候當空字串,
+     空檔剛好一次)、new 不是字串或含寫不成 UTF-8 的替身字元都會出錯(代碼審第 3、4 輪正確性席)。回說明或空字串;共用同上。"""
+     new = r.get("new")
+     if "old" not in r or not isinstance(new, str) or any(unicodedata.category(c) == "Cs" for c in new):
+         return "配方欄位格式不對(old 或 new 沒寫、new 不是字串或寫不成 UTF-8,guard kill 套壞法時會程式出錯)"
+     return ""
+ 
+ 
++# 人裁補的 import 一行的形狀(Projects/人裁殺傷力在真實Android專案跑得起來_計劃〈用詞〉補 import):ASCII 識別字、至少兩段,
++# 不收 *、as、反引號、尾隨空白;一律 fullmatch。最後一段是名稱。
++_KILL_IMPORT_RE = re.compile(r"import [A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+")
++_KILL_ALSO_MAX = 1   # 連帶替換這一版最多一筆(只由人裁的 --import 產生)
++
++
++def _kill_also_issue(r):
++    """臨時配方的連帶替換(also)格式 → 說明或空字串(沒有 also 鍵回空字串)。人裁(跑殺傷力前先驗一次)與 guard kill(套壞法前)共用這一支,
++    照 _kill_old_issue/_kill_new_issue 的先例(Projects/人裁殺傷力在真實Android專案跑得起來_計劃 範圍 2):also 是清單、最多 _KILL_ALSO_MAX 筆;
++    每筆的 old 是一整行(以換行結尾、只有一行)、new 以 old 開頭,多出來的那段以換行結尾、至少一行、每一行都是補 import 的形狀(_KILL_IMPORT_RE)。
++    行一律只用 \\n 切。"""
++    if "also" not in r:
++        return ""
++    also = r.get("also")
++    if not isinstance(also, list) or len(also) > _KILL_ALSO_MAX:
++        return f"連帶替換(also)格式不對:要是清單、最多 {_KILL_ALSO_MAX} 筆"
++    for a in also:
++        old, new = (a.get("old"), a.get("new")) if isinstance(a, dict) else (None, None)
++        if not isinstance(old, str) or not isinstance(new, str) or not old.endswith("\n") or old.count("\n") != 1:
++            return "連帶替換(also)格式不對:每筆的 old 要是一整行(以換行結尾、只有一行)、new 要是字串"
++        extra = new[len(old):] if new.startswith(old) else None
++        if not extra or not extra.endswith("\n") or not all(_KILL_IMPORT_RE.fullmatch(x) for x in extra[:-1].split("\n")):
++            return "連帶替換(also)只准在 old 那一行之後多加 import 行(多出來的每一行都要是 `import 套件.名稱`,以換行結尾)"
++    return ""
++
++
++def _kill_also_apply(text, also):
++    """主替換套好的全文再套連帶替換 → (新全文, None) 或 (None, 原因)。逐行(只用 \\n 切)找跟 old 那一行整行相等、而且後面還有換行的行,
++    恰好一行才換;0 行或多行回原因(guard kill 判 error,不是 drifted:also 每次由這次的 HEAD 現算,對不上就是錯)。"""
++    lines = text.split("\n")
++    for a in also:
++        want = a["old"][:-1]
++        hits = [i for i, ln in enumerate(lines[:-1]) if ln == want]
++        if len(hits) != 1:
++            return None, f"連帶替換的那一行在套完主替換的檔裡出現 {len(hits)} 次(要恰好一行整行相等)"
++        lines[hits[0]] = a["new"][:-1]
++    return "\n".join(lines), None
++
++
++def _kill_mutated(src, r, override):
++    """套壞法要寫回的全文 → (全文, None) 或 (None, 原因)。主替換照舊(第一處 old 換成 new);override(臨時配方)才認 also,
++    筆記宣告的配方帶了也不理(範圍 2)。"""
++    out = src.replace(r["old"], r["new"], 1)
++    if not override or "also" not in r:
++        return out, None
++    why = _kill_also_issue(r)
++    if why:
++        return None, why
++    return _kill_also_apply(out, r["also"])
++
++
++# 殺傷力帳本的失敗摘錄(範圍 6):弱證據判定時挑出錯誤行,讓人看得懂為什麼紅(Gradle 的結尾是固定的 Try 提示,錯誤行在前面)
++_KILL_EXCERPT_LINE = 200
++_KILL_EXCERPT_MAX = 800
++_KILL_EXCERPT_HEADS = ("e: ", "error:", "E  ", "FAILED ")
++_KILL_EXCERPT_SHOW = 12
++_KILL_EXCERPT_VERDICTS = ("killed_unattributed", "timed_out_weak", "abort")
++
++
++def _kill_mask_paths(text, wt, home=None):
++    """輸出裡的隔離工作樹路徑(字面與 realpath;macOS 的 /var 與 /private/var)換成 <worktree>、使用者家目錄(字面與 realpath)換成 ~。
++    長的先換(字面是 realpath 的後綴時先換短的會留下 /private 前綴);工作樹先於家目錄。家目錄是空的或 / 不換。"""
++    home = os.path.expanduser("~") if home is None else home
++    for p, tag in ((wt, "<worktree>"), (home, "~")):
++        if not p or p == os.sep:
++            continue
++        for q in sorted({p, os.path.realpath(p)}, key=len, reverse=True):
++            text = text.replace(q, tag)
++    return text
++
++
++def _kill_fail_excerpt(out, wt, home=None):
++    """一次執行的輸出(_kill_run 回的全文)→ 失敗摘錄:先遮路徑(_kill_mask_paths)再挑錯誤行——以 _KILL_EXCERPT_HEADS 開頭、以 ` FAILED` 結尾,
++    或 `* What went wrong:` 那一行到下一個空行之前;每行截 _KILL_EXCERPT_LINE 字、依原順序接起來取前 _KILL_EXCERPT_MAX 字;
++    一行都挑不到才退回結尾 _KILL_EXCERPT_MAX 字。只用 \\n 切行(行尾的 \\r 去掉)。"""
++    text = _kill_mask_paths(out or "", wt, home)
++    picked, in_wrong = [], False
++    for ln in text.split("\n"):
++        ln = ln.rstrip("\r")
++        if in_wrong and not ln.strip():
++            in_wrong = False
++        if ln.startswith("* What went wrong:"):
++            in_wrong = True
++        if in_wrong or ln.startswith(_KILL_EXCERPT_HEADS) or ln.endswith(" FAILED"):
++            picked.append(ln[:_KILL_EXCERPT_LINE])
++    if not picked:
++        return text[-_KILL_EXCERPT_MAX:]
++    return "\n".join(picked)[:_KILL_EXCERPT_MAX]
++
++
++def _kill_res_excerpts(res, attr_excerpt, out, wt):
++    """壞法那一次的結果列補摘錄(原地改):有歸因摘錄就放 attr_excerpt(原本在 cmd_guard_kill 裡的那一段);判定是弱證據
++    (_KILL_EXCERPT_VERDICTS)就放失敗摘錄 fail_excerpt(範圍 6;既有 tail 欄不動)。"""
++    if attr_excerpt:
++        res["attr_excerpt"] = attr_excerpt
++    if res["verdict"] in _KILL_EXCERPT_VERDICTS:
++        res["fail_excerpt"] = _kill_fail_excerpt(out, wt)
++
++
++def _kill_excerpt_show(ex):
++    """失敗摘錄要印給人看的行(人裁被拒時):逐行經 _kill_esc、最多 _KILL_EXCERPT_SHOW 行。"""
++    return [_kill_esc(ln) for ln in (ex or "").split("\n")[:_KILL_EXCERPT_SHOW]]
++
++
+ def _kill_detail_str(res):
+     """結果的 detail 接字之前:配方被手改多寫一個不是字串的 detail 欄時({**r, …} 帶進結果)不當掉(另開一輪通才席)。"""
+     d = res.get("detail", "")
+     return d if isinstance(d, str) else ""
+ 
+ 
+ def _kill_inv_has(r, sub):
+     """合約片段過濾:照舊用 in 比(invariant 是清單時是成員比對,行為不變);比不了(數字、null)回 False。"""
+     try:
+         return sub in r.get("invariant", "")
+@@ -27906,21 +28012,22 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+                 cmd = _run_cmd_expand(run_cmd, method, name_filter=pentry["profile"].get("name_filter", "ident"))
+                 note_ws = "" if "{method}" in run_cmd else " whole-suite"
+                 if cmd not in baselines:
+                     b_rc, b_tail, b_elapsed, b_to = _kill_run(cmd, wt, max(600.0, floor))
+                     mstate["r"] = int(time.time())   # 每個測試指令的 baseline 都記(夾在配方之間)
+                     # 跑 baseline 時還有還原沒錯開的檔:這份 baseline 可能吃到舊快取,之後沿用它的配方都記弱證據(代碼審第 3 輪正確性席)
+                     baselines[cmd] = (b_rc, b_tail, b_elapsed, b_to, bool(mstate["unsure"]))
+                 b_rc, b_tail, b_elapsed, b_to, b_unsure = baselines[cmd]
+                 if b_to or b_rc != 0:
+                     results.append({**r, "platform": plat, "verdict": "abort",
+-                                    "detail": f"baseline 非綠(rc={b_rc}){note_ws}", "tail": b_tail[-200:]})
++                                    "detail": f"baseline 非綠(rc={b_rc}){note_ws}", "tail": b_tail[-200:],
++                                    "fail_excerpt": _kill_fail_excerpt(b_tail, wt)})
+                     continue
+                 # 套配方(路徑圍欄:雙邊 realpath)
+                 target = os.path.realpath(os.path.join(wt, r.get("file", "")))
+                 if not target.startswith(wt_real + os.sep):
+                     results.append({**r, "platform": plat, "verdict": "error",
+                                     "detail": "file 路徑逃逸 worktree(圍欄擋下)"})
+                     continue
+                 try:
+                     with open(target, encoding="utf-8") as _tf:
+                         src = _tf.read()
+@@ -27933,26 +28040,28 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+                 _bad = _kill_old_issue(r)
+                 if _bad:
+                     results.append({**r, "platform": plat, "verdict": "error", "detail": _bad})
+                     continue
+                 cnt = src.count(r.get("old", ""))
+                 if cnt != 1:
+                     results.append({**r, "platform": plat, "verdict": "drifted",
+                                     "detail": f"old 命中 {cnt} 次(需恰 1——配方漂移,重寫)"})
+                     continue
+                 _bad = _kill_new_issue(r)
++                # 臨時配方的連帶替換(also)在記憶體裡套,不合判 error、不寫檔、不跑壞法(Projects/人裁殺傷力在真實Android專案跑得起來_計劃 範圍 2)
++                mutated, _bad = (None, _bad) if _bad else _kill_mutated(src, r, recipes_override is not None)
+                 if _bad:
+                     results.append({**r, "platform": plat, "verdict": "error", "detail": _bad})
+                     continue
+                 _kill_wait_new_second(mstate)
+                 with open(target, "w", encoding="utf-8") as _tf:
+-                    _tf.write(src.replace(r["old"], r["new"], 1))
++                    _tf.write(mutated)
+                 # 有還原沒錯開的檔還沒被成功重寫:之後每一條測試都可能 import 到它的舊快取,一律算進來(代碼審第 1、2 輪正確性席)
+                 mt_ok = _kill_after_write(target, mstate)
+                 if mt_ok:
+                     mstate["unsure"].discard(target)
+                 mt_ok = mt_ok and not mstate["unsure"] and not b_unsure
+                 m_timeout = max(b_elapsed * 5, floor)
+                 m_rc, m_tail, _me, m_to = _kill_run(cmd, wt, m_timeout)
+                 mstate["r"] = int(time.time())
+                 # 還原前也要等:測試跑得快時,還原寫回的檔可能跟壞法同一秒、同大小,下一條改別的檔、測試卻 import 這支時會吃到壞法的快取
+                 _kill_wait_new_second(mstate)
+@@ -27979,22 +28088,21 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+                 else:
+                     verdict = "survived"
+                 res = {**r, "platform": plat, "verdict": verdict}
+                 if not mt_ok:
+                     # 修改時間沒能跟上一次錯開:可能吃到舊的編譯結果——弱證據(收尾重算 weak 時算進去,迴圈裡直接設會被蓋掉)
+                     res["_mtime_unsure"] = True
+                     if not mt_warned[0]:
+                         mt_warned[0] = True
+                         print("⚠ 有配方寫檔後修改時間沒能跟上一次錯開(檔案系統時間精度太粗或時鐘異常),結果可能吃到舊的編譯快取,"
+                               "這些結果記成弱證據", file=sys.stderr)
+-                if attr_excerpt:
+-                    res["attr_excerpt"] = attr_excerpt
++                _kill_res_excerpts(res, attr_excerpt, m_tail, wt)
+                 if verdict == "killed_unattributed":
+                     res["detail"] = (_kill_detail_str(res)
+                                      + "弱證據:紅燈未歸因到綁定測試(建議 run_cmd 加 filter 鎖定該測試)")
+                 if verdict == "survived":
+                     res["tail"] = b_tail[-200:]   # 展示裁回(_kill_run 現保留全文供歸因)
+                 if flaky:
+                     res["flaky_risk"] = True
+                 if note_ws:
+                     res["detail"] = (_kill_detail_str(res) + note_ws +
+                                      ("(弱證據:紅燈可能來自無關測試)" if verdict in ("killed", "killed_unattributed", "timed_out_weak") else ""))
+@@ -28007,21 +28115,22 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+             res["recipe_id"] = _kill_recipe_key(str(rel), res.get("invariant"), res.get("file"), res.get("old"))
+             res["covers"] = _kill_covers_list(res)
+             res["weak"] = bool(mk["ws"] or mk["flaky"] or node_dirty or res.get("_mtime_unsure"))
+             res["_weak_why"] = [w for w, on in (("run_cmd 沒有 {method}、整套一起跑", mk["ws"]), ("平台標了 flaky", mk["flaky"]),
+                                                 ("筆記有未提交改動", node_dirty), ("修改時間沒錯開(可能吃到舊的編譯快取)", res.get("_mtime_unsure")))
+                                 if on]
+     if result_out is not None:
+         # log_recipe_id:殺傷力帳本那筆的 recipe_id(_kill_recipe_key 實際算的值);人裁寫治理帳時照抄這個,兩本帳才接得起來(代碼審 r1 t5/c6)
+         result_out["rows"] = [{"recipe_id": str(r.get("_rid", "")), "short": str(r.get("_rid", ""))[:12],
+                                "verdict": r["verdict"], "weak": bool(r.get("weak")), "detail": _kill_detail_str(r),
+-                               "weak_why": list(r.get("_weak_why") or []), "log_recipe_id": str(r.get("recipe_id", ""))} for r in results]
++                               "weak_why": list(r.get("_weak_why") or []), "log_recipe_id": str(r.get("recipe_id", "")),
++                               "fail_excerpt": str(r.get("fail_excerpt") or "") if r["verdict"] in _KILL_EXCERPT_VERDICTS else ""} for r in results]
+     # 留痕(docs/.kill-log.jsonl,gov 第 5 支 load 撈)——迴圈外:add 失敗 continue 的 error 也要進帳
+     if True:
+         log = env.vault.parent / ".kill-log.jsonl"
+         try:
+             _fh_ok = True
+             fh_cm = open(log, "a", encoding="utf-8")
+         except OSError as ex:
+             _fh_ok = False
+             print(f"⚠ kill-log 寫入失敗(結果只印不留痕): {ex}", file=sys.stderr)
+         if _fh_ok:
+@@ -28031,20 +28140,21 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+                     continue
+                 res["_logged"] = True
+                 fh.write(json.dumps({"ts": ts, "node": rel, "commit": commit,
+                                      "invariant": res.get("invariant", ""), "test": res.get("test", ""),
+                                      "platform": res.get("platform", ""),
+                                      "verdict": res["verdict"], "note": res.get("note", ""),
+                                      "flaky_risk": res.get("flaky_risk", False),
+                                      "tail": res.get("tail", ""),
+                                      "covers": res.get("covers", []), "recipe_id": res.get("recipe_id", ""),
+                                      "head_sha": res.get("head_sha", ""), "weak": res.get("weak", False),
++                                     **({"fail_excerpt": str(res.get("fail_excerpt") or "")} if res["verdict"] in _KILL_EXCERPT_VERDICTS else {}),
+                                      **({"source": _SITUATION_RULE_SOURCE} if recipes_override is not None else {})},
+                                     ensure_ascii=False) + "\n")
+     verdicts = [r["verdict"] for r in results]
+     if as_json:
+         print(json.dumps({"results": [{k: v for k, v in r.items() if k not in ("_logged", "_rid", "_mtime_unsure", "_weak_why")}
+                                       for r in results]}, ensure_ascii=False))
+     else:
+         # 七態(舊 timed_out 鍵已於 2026-07-29 移除:那是六態時代的殘留死鍵,
+         # 且掛 ✓ 會讓人誤以為逾時算接住——現在逾時是 timed_out_weak ⚠)
+         icon = {"killed": "✓", "killed_unattributed": "⚠",
+@@ -35069,80 +35179,109 @@ def _uses_vitest(root):
+     if "jest" in deps:
+         return False
+     return any((Path(root) / n).is_file() for n in _VITEST_CONFIG_NAMES)
+ 
+ 
+ def _init_test_profile(tp, root):
+     """骨架用的測試 profile:猜到 node-jest 而這個 repo 用 vitest 時換成 node-vitest,其餘照舊。"""
+     return "node-vitest" if tp == "node-jest" and _uses_vitest(root) else tp
+ 
+ 
++# Android 專案的單支單元測試要對變體任務加 --tests(頂層 test 不收 --tests),任務是每模組、每 flavor 各一條,工具不猜:
++# 骨架給格式、模組用 YOUR_MODULE 佔位(不用角括號:在 shell 是轉向),說明裡講 flavor 與 tasks --all(Projects/人裁殺傷力在真實Android專案跑得起來_計劃 範圍 3)
++_ANDROID_SKELETON_RUN_CMD = "./gradlew :YOUR_MODULE:testDebugUnitTest --tests '*{method}'"
++_ANDROID_SKELETON_NOTE = ("偵測到 Android 專案:run_cmd 的 YOUR_MODULE 換成測試所在模組(例 app、feature:search);"
++                          "有 product flavor 時任務名是 test<Flavor>DebugUnitTest,用 ./gradlew tasks --all 看實際名稱。")
++
++
++def _init_run_cmd(tp, android):
++    """骨架的 run_cmd:kotlin-junit、java-junit 而且是 Android 專案(android() 判,只在用得到時才掃建置檔)→ Android 格式,其餘照 _SKELETON_RUN_CMD。"""
++    if tp in ("kotlin-junit", "java-junit") and android():
++        return _ANDROID_SKELETON_RUN_CMD
++    return _SKELETON_RUN_CMD.get(tp, "")
++
++
++def _init_android_probe(root):
++    """骨架用的「是不是 Android 專案」判斷(〈用詞〉Android 專案:_android_build_texts 剝完註解後 _KT_BUILD_ANDROID 認得,
++    跟 Android 現成檢查提醒同一套)→ 不帶參數的函式,第一次叫才掃、之後沿用結果。"""
++    seen = []
++
++    def probe():
++        if not seen:
++            seen.append(any(_KT_BUILD_ANDROID.search(b) for b in _android_build_texts(root)))
++        return seen[0]
++    return probe
++
++
+ def _init_config_skeleton(root):
+     """init 產出 .lumos/config.json 骨架(消費專案接入靜默失效 [A]/S1)。
+ 
+     為什麼要產:不產的話 test_profile 與 symbol_profile 各自退回 csharp 預設,
+     非 C# 專案第一天起兩個關鍵設定都錯而且★沒有任何提示★——2026-09-09 第一個 iOS 專案實地踩到。
+     既有設定一律不覆寫;猜到的棧一律標「推測」不當斷言;多語言走既有 platforms 多根多 profile 格式。"""
+     import json as _j
+     cfg_path = Path(root) / ".lumos" / "config.json"
+     if cfg_path.exists():
+         return   # 既有設定不碰
+     guess = _stack_guess()
+     counts = _stack_ext_counts(root)
+     ranked = sorted(counts.items(), key=lambda kv: -kv[1])
+     # ★不能寫 // 註解★:這是要被 json.loads 讀的檔,加註解會讓整份設定解析失敗、退回預設,
+     # 反而製造出這批要解的那種靜默。說明一律走 JSON 欄位。
+     note = ("這份是 lumos init 產出的骨架,裡面的技術棧是用副檔名推測的——請開檔確認。"
+             "猜錯的話兩件事會靜默失效:掃不到你的測試(合約綁不上)、符號檢查對你的程式碼視而不見。"
+             "確認完可以把這個 _請先確認 欄位刪掉。")
++    android = _init_android_probe(root)
+     blank = {"_說明": "偵測不到已知的技術棧。填 test_profile(可選:%s)與 symbol_profile(可選:%s),並把 run_cmd 改成你專案跑單一測試的指令(必須帶 {method} 佔位符,而且對不存在的測試名要回非零或在輸出裡數得出跑了幾支)" % ("/".join(sorted(TEST_PROFILES)), "/".join(sorted(SYMBOL_PROFILES))),
+              "test_profile": "", "symbol_profile": "", "test": {"run_cmd": ""}}
+     if not ranked:
+         body = blank
+     elif len(ranked) == 1 or ranked[0][1] > sum(c for _, c in ranked[1:]) * 3:
+         ext = ranked[0][0]
+         g = guess[ext]
+         tp, sp, human = _init_test_profile(g["test"], root), g["symbol"], g["human"]
+         body = {"_推測": f"看到 {counts[ext]} 個 {ext} 檔,猜這是 {human} 專案——不對就改"
+                          + (";看到 vite/vitest 設定,所以給 vitest 的指令" if tp == "node-vitest" else ""),
+                 "test_profile": tp, "symbol_profile": sp,
+-                "test": {"run_cmd": _SKELETON_RUN_CMD.get(tp, "")}}
++                "test": {"run_cmd": _init_run_cmd(tp, android)}}
+         if not tp or not sp:
+             body["_請自己填"] = ("這個副檔名在正典表裡只被其中一種 profile 認領,另一個留空給你填:"
+                                 f"test_profile 可選 {'/'.join(sorted(TEST_PROFILES))};"
+                                 f"symbol_profile 可選 {'/'.join(sorted(SYMBOL_PROFILES))}")
+         if g["symbol_weak"]:
+             body["_這個猜得很弱"] = (f"symbol_profile 猜成 {sp},只是因為 {sp} 的副檔名清單裡碰巧收了 {ext}"
+                                     f"——那不代表這是 {sp} 專案。符號檢查會用 {sp} 的清單去找筆記提到的符號,"
+                                     "對不上就整批查不到也不會報。請自己確認,可選:"
+                                     f"{'/'.join(sorted(SYMBOL_PROFILES))}")
+     else:
+         plats = {}
+         # ★每一種偵測得到的語言都要列出來,不能只取前幾名★(2026-09-12 多語言驗證 repo 實撞):
+         # 原本是 ranked[:3],一個九種語言的 repo 只會產出三個平台,其餘六種的測試從此掃不到——
+         # 而掃不到的症狀不是報錯,是合約綁不上、閘靜默放行。多列一個平台的代價只是使用者刪一段設定,
+         # 少列一個的代價是那個語言的守衛整批不存在,兩邊不對等。
+         for ext, n in ranked:
+             g = guess[ext]
+             tp, sp, human = _init_test_profile(g["test"], root), g["symbol"], g["human"]
+             if not tp:
+                 continue
+-            plats.setdefault(tp.split("-")[0], {"profile": tp, "root": ".", "run_cmd": _SKELETON_RUN_CMD.get(tp, ""),
++            plats.setdefault(tp.split("-")[0], {"profile": tp, "root": ".", "run_cmd": _init_run_cmd(tp, android),
+                                                 "_推測": f"看到 {n} 個 {ext} 檔({human})"
+                                                          + (";看到 vite/vitest 設定,所以給 vitest 的指令" if tp == "node-vitest" else "")})
+         if not plats:
+             body = blank
+         else:
+             body = {"_推測": "看到多種語言,用多平台格式(每個平台各自的 root/profile/run_cmd)——請確認並把 root 改成各平台真正的目錄;偵測得到的語言全部列出來了,不需要的平台整段刪掉就好",
+                     "default_platform": next(iter(plats)), "platforms": plats,
+                     "symbol_profile": guess[ranked[0][0]]["symbol"]}
+     cfg_path.parent.mkdir(parents=True, exist_ok=True)
++    if _ANDROID_SKELETON_RUN_CMD in _j.dumps(body, ensure_ascii=False):   # 有平台給了 Android 格式:說明多一句
++        note += _ANDROID_SKELETON_NOTE
+     body = {"_請先確認": note, **body}
+     _write_lf(cfg_path, _j.dumps(body, ensure_ascii=False, indent=2) + "\n")
+     print(f"  ✓ 設定骨架 {cfg_path}(★技術棧是推測的,請開檔確認★——猜錯會讓測試掃描與符號檢查靜默失效)")
+ 
+ 
+ _GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py", "lumos-entry-hook.py", "dispatch-lens-hook.py",
+                         "memory-sweep.py", "bypass-ask-hook.py",
+                         # 收工寫法檢查與它跟收工點名共用的模組:少了 _hookshared.py,安裝副本的收工點名也會匯入失敗而靜默放行;
+                         # 放在下面那段註解之前,因為 t_hook_copy_list_completeness 的正規式讀到第一個半形右括號就停
+                         "stop-lint-hook.py", "_hookshared.py",
+@@ -75674,34 +75813,35 @@ def _situation_rule_args_problem(clause, test, file, old, new, consent):
+     if not test or re.search(r"[\s\[\]|,`]", test):
+         return f"--test {_kill_esc(test)!r} 要是一個測試名(不含空白、括號、逗號、管線、反引號)"
+     for flag, val in (("--test", test), ("--file", file or ""), ("--old", old or ""), ("--new", new or ""), ("--consent", consent or "")):
+         try:
+             val.encode("utf-8")
+         except UnicodeEncodeError:
+             return f"{flag} 有不能編成 UTF-8 的字(多半是命令列帶了壞位元組)——重打一次;計劃沒動"
+     return None
+ 
+ 
+-def _situation_rule_target(env, seg, row, branch):
+-    """段與列 → (段, repo 根, 版本) 或 None(已印原因):段身分在這次範圍(終點 HEAD,--branch 同 code-loop)算得出來、列是那段的候選列。"""
++def _situation_rule_target(env, seg, row, branch, diff=None):
++    """段與列 → (段, repo 根, 版本) 或 None(已印原因):段身分在這次範圍(終點 HEAD,--branch 同 code-loop;--diff 照 _situation_rule_segments)
++    算得出來、列是那段的候選列。"""
+     if branch is not None and not branch.strip():
+         _situation_rule_say("--branch 給了空字串——要用哪個分支名算範圍講清楚")
+         return None
+     if _KT_DT_ERR:
+         _situation_rule_say(f"Kotlin 型錄的情境決策表{_KT_DT_ERR},算不出情境段")
+         return None
+     rr = Path(_vault_repo_root(env))
+     head = _codeloop_git_head(rr)
+     if not head:
+         _situation_rule_say("問不到目前的 git 版本號(git 指令失敗?)")
+         return None
+-    segs, _rng = _kt_bj_segments(rr, branch or _codeloop_git_branch(rr), head, None)
++    segs = _situation_rule_segments(rr, branch, head, diff)
+     if segs is None:
+         return None
+     sg = next((s for s in segs if s["seg"] == seg), None)
+     if sg is None:
+         listing = ";".join(f"{s['seg']}({_kill_esc(s['file'])}:{s['start']}-{s['end']},候選列 {'、'.join(s['rows'])})" for s in segs[:10])
+         _situation_rule_say(f"段身分 {_kill_esc(seg)} 不在這次範圍(終點 HEAD)算出的情境段裡。這次的段:{listing or '(沒有)'}")
+         return None
+     if row not in sg["rows"]:
+         _situation_rule_say(f"{_kill_esc(row)} 不是段 {seg} 的候選列(這段的候選列:{'、'.join(sg['rows'])})")
+         return None
+@@ -75754,20 +75894,24 @@ def _situation_rule_platform(env, rr, sg):
+     # 配方的 file 從平台根所在 repo 的最上層算(guard kill 在平台根下 git worktree add,工作樹的根是 repo 頂;_kill_plat_top 同一套),
+     # 不是從平台根算——平台根是子目錄(例 android/)時從平台根算會指到工作樹裡不存在的檔(代碼審 r1 修 t5/c6 時實測發現)
+     top, terr = _kill_plat_top({"tops": {}}, pentry["root"])
+     try:
+         kfile = os.path.relpath(src, os.path.realpath(str(top))).replace(os.sep, "/") if top is not None else ".."
+     except ValueError:
+         kfile = ".."
+     if kfile.startswith(".."):
+         _situation_rule_say(f"{_kill_esc(sg['file'])} 不在預設平台根所在的 repo 裡({_kill_esc(terr or str(top))}),殺傷力驗證跑不到它")
+         return None
++    why = _situation_rule_android_cmd_problem(pdata, top, src)   # Android 的 run_cmd 跑殺傷力前先查(Projects/人裁殺傷力在真實Android專案跑得起來_計劃 範圍 4)
++    if why:
++        _situation_rule_say(why)
++        return None
+     try:
+         floor = float(os.environ.get("LUMOS_KILL_TIMEOUT_FLOOR", "20"))
+     except ValueError:
+         floor = 20.0
+     return kfile, floor
+ 
+ 
+ _SITUATION_RULE_KILL_HINT = "收尾中…再按一次 Ctrl-C(或再送一次終止訊號)強制結束,暫存現場留給之後的清殘骸"
+ _SITUATION_RULE_KILL_FORCE = ("強制結束(第二個終止訊號):測試的程序群組已收掉;隔離工作樹與暫存資料夾沒收,留給一天後的清殘骸"
+                               "(下次跑人裁時清超過一天的 lumos-kill-* 殘骸)——計劃與治理帳都沒寫")
+@@ -75869,61 +76013,69 @@ def _situation_rule_handlers_install(handler):
+             cur = signal.getsignal(s)
+             if cur == signal.SIG_IGN or (name == "SIGINT" and cur is not signal.default_int_handler):
+                 continue
+             signal.signal(s, handler)
+             saved[s] = cur
+         except (ValueError, OSError):
+             pass
+     return saved
+ 
+ 
+-def _situation_rule_kill(env, prel, cid0, test, kfile, old, new, floor):
++def _situation_rule_kill(env, prel, cid0, test, kfile, old, new, floor, also=None, imports=None):
+     """跑一次宣告式壞法(cmd_guard_kill 帶 recipes_override)→ (結果列, None) 或 (None, rc)。
++    also(--import 算出的連帶替換)給了就放進臨時配方,配方的 note 帶補的 import(殺傷力帳本那筆看得到);
++    判定不是沒有弱證據的 killed 時,拒絕訊息另印失敗摘錄(fail_excerpt,最多 _KILL_EXCERPT_SHOW 行;範圍 6)。
+     Ctrl-C、SIGTERM、SIGHUP(_situation_rule_signals):第一個收掉程序群組與工作樹後 rc 2;第二個強制結束(rc 2,工作樹留給清殘骸)。"""
+     cap = max(600.0, floor)
+     print(f"殺傷力驗證開跑:隔離工作樹裡基準跑一次、套壞法再跑一次(基準每次最長 {int(cap)} 秒,壞法最長基準耗時的 5 倍、至少 {int(floor)} 秒);"
+           "Android 專案的 Gradle 可能十幾分鐘,超過對話裡跑指令的上限,建議放背景跑")
+     sys.stdout.flush()
+     out = {}
+-    recipe = {"invariant": cid0, "test": test, "file": kfile, "old": old, "new": new, "note": "人裁(lumos situation-rule)"}
++    recipe = {"invariant": cid0, "test": test, "file": kfile, "old": old, "new": new,
++              "note": "人裁(lumos situation-rule)" + (f";補 import:{'、'.join(imports)}" if imports else ""),
++              **({"also": also} if also else {})}
+     try:
+         with _situation_rule_signals():
+             cmd_guard_kill(env, prel, recipes_override=[recipe], result_out=out)
+     except KeyboardInterrupt:
+         print("\n擋下:殺傷力驗證被中斷(Ctrl-C 或終止訊號)——測試的程序群組與隔離工作樹已收掉,計劃與治理帳都沒寫", file=sys.stderr)
+         return None, 2
+     rows = out.get("rows") or []
+     r0 = rows[0] if len(rows) == 1 else None
+     if r0 is None or r0.get("verdict") != "killed" or r0.get("weak"):
+         verdict = r0.get("verdict") if r0 else "沒有結果"
+         why = ";".join(r0.get("weak_why") or []) if r0 else ""
++        shown = _kill_excerpt_show((r0 or {}).get("fail_excerpt"))
++        if shown and shown != [""]:
++            print("殺傷力那一次的失敗摘錄(帳本也存了;路徑已遮):\n" + "\n".join(f"  {ln}" for ln in shown), file=sys.stderr)
+         _situation_rule_say(f"殺傷力判定是 {verdict}" + (f"(弱證據:{why})" if r0 and r0.get("weak") else "")
+                             + (f"——{_kill_esc(r0.get('detail') or '')[:200]}" if r0 and r0.get("detail") else "")
+                             + "。人裁只認沒有弱證據的 killed(改壞這段、綁的測試必須在斷言上紅),計劃與治理帳都沒寫;"
+                             "survived 要補強測試(例:連送兩個值),弱證據要讓 run_cmd 帶 {method} 只跑那一支")
+         return None, 2
+     return r0, None
+ 
+ 
+ def _situation_rule_done(msg):
+     """計劃早已寫過而且治理帳已記:印一句、rc 0(什麼都不用做;代碼審 r2 正確性 c3)。"""
+     print(f"✓ {msg}")
+     return 0
+ 
+ 
+ def _situation_rule_event_parts(prel, clause, test, cid, meta):
+     """治理帳那筆 situation-rule 的 (extra, note)。記帳與補記事件共用(強制結束要在寫計劃之前就算好)。"""
+     wline = f"- [{cid}] {clause} [test:{test}]"
+     # recipe_id 照抄殺傷力那次實際的值(殺傷力帳本那筆用的就是它:試插時的編號、相對平台根的檔路徑),兩本帳才接得起來(代碼審 r1 t5/c6)
+     extra = {"seg": meta["seg"], "row": meta["row"], "plan": prel, "clause_id": cid, "clause_text": _clause_body_of(wline, keep_code=True),
+              "clause_sha": _clause_sha(wline), "test_name": test, "origin": meta["origin"],
+-             "consent": meta["consent"], "kill_verdict": meta["kill_verdict"], "recipe_id": meta["recipe_id"]}
++             "consent": meta["consent"], "kill_verdict": meta["kill_verdict"], "recipe_id": meta["recipe_id"],
++             "imports": list(meta.get("imports") or [])}
+     return extra, f"人裁寫回 {prel} {cid}(段 {meta['seg']} 列 {meta['row']})"
+ 
+ 
+ def _situation_rule_miss_text(rr, head, prel, cid, note, extra, why, unsure=""):
+     """計劃已寫入、治理帳沒記到時要印的兩行:原因與補記用的那一行事件(原樣加到治理帳尾端)。unsure="plan":計劃正在寫、不確定寫進去沒有;
+     unsure="ledger":帳正在記、不確定記進去沒有。事件組不出來就照實講組不出來與原因(強制結束時這段文字事先算好,處理器裡只印)。"""
+     import json as _j
+     try:
+         line = _j.dumps(_gate_event_build(rr, _SITUATION_RULE_SOURCE, _SITUATION_RULE_SOURCE, note, hard=False, head_sha=head, nodes=[prel],
+                                           extra=extra), ensure_ascii=False)
+@@ -76017,93 +76169,339 @@ def _situation_rule_record(st, rr, head, prel, clause, test, cid, meta):
+     st.force_msg = _situation_rule_miss_text(rr, head, prel, cid, note, extra, force, unsure="ledger")
+     ok = _gate_event(rr, _SITUATION_RULE_SOURCE, _SITUATION_RULE_SOURCE, note, hard=False, head_sha=head, nodes=[prel], extra=extra)
+     if ok is not True:
+         return _situation_rule_ledger_miss(rr, head, prel, cid, note, extra, "寫治理帳失敗")
+     st.force_rc, st.force_msg = 0, f"{force}:計劃 {cid} 與治理帳都已寫完——接下來提交計劃與治理帳、重答這一列的出處"
+     if st.got:
+         print("記帳當中收到終止訊號:計劃與治理帳都已寫完,照下面的下一步走", file=sys.stderr)
+     return 0
+ 
+ 
+-def cmd_situation_rule(env, seg, row, plan, clause, test, file, old, new, consent=None, branch=None):
+-    """lumos situation-rule:情境題人裁寫回規格(範圍 4)。順序:誰裁的(沒有終端也沒帶 --consent 直接拒絕,什麼都不寫)→ 段與列 →
+-    計劃 → 條款文字 → 殺傷力配方限定這一段同一列 → 工作目錄除簿記檔外乾淨 → 平台有 run_cmd → 試插(有〈驗收條款〉節、插得成綁到測試的定義行)→ 殺傷力驗證
+-    (只認沒有弱證據的 killed)→ 終端確認(印段、列、計劃、條款、測試、殺傷力判定;回 ai 要 --consent)→ 寫入鎖內重讀計劃、算號、插入、原子寫
+-    → 治理帳記一筆 situation-rule → 印下一步(寫入與記帳在 _situation_rule_commit)。
+-    rc:0 寫回且記帳,或計劃早已寫過、治理帳也已記(什麼都不用做,不跑殺傷力);1 終端答不是 y、或計劃已動但帳沒記到(記帳失敗、寫完讀回不一致、
+-    寫完到記帳之間收到終止訊號;不要重跑,照印出的補記或「已寫過」處理);2 拒絕(計劃與治理帳都不動,含寫入前收到終止訊號)。"""
+-    consent = consent if isinstance(consent, str) and consent.strip() else ""
+-    if not consent and not _confirm_tty_probe():
+-        return _situation_rule_say("沒有互動終端,也沒帶 --consent \"<使用者原話>\"——人裁要人點頭:在對話裡把要寫回的條款講給使用者、"
+-                                   "使用者同意後帶他的原話代跑(對話核可);計劃、治理帳與殺傷力帳本都沒動")
+-    got = _situation_rule_target(env, seg, row, branch)
++# ── 人裁在真實 Android 專案跑得起來(Projects/人裁殺傷力在真實Android專案跑得起來_計劃 範圍 1、4、5)──
++# 範圍 1:--import 由人明寫要補的 import(工具不猜套件),產生一筆連帶替換 also 交給殺傷力驗證;範圍 4:Android 專案的 run_cmd 跑殺傷力前先查;
++# 範圍 5:--diff 跟 code-loop check 同一套範圍規則(_codeloop_disp_range,經 _kt_bj_segments)。
++
++def _situation_rule_header_rows(lines):
++    """檔頭區的行號(0 起;〈用詞〉檔頭區):從第一行起,到第一個既不是空行、註解(// 與 /* … */)、@file: 註記、package、import 的行之前。
++    lines 是只用 \\n 切的行。"""
++    rows, in_block = [], False
++    for i, ln in enumerate(lines):
++        t = ln.strip()
++        if in_block:
++            in_block = "*/" not in t
++        elif t.startswith("/*"):
++            in_block = "*/" not in t[2:]
++        elif t and not t.startswith(("//", "@file:", "package ", "import ")) and t != "package":
++            break
++        rows.append(i)
++    return rows
++
++
++def _situation_rule_has_import(head_imports, imp):
++    """檔頭區已經 import 這個名稱嗎(範圍 1):同一行、同名不同套件(含 as 別名同名)、或 `<套件>.*` 都算已有。
++    head_imports 是檔頭區 `import ` 開頭的行;imp 是合形狀的補 import 行。"""
++    path = imp[len("import "):]
++    pkg, name = path.rsplit(".", 1)
++    for ln in head_imports:
++        body = ln[len("import "):].split("//", 1)[0].strip().rstrip(";").strip()
++        got, _sep, alias = body.partition(" as ")
++        got = got.strip()
++        if got == path or (alias.strip() or got.rsplit(".", 1)[-1]) == name or got == pkg + ".*":
++            return True
++    return False
++
++
++def _situation_rule_imports_problem(src, new, imports):
++    """--import 清單 → (also 清單, None) 或 (None, 原因)。每一行照〈用詞〉補 import 的形狀(_KILL_IMPORT_RE fullmatch);名稱(最後一段)
++    要在 --new 裡以識別字整字出現、HEAD 那支檔的檔頭區沒有 import 它(_situation_rule_has_import)、同一行不重複給。
++    插入點:檔頭區最後一行 `import ` 開頭的行,沒有就 `package ` 那一行,都沒有就拒絕;那一行後面要有換行。also 只有一筆:
++    old 是插入點那一整行加換行、new 是那一行加換行再加每一行補 import 加換行。"""
++    lines = src.split("\n")
++    head = [lines[i] for i in _situation_rule_header_rows(lines)]
++    head_imports = [ln for ln in head if ln.startswith("import ")]
++    for k, imp in enumerate(imports):
++        if not isinstance(imp, str) or not _KILL_IMPORT_RE.fullmatch(imp):
++            return None, (f"--import {_kill_esc(repr(imp))[:160]} 形狀不對:要是一整行 `import 套件.名稱`(ASCII 識別字、至少兩段;"
++                          "不收 *、as 別名、反引號、前後空白)")
++        name = imp.rsplit(".", 1)[1]
++        if imp in imports[:k]:
++            return None, f"--import {imp} 重複給了兩次"
++        if not re.search(rf"\b{re.escape(name)}\b", new):
++            return None, f"--import {imp} 的名稱 {name} 不在 --new 裡(只補壞法真的用到、檔頭還沒 import 的名稱)"
++        if _situation_rule_has_import(head_imports, imp):
++            return None, f"--import {imp}:檔頭已經 import 了 {name}(同一行、同名不同套件或整個套件的 .*)——不用補,拿掉這個 --import"
++    rows = _situation_rule_header_rows(lines)
++    at = next((i for i in reversed(rows) if lines[i].startswith("import ")), None)
++    at = next((i for i in rows if lines[i].startswith("package ")), None) if at is None else at
++    if at is None or at >= len(lines) - 1:
++        return None, ("檔頭區既沒有 import 也沒有 package 那一行(或那一行後面沒有換行),補 import 沒有插入點——"
++                      "這支檔用不著 --import 就拿掉,不然先讓檔頭有 package 那一行")
++    old = lines[at] + "\n"
++    return [{"old": old, "new": old + "".join(f"{x}\n" for x in imports)}], None
++
++
++def _situation_rule_also(rr, sg, head, old, new, imports):
++    """人裁的連帶替換 → (also 清單或 None(沒給 --import), None) 或 (None, 原因)。HEAD 那版照切段同一支 _kt_sit_read_many 讀;
++    算好的 also 先過殺傷力共用的 _kill_also_issue,再對「HEAD 那版套完主替換」試套一次(_kill_also_apply)——
++    殺傷力那邊同一套,這裡先擋下就不必等基準跑完才判 error。"""
++    if not imports:
++        return None, None
++    try:
++        src = _kt_sit_read_many(str(rr), head, [sg["file"]])[sg["file"]]
++    except (_KtSitUnverifiable, _KtSitOverBudget, OSError, subprocess.TimeoutExpired) as e:
++        return None, f"讀不到 HEAD 版的 {_kill_esc(sg['file'])}({_kill_esc(str(e))[:160] or e.__class__.__name__})"
++    also, why = _situation_rule_imports_problem(src, new, list(imports))
++    why = why or _kill_also_issue({"also": also})
++    if not why:
++        _txt, why = _kill_also_apply(src.replace(old, new, 1), also)
++    return (None, why) if why else (also, None)
++
++
++def _situation_rule_diff_problem(rr, diff, head):
++    """--diff 入口驗 → 原因或 None(範圍 5):不准以 - 開頭(同 impact、pitfalls 的先例;兩端也不准)、只收兩點寫法 A..B
++    (_lens_range_ok:恰好一個 ..、兩端非空、不含 ...、不含空白)、兩端都要解析得到提交、右端要是 HEAD 的提交。"""
++    ends = _lens_range_ok(diff)
++    if ends is None or any(e.startswith("-") for e in ends):
++        return (f"--diff 只收兩點寫法 A..B(兩端都要有、不以 - 開頭、不收三點寫法與空白;收到 {_kill_esc(repr(diff))[:120]})"
++                "——計劃沒動")
++    shas = []
++    for e in ends:
++        r = subprocess.run(["git", "-C", str(rr), "rev-parse", "--verify", "-q", "--end-of-options", e + "^{commit}"],
++                           capture_output=True, text=True, errors="replace")
++        if r.returncode != 0 or not r.stdout.strip():
++            return f"--diff 的 {_kill_esc(e)[:80]} 解析不到提交——計劃沒動"
++        shas.append(r.stdout.strip())
++    if shas[1] != head:
++        return f"--diff 的右端 {_kill_esc(ends[1])[:80]} 不是 HEAD(人裁驗的是 HEAD 那一版,寫成 <起點>..HEAD)——計劃沒動"
++    return None
++
++
++def _situation_rule_segments(rr, branch, head, diff):
++    """這次範圍的情境段 → 段清單或 None(已印原因)。範圍照 _kt_bj_segments(code-loop check 同一套 _codeloop_disp_range,不改共用函式):
++    找得到主線分岔點時一律照分岔點、--diff 不生效;給了 --diff 而實際範圍字串不等於它就印一行講沒採用。"""
++    if diff is not None:
++        why = _situation_rule_diff_problem(rr, diff, head)
++        if why:
++            _situation_rule_say(why)
++            return None
++    segs, rng = _kt_bj_segments(rr, branch or _codeloop_git_branch(rr), head, diff)
++    if segs is not None and diff is not None and rng != diff:
++        print(f"你給的 --diff 沒採用,改用 {rng or '(沒有範圍:分支頂端已在主線上)'}"
++              "(分支找得到主線分岔點時一律照分岔點算,跟 code-loop check 同一套)")
++    return segs
++
++
++_SR_GRADLE_VALUE_OPTS = frozenset(("-x", "--exclude-task", "-p", "--project-dir", "--tests"))
++_SR_MODULE_PART = re.compile(r"[A-Za-z0-9_.-]+")
++_SR_BUILD_NAMES = ("build.gradle.kts", "build.gradle")
++
++
++def _gradle_task_list(run_cmd):
++    """run_cmd 的 Gradle 任務清單(〈用詞〉任務清單):shlex 切詞(;、&、| 另切成記號)後,第一個 gradle 呼叫詞(_is_gradle_head)之後、
++    不以 - 開頭的詞;-x、--exclude-task、-p、--project-dir、--tests 後面那個詞是選項的值、不算;遇到 &&、;、| 這類記號就停。切不了(引號沒收)回空清單。"""
++    import shlex
++    try:
++        lx = shlex.shlex(run_cmd or "", posix=True, punctuation_chars=";&|")
++        lx.whitespace_split = True
++        words = list(lx)
++    except ValueError:
++        return []
++    start = next((i for i, w in enumerate(words) if _is_gradle_head(w)), None)
++    tasks, skip = [], False
++    for w in ([] if start is None else words[start + 1:]):
++        if w and set(w) <= set(";&|"):
++            break
++        if skip or w.startswith("-"):
++            skip = not skip and w in _SR_GRADLE_VALUE_OPTS
++            continue
++        tasks.append(w)
++    return tasks
++
++
++def _gradle_build_android(folder):
++    """這個資料夾的 build.gradle(.kts)剝完註解後有沒有 Android 外掛宣告(_KT_BUILD_ANDROID;讀前 1MB,解析後不在資料夾底下的連結不讀)。"""
++    for fn in _SR_BUILD_NAMES:
++        f = Path(folder) / fn
++        if not f.is_file() or not _path_resolves_in_root(folder, f):
++            continue
++        try:
++            with open(f, "rb") as fh:
++                txt = fh.read(1 << 20).decode("utf-8", errors="replace")
++        except OSError:
++            continue
++        if _KT_BUILD_ANDROID.search(_kt_strip_comments(txt)):
++            return True
++    return False
++
++
++def _gradle_blocked_tasks(tasks, proot):
++    """任務清單裡擋下的 test 任務(〈用詞〉):沒有模組前綴、剛好是 test 而且平台根是 Android 專案;或 `:<模組>:test` 而那個模組資料夾
++    的建置檔是 Android(純 JVM 模組的 test 收 --tests,不擋;變體任務 testDebugUnitTest 不擋)。"""
++    bad = []
++    if "test" in tasks and any(_KT_BUILD_ANDROID.search(b) for b in _android_build_texts(proot)):
++        bad.append("test")
++    for t in tasks:
++        parts = t[1:].split(":")[:-1] if t.startswith(":") and t.endswith(":test") else []
++        if parts and all(_SR_MODULE_PART.fullmatch(p) and p not in (".", "..") for p in parts) \
++                and _gradle_build_android(Path(proot).joinpath(*parts)):
++            bad.append(t)
++    return bad
++
++
++def _gradle_module_candidate(proot, src_abs):
++    """這段所在檔推出的模組候選:從檔所在資料夾往上找最近一層有 build.gradle(.kts) 的資料夾(到平台根為止、不含平台根),
++    相對平台根轉成 `:a:b`;有一層名字不合 `^[A-Za-z0-9_.-]+$` 就不給(回 None)。"""
++    root = os.path.realpath(str(proot))
++    d = os.path.dirname(os.path.realpath(str(src_abs)))
++    while d.startswith(root + os.sep):
++        if any(os.path.isfile(os.path.join(d, fn)) for fn in _SR_BUILD_NAMES):
++            parts = os.path.relpath(d, root).split(os.sep)
++            return ":" + ":".join(parts) if all(_SR_MODULE_PART.fullmatch(p) for p in parts) else None
++        d = os.path.dirname(d)
++    return None
++
++
++def _situation_rule_android_cmd_problem(pdata, top, src_abs):
++    """預設平台 profile 是 kotlin-junit 或 java-junit、run_cmd 含 YOUR_MODULE 佔位或任務清單有擋下的 test 任務 → 要印的多行原因,否則 None
++    (範圍 4)。原因寫要改哪個設定鍵、正確格式(平台根不是 repo 最上層時加 `cd <平台根> && `:殺傷力在工作樹最上層跑 run_cmd)、
++    模組候選、flavor 與 ./gradlew tasks --all 的提示。不自動改設定。"""
++    plat = pdata["default_platform"]
++    pentry = pdata["platforms"][plat]
++    if pentry.get("profile_name") not in ("kotlin-junit", "java-junit"):
++        return None
++    cmd = pentry.get("run_cmd") or ""
++    whys = ["還留著 init 骨架的 YOUR_MODULE 佔位"] if "YOUR_MODULE" in cmd else []
++    whys += [f"任務 {_kill_esc(t)[:60]} 是 Android 的 test 任務,不收 --tests、也不會只跑那一支"
++             for t in _gradle_blocked_tasks(_gradle_task_list(cmd), pentry["root"])]
++    if not whys:
++        return None
++    rel = os.path.relpath(os.path.realpath(str(pentry["root"])), os.path.realpath(str(top))).replace(os.sep, "/")
++    pre = "" if rel == "." else f"cd {_sh_quote(rel)} && "
++    cand = _gradle_module_candidate(pentry["root"], src_abs)
++    key = f"platforms.{plat}.run_cmd" if pdata.get("multiplatform") else "test.run_cmd"
++    return "\n".join([
++        f"預設平台的 run_cmd 跑不了單支 Android 單元測試({';'.join(whys)})——殺傷力沒跑,計劃沒動",
++        f"  改哪裡:.lumos/config.json 的 {key}",
++        f"  正確格式:{pre}./gradlew :<模組>:test<Variant>UnitTest --tests '*{{method}}'",
++        (f"  模組候選:{cand}(從 --file 往上最近一層有 build.gradle(.kts) 的資料夾推的;模組用 projectDir 改過目錄時照實際填)" if cand
++         else "  模組候選:從 --file 推不出來(往上找不到建置檔,或資料夾名有特殊字元)——照專案實際的模組路徑填"),
++        "  有 product flavor 時任務名是 test<Flavor>DebugUnitTest(例 testFreeDebugUnitTest);不確定就跑 ./gradlew tasks --all 看實際名稱",
++        "  工具不自動改設定:改好、提交後再跑"])
++
++
++def _situation_rule_check(env, seg, row, plan, args):
++    """殺傷力之前的檢查(段與列 → 計劃 → 條款文字與旗標 → 配方限定這一段同一列 → 補 import → 工作目錄乾淨 → 平台與 run_cmd → 試插)
++    → 狀態物件或 rc(已印原因;計劃早已寫過而且帳已記時是 0)。args 帶 clause、test、file、old、new、consent、branch、imports、diff。"""
++    import types
++    got = _situation_rule_target(env, seg, row, args["branch"], args["diff"])
+     if got is None:
+         return 2
+     sg, rr, head = got
+     got = _situation_rule_plan(env, plan)
+     if got is None:
+         return 2
+     pn, prel, ppath, text = got
+-    clause = (clause or "").strip()
+-    why = _situation_rule_args_problem(clause, test, file, old, new, consent)
++    why = _situation_rule_args_problem(args["clause"], args["test"], args["file"], args["old"], args["new"], args["consent"])
+     if why:
+         return _situation_rule_say(why)
+-    why = _situation_rule_recipe_problem(rr, sg, row, file, old or "", new or "", head)
+-    if why:
+-        return _situation_rule_say(why + ";計劃沒動")
+-    dirty = _dirty_non_bookkeeping(rr)
+-    if dirty is None:
+-        return _situation_rule_say("查不到工作目錄有沒有未提交改動(git 跑不起來)")
+-    if dirty:
+-        return _situation_rule_say(f"工作目錄有未提交改動(簿記檔以外):{'、'.join(_kill_esc(x) for x in dirty[:8])}"
+-                                   + (f" 等 {len(dirty)} 支" if len(dirty) > 8 else "")
+-                                   + "——殺傷力驗證照 HEAD 建隔離工作樹,計劃或程式沒提交時判定不可信;先提交再跑")
+-    plat = _situation_rule_platform(env, rr, sg)
++    why = _situation_rule_recipe_problem(rr, sg, row, args["file"], args["old"] or "", args["new"] or "", head)
++    also, why2 = (None, None) if why else _situation_rule_also(rr, sg, head, args["old"], args["new"], args["imports"])
++    if why or why2:
++        return _situation_rule_say((why or why2) + ";計劃沒動")
++    plat = _situation_rule_clean_platform(env, rr, sg)
+     if plat is None:
+         return 2
+-    kfile, floor = plat
+     # 先試插一次(沒有〈驗收條款〉節、插進去不是綁到測試的定義行都在這裡拒絕):插不成的不必跑殺傷力;號碼寫入時在鎖內重算
+-    n0, cid0, why = _situation_rule_insert(text, clause, test, ruled=lambda: _spec_gate_ruled_events(rr, prel, text), seg=seg, row=row)
++    n0, cid0, why = _situation_rule_insert(text, args["clause"], args["test"], ruled=lambda: _spec_gate_ruled_events(rr, prel, text),
++                                           seg=seg, row=row)
+     if n0 is None:
+         return _situation_rule_done(why) if cid0 else _situation_rule_say(why)
+-    r0, rc = _situation_rule_kill(env, prel, cid0, test, kfile, old, new, floor)
+-    if r0 is None:
+-        return rc
++    return types.SimpleNamespace(sg=sg, rr=rr, head=head, pn=pn, prel=prel, ppath=ppath, kfile=plat[0], floor=plat[1], cid0=cid0, also=also)
++
++
++def _situation_rule_clean_platform(env, rr, sg):
++    """工作目錄除簿記檔外乾淨(殺傷力照 HEAD 建隔離工作樹)→ 平台(_situation_rule_platform)→ (配方的檔路徑, 逾時下限) 或 None(已印原因)。"""
++    dirty = _dirty_non_bookkeeping(rr)
++    if dirty is None:
++        _situation_rule_say("查不到工作目錄有沒有未提交改動(git 跑不起來)")
++        return None
++    if dirty:
++        _situation_rule_say(f"工作目錄有未提交改動(簿記檔以外):{'、'.join(_kill_esc(x) for x in dirty[:8])}"
++                            + (f" 等 {len(dirty)} 支" if len(dirty) > 8 else "")
++                            + "——殺傷力驗證照 HEAD 建隔離工作樹,計劃或程式沒提交時判定不可信;先提交再跑")
++        return None
++    return _situation_rule_platform(env, rr, sg)
++
++
++def _situation_rule_show(seg, row, ctx, clause, test, imports):
++    """終端確認前印要寫回計劃的內容(段、列、計劃、條款、測試、補 import、殺傷力判定)。"""
++    sg = ctx.sg
+     print("人裁要寫回計劃的內容:")
+     print(f"  段     {seg}({_kill_esc(sg['file'])}:{sg['start']}-{sg['end']})")
+     print(f"  列     {row}")
+-    print(f"  計劃   {_kill_esc(pn)}(〈驗收條款〉節最後一條之後;編號寫入時在鎖內重算,現在看是 {cid0})")
++    print(f"  計劃   {_kill_esc(ctx.pn)}(〈驗收條款〉節最後一條之後;編號寫入時在鎖內重算,現在看是 {ctx.cid0})")
+     print(f"  條款   {_kill_esc(clause)}")
+     print(f"  測試   {_kill_esc(test)}")
++    for imp in imports or []:
++        print(f"  補 import  {_kill_esc(imp)}(殺傷力壞法在檔頭 {_kill_esc(ctx.also[0]['old'].rstrip())} 之後多加這一行)")
+     print("  殺傷力 killed(沒有弱證據:把這一段換成同一列的另一種寫法,綁的測試紅了)")
+     sys.stdout.flush()
++
++
++def _situation_rule_next(ctx, pn, cid, origin, seg, row):
++    """寫回與記帳都成了:印結果與下一步。"""
++    who = "人在終端裁" if origin == "human" else "AI 依對話核可代跑"
++    print(f"✓ 已寫回 {_kill_esc(pn)} 的 {cid}({who}),治理帳記了一筆 situation-rule")
++    print("接下來:")
++    print(f"  1. 提交計劃與治理帳:git add -- {_sh_quote(os.path.relpath(str(ctx.ppath), str(ctx.rr)))} {GOV_LOG_REL}")
++    print(f"  2. 重答這一列的出處:段 {seg} 的 {row} 的 spec 填 {_kill_esc(pn)}#{cid}、quote 從這條逐字引一段")
++    print("  3. 計劃不是簿記檔:提交後作者表態與已過的代碼審留痕都失效——重跑表態(lumos pitfalls --diff <範圍> --dispositions-template --carry,"
++          "只答新題)與代碼審留痕")
++    print(f"  4. 計劃的規格閘留痕要重跑(條款雜湊變了):lumos spec-gate {_sh_quote(Path(ctx.prel).stem)}")
++
++
++def cmd_situation_rule(env, seg, row, plan, clause, test, file, old, new, consent=None, branch=None, imports=None, diff=None):
++    """lumos situation-rule:情境題人裁寫回規格(範圍 4)。順序:誰裁的(沒有終端也沒帶 --consent 直接拒絕,什麼都不寫)→ 殺傷力之前的檢查
++    (_situation_rule_check:段與列(--diff 照 code-loop 同一套範圍)→ 計劃 → 條款文字 → 殺傷力配方限定這一段同一列 → --import 算連帶替換
++    → 工作目錄除簿記檔外乾淨 → 平台有 run_cmd、Android 的 run_cmd 跑得了單支 → 試插(有〈驗收條款〉節、插得成綁到測試的定義行))→ 殺傷力驗證
++    (只認沒有弱證據的 killed)→ 終端確認(印段、列、計劃、條款、測試、補 import、殺傷力判定;回 ai 要 --consent)→ 寫入鎖內重讀計劃、算號、插入、原子寫
++    → 治理帳記一筆 situation-rule(多 imports 欄)→ 印下一步(寫入與記帳在 _situation_rule_commit)。
++    imports、diff 見 [[Projects/人裁殺傷力在真實Android專案跑得起來_計劃]] 範圍 1、5。
++    rc:0 寫回且記帳,或計劃早已寫過、治理帳也已記(什麼都不用做,不跑殺傷力);1 終端答不是 y、或計劃已動但帳沒記到(記帳失敗、寫完讀回不一致、
++    寫完到記帳之間收到終止訊號;不要重跑,照印出的補記或「已寫過」處理);2 拒絕(計劃與治理帳都不動,含寫入前收到終止訊號)。"""
++    consent = consent if isinstance(consent, str) and consent.strip() else ""
++    if not consent and not _confirm_tty_probe():
++        return _situation_rule_say("沒有互動終端,也沒帶 --consent \"<使用者原話>\"——人裁要人點頭:在對話裡把要寫回的條款講給使用者、"
++                                   "使用者同意後帶他的原話代跑(對話核可);計劃、治理帳與殺傷力帳本都沒動")
++    clause = (clause or "").strip()
++    imports = list(imports or [])
++    ctx = _situation_rule_check(env, seg, row, plan, {"clause": clause, "test": test, "file": file, "old": old, "new": new,
++                                                      "consent": consent, "branch": branch, "imports": imports, "diff": diff})
++    if isinstance(ctx, int):
++        return ctx
++    r0, rc = _situation_rule_kill(env, ctx.prel, ctx.cid0, test, ctx.kfile, old, new, ctx.floor, also=ctx.also, imports=imports)
++    if r0 is None:
++        return rc
++    _situation_rule_show(seg, row, ctx, clause, test, imports)
+     origin = _waive_origin_tty("確定把這條寫回計劃嗎?[y/N] ", refused="沒寫回", timeout=300)
+     if origin is None:
+         return 1
+     if origin == "ai" and not consent:
+         return _situation_rule_say("沒有人在終端答(沒有互動終端或逾時),也沒帶 --consent——計劃與治理帳都沒動")
+-    rc, cid = _situation_rule_commit(env, rr, ppath, prel, clause, test, head,
+-                                     {"seg": seg, "row": row, "origin": origin, "consent": consent,
++    rc, cid = _situation_rule_commit(env, ctx.rr, ctx.ppath, ctx.prel, clause, test, ctx.head,
++                                     {"seg": seg, "row": row, "origin": origin, "consent": consent, "imports": imports,
+                                       "kill_verdict": r0["verdict"], "recipe_id": str(r0.get("log_recipe_id") or "")})
+     if cid is None:
+         return rc
+-    who = "人在終端裁" if origin == "human" else "AI 依對話核可代跑"
+-    print(f"✓ 已寫回 {_kill_esc(pn)} 的 {cid}({who}),治理帳記了一筆 situation-rule")
+-    print("接下來:")
+-    print(f"  1. 提交計劃與治理帳:git add -- {_sh_quote(os.path.relpath(str(ppath), str(rr)))} {GOV_LOG_REL}")
+-    print(f"  2. 重答這一列的出處:段 {seg} 的 {row} 的 spec 填 {_kill_esc(pn)}#{cid}、quote 從這條逐字引一段")
+-    print("  3. 計劃不是簿記檔:提交後作者表態與已過的代碼審留痕都失效——重跑表態(lumos pitfalls --diff <範圍> --dispositions-template --carry,"
+-          "只答新題)與代碼審留痕")
+-    print(f"  4. 計劃的規格閘留痕要重跑(條款雜湊變了):lumos spec-gate {_sh_quote(Path(prel).stem)}")
++    _situation_rule_next(ctx, ctx.pn, cid, origin, seg, row)
+     return 0
+ 
+-
+ def _disp_bj_source(rec, marker_branch, merge_ledger):
+     """盲判紀錄跟表態同一套分支解析 → (分支名, 帳全文或 None=讀工作目錄的帳)。表態是合併提交合進來那一側的 → 那筆表態的分支名、
+     那一側的帳(讀不到就給空帳:照擋缺盲判,不退回讀工作目錄的帳);否則目標分支(代碼審 r1 架構對齊 F2)。"""
+     if not rec.get("_merge_side"):
+         return marker_branch, None
+     raw = merge_ledger() if merge_ledger else None
+     return rec.get("branch"), ("" if raw is None else raw)
+ 
+ 
+ def _kt_sit_summary_warnings(sit):
+@@ -78878,20 +79276,24 @@ def main():
+     p.add_argument("--seg", dest="sr_seg", required=True, help="段身分(推送前擋下訊息印的那個)")
+     p.add_argument("--row", dest="sr_row", required=True, help="型錄決策表的列,D-<n>")
+     p.add_argument("--plan", dest="sr_plan", required=True, help="寫回哪份計劃:Projects/<計劃名>")
+     p.add_argument("--clause", dest="sr_clause", required=True, help="條款文字(一條文法:觸發子句? 主體 應 回應;不帶 [S]、[test:]、[keeps])")
+     p.add_argument("--test", dest="sr_test", required=True, help="綁的測試名(要已經寫好、提交)")
+     p.add_argument("--file", dest="sr_file", required=True, help="這一段所在的檔")
+     p.add_argument("--old", dest="sr_old", required=True, help="壞法的原文:整支檔恰好一次、落在這一段裡、含那一列的觸發字")
+     p.add_argument("--new", dest="sr_new", required=True, help="壞法:換成同一列的另一種寫法(含不同的觸發字)")
+     p.add_argument("--consent", dest="sr_consent", help="沒有互動終端時必帶:使用者在對話裡同意的原話(對話核可)")
+     p.add_argument("--branch", dest="sr_branch", help="用哪個分支名算範圍(同 code-loop 的 --branch)")
++    p.add_argument("--import", dest="sr_imports", action="append", default=None,
++                   help="壞法要補的 import 整行(可重複給,例:--import \"import kotlinx.coroutines.flow.flatMapConcat\");"
++                        "加在殺傷力壞法那支檔的檔頭最後一行 import 之後,舊的不刪")
++    p.add_argument("--diff", dest="sr_diff", help="算不出主線分岔點時用的範圍 <起點>..HEAD(找得到分岔點時照分岔點算,同 code-loop check)")
+ 
+     p = sub.add_parser("sync-verified-by", help="補 Check 3 漏寫的 verified_by(dry-run 預設)")
+     p.add_argument("--apply", action="store_true", help="真寫入(否則 dry-run 只列)")
+ 
+     p = sub.add_parser("search", help="全文搜尋(frontmatter+body);取代 obsidian search")
+     p.add_argument("term")
+     p.add_argument("--path", dest="path_prefix", help="限資料夾前綴(如 Systems)")
+     p.add_argument("--regex", action="store_true", help="term 當正則(預設 substring 大小寫不敏感)")
+     p.add_argument("--files-only", action="store_true", help="只列檔名+命中數")
+     p.add_argument("--code", action="store_true", help="含 code block(預設排除,對齊 doctor)")
+@@ -79985,21 +80387,22 @@ def main():
+         if not args.node:
+             print("擋下:要給計劃節點(lumos spec-gate Projects/<名>_計劃),或用 --push-check <範圍> / --door-rule", file=sys.stderr)
+             return 2
+         return cmd_spec_gate(env, args.node, no_run=args.sg_no_run)
+     if args.cmd == "spec-trace":
+         return cmd_spec_trace(env, args.node, as_json=args.st_json)
+     if args.cmd == "signoff":
+         return cmd_signoff(env, args.node, note=args.note, by=args.by, ref=args.so_ref, expected=args.expected)
+     if args.cmd == "situation-rule":
+         return cmd_situation_rule(env, args.sr_seg, args.sr_row, args.sr_plan, args.sr_clause, args.sr_test, args.sr_file,
+-                                  args.sr_old, args.sr_new, consent=args.sr_consent, branch=args.sr_branch)
++                                  args.sr_old, args.sr_new, consent=args.sr_consent, branch=args.sr_branch,
++                                  imports=args.sr_imports, diff=args.sr_diff)
+     if args.cmd == "gov":
+         return cmd_gov(env, args.node, since_days=args.since, full=args.full, stats=args.stats, nags=args.gov_nags)
+ 
+     if args.cmd == "ci-wait":
+         return cmd_ci_wait(env, timeout=args.cw_timeout, repo_dir=args.cw_repo,
+                            sha=args.cw_sha, branch=args.cw_branch,
+                            grace=args.cw_grace, as_json=args.cw_json)
+     if args.cmd == "ci-status":
+         return cmd_ci_status(env, repo_dir=args.cs_repo, as_json=args.cs_json)
+     if args.cmd == "about-code":
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 486b02182..44369c4ea 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -135825,20 +135825,679 @@ def t_situation_rule_plan_disk_spelling():
+             m.os.listdir = o_ld
+         check("a1 ②磁碟上 NFD、--plan 打 NFC → 照收", got is None, repr(got))
+         tree = ast.parse(textwrap.dedent(inspect.getsource(m._situation_rule_plan_path_problem)))
+         calls = {getattr(n.func, "id", "") for n in ast.walk(tree) if isinstance(n, ast.Call)}
+         check("a1 ③叫 _disk_spelling、不再有 _situation_rule_plan_case", "_disk_spelling" in calls and not hasattr(m, "_situation_rule_plan_case"),
+               str(calls))
+     finally:
+         _ksp_sh.rmtree(v, ignore_errors=True)
+ 
+ 
++# ── 人裁殺傷力在真實 Android 專案跑得起來(Projects/人裁殺傷力在真實Android專案跑得起來_計劃 範圍 1 到 6;S1 到 S9)──
++# 預期值都照計劃〈預期值表〉逐列手算(also 的 old/new、插入點、任務清單、摘錄),不呼叫被測函式產生。
++# 測試型錄在 D-5(flatMapLatest、flatMapConcat)之外多一列 D-6(WhileSubscribed、SharingStarted.Lazily),給 S1「名稱不必是觸發字」那列用。
++_SRA_D5_LINE = ("| D-5 | 只要最新一次查詢的結果 | `flatMapLatest { }` | 每一次都要做完 → `flatMapConcat { }` | flatMapLatest、flatMapConcat"
++                " | 主:(無);例外:(無) | API-1 | 測 |\n")
++_SRA_CATALOG = _SRL_CATALOG.replace(
++    _SRA_D5_LINE,
++    _SRA_D5_LINE + "| D-6 | 畫面狀態什麼時候開始收 | `stateIn(scope, WhileSubscribed(5000), x)` | 第一次訂閱後一直收 → `SharingStarted.Lazily`"
++                   " | WhileSubscribed、SharingStarted.Lazily | 主:(無);例外:(無) | API-1 | 測 |\n")
++_SRA_IMP = "import kotlinx.coroutines.flow.flatMapConcat"
++_SRA_IMPORTS3 = ("import kotlinx.coroutines.flow.Flow\n"
++                 "import kotlinx.coroutines.flow.flatMapLatest\n"
++                 "import kotlinx.coroutines.flow.map\n")
++
++
++def _sra_kt(header, tail=""):
++    """header 之後空一行接 class;第一段在 class 的下一行(flatMapLatest { search(it) })。"""
++    return header + "\n" + "class Vm(private val q: Flow<String>) {\n" + "    val a = q.flatMapLatest { search(it) }\n" + tail + "}\n"
++
++
++_SRA_KT_IMP = _sra_kt("package app\n\n" + _SRA_IMPORTS3)                       # 第 8 行是 val a
++_SRA_KT_PKG = _sra_kt("package app\n")                                          # 第 4 行是 val a
++_SRA_KT_STR = _sra_kt("/*\n * 授權\n */\n@file:Suppress(\"X\")\npackage app\n\n" + _SRA_IMPORTS3,
++                      tail='    fun t() = """\nimport foo.Bar\n"""\n')              # 第 12 行是 val a;第 14 行是字串裡的 import
++_SRA_KT_D6 = ("package app\n\n"
++              "import kotlinx.coroutines.flow.SharingStarted.Companion.WhileSubscribed\n"
++              "import kotlinx.coroutines.flow.stateIn\n\n"
++              "class Vm(private val q: Flow<String>, scope: CoroutineScope) {\n"
++              "    val s = q.stateIn(scope, WhileSubscribed(5000), \"\")\n"         # 第 7 行
++              "}\n")
++# 假平台:被改檔用到 flatMapConcat 卻沒有它的 import 就印 Kotlin 編譯錯誤、回 1(像真的 Gradle 編譯失敗);否則照 _SRL_RUNNER 跑測試
++_SRA_RUNNER = ("import os, sys\n"
++               "m = sys.argv[1] if len(sys.argv) > 1 else 'test_latest'\n"
++               "src = open('app/Screen.kt', encoding='utf-8').read()\n"
++               "if 'flatMapConcat' in src and 'import kotlinx.coroutines.flow.flatMapConcat' not in src.split('\\n'):\n"
++               "    print('e: file://' + os.getcwd() + '/app/Screen.kt:8:15 Unresolved reference: flatMapConcat')\n"
++               "    sys.exit(1)\n"
++               "if m == 'test_latest' and 'flatMapConcat { search' in src:\n"
++               "    print(m + ' FAILED: 連續輸入收到兩次結果')\n"
++               "    sys.exit(1)\n"
++               "print(m + ' ok')\n")
++
++
++def _sra_repo(kt, path="app/Screen.kt", runner=_SRA_RUNNER, config=None, extra=None, exe=()):
++    """_srl_repo 的變形:被改檔的路徑與內容、假平台、設定、額外的 base 檔都可換;exe 裡的檔在 HEAD 提交帶執行權限
++    (修改 HEAD 那個提交,改動範圍照舊是 HEAD~1..HEAD)。回 (root, 計劃檔, HEAD sha)。"""
++    v = _KSP_V
++    base = {f"{v}/Projects/搜尋_計劃.md": _SRL_PLAN.format(accept=_SRL_ACCEPT), f"{v}/Systems/搜尋.md": _KSP_HOME.format(code=path),
++            "tests/run.py": runner, "tests/test_search.py": "def test_latest():\n    pass\n\ndef test_once():\n    pass\n", **(extra or {})}
++    root = _sit_repo(base, {path: kt}, config=config or _SRL_CFG)
++    for x in exe:
++        (root / x).chmod(0o755)
++        subprocess.run(["git", "update-index", "--chmod=+x", x], cwd=root, capture_output=True)
++    if exe:
++        subprocess.run(["git", "commit", "-q", "--amend", "--no-edit"], cwd=root, capture_output=True)
++    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
++    return root, root / v / "Projects" / "搜尋_計劃.md", sha
++
++
++def _sra_seg(root, cat, sha, line, path="app/Screen.kt", rng="HEAD~1..HEAD"):
++    """包住第 line 行的那一段的段身分(沒有就 None)。"""
++    m = _load_lumos_inproc()
++    rows, _e = m._kt_decision_table(cat)
++    segs = m._kt_situation_segments(root, rng, sha, table=rows)
++    return next((s["seg"] for s in segs if s["file"] == path and s["start"] <= line <= s["end"]), None)
++
++
++def _sra_inproc(m, root, cat, seg, row="D-5", file="app/Screen.kt", old=_SRL_OLD, new=_SRL_NEW, imports=None, diff=None, run_kill=False):
++    """行程內跑 cmd_situation_rule,把交給 cmd_guard_kill 的臨時配方抓下來 → (rc, stdout, stderr, [每次呼叫的配方清單])。
++    run_kill 為假時不真跑殺傷力:替身回 2、不給結果,人裁照「沒有結果」拒絕(只看配方長什麼樣)。"""
++    import os, contextlib, io
++    rows, _e = m._kt_decision_table(cat)
++    got = []
++    o_kill = m.cmd_guard_kill
++
++    def spy(*a, **kw):
++        got.append([dict(r) for r in (kw.get("recipes_override") or [])])
++        return o_kill(*a, **kw) if run_kill else 2
++    saved = (m._KT_DT_ROWS, m.cmd_guard_kill)
++    o_env, o_cwd = dict(os.environ), os.getcwd()
++    out, err = io.StringIO(), io.StringIO()
++    m._KT_DT_ROWS, m.cmd_guard_kill = rows, spy
++    os.environ.update({"LUMOS_TTY": "/nonexistent-tty", "LUMOS_KILL_TIMEOUT_FLOOR": "5"})
++    os.chdir(root)
++    try:
++        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
++            rc = m.cmd_situation_rule(m.Env(Path(root) / _KSP_V), seg, row, "Projects/搜尋_計劃", _SRL_CLAUSE, "test_latest",
++                                      file, old, new, consent="好,照這條寫回計劃", imports=imports, diff=diff)
++    finally:
++        os.chdir(o_cwd)
++        m._KT_DT_ROWS, m.cmd_guard_kill = saved
++        os.environ.clear()
++        os.environ.update(o_env)
++    return rc, out.getvalue(), err.getvalue(), got
++
++
++def _sra_also(got):
++    """抓到的唯一一條配方的 also 欄(沒有這個鍵回字串 "<沒有>")。"""
++    rec = got[0][0] if len(got) == 1 and len(got[0]) == 1 else {}
++    return rec.get("also", "<沒有>")
++
++
++def t_situation_rule_import_flag():
++    """[人裁殺傷力在真實Android專案 S1] 人裁帶 --import:臨時配方多一筆 also,old 是檔頭區最後一行 import 那一整行加換行、
++    new 是那一行加換行再加補的 import 行。逐列對預期值表 S1 四列:①檔頭三行 import → 插在第三行(map)之後,端到端真跑(假平台缺 import 會
++    編譯失敗):確認畫面印「補 import」那一行、治理帳 imports 欄、殺傷力帳本 note 帶補的 import;②沒有 import 只有 package → 插在 package 行之後;
++    ③檔頭前有授權註解與 @file: 註記、函式裡多行字串有一行 `import foo.Bar` → 插在檔頭第三行 import 之後、不插進字串;
++    ④D-6 名稱不是觸發字(SharingStarted)、檔頭只 import 了 SharingStarted.Companion.WhileSubscribed → 收下;★對照★沒給 --import → 配方沒有 also 鍵。
++    判準來源:計劃〈範圍〉1、〈用詞〉檔頭區與預期值表 S1 四列;應抓到的錯:取整支檔最後一行 import(會插進字串)、碰到註解就當檔頭結束、
++    名稱限觸發字、沒給也帶空 also、確認畫面或帳本沒帶補的 import。"""
++    m = _load_lumos_inproc()
++    cat = _sit_catalog(_SRA_CATALOG)
++    roots = []
++    try:
++        root, _plan, sha = _sra_repo(_SRA_KT_IMP)
++        roots.append(root)
++        seg = _sra_seg(root, cat, sha, 8)
++        rc, out, err, got = _sra_inproc(m, root, cat, seg, imports=[_SRA_IMP], run_kill=True)
++        check("S1 ①also 是 [map 那一行 → map 那一行加 flatMapConcat 的 import]",
++              _sra_also(got) == [{"old": "import kotlinx.coroutines.flow.map\n",
++                                  "new": "import kotlinx.coroutines.flow.map\nimport kotlinx.coroutines.flow.flatMapConcat\n"}], str(got))
++        check("S1 ①帶對的 import 端到端 → rc0、確認畫面印「補 import」與那一行", rc == 0 and "補 import" in out and _SRA_IMP in out,
++              f"rc={rc} {out[-500:]} {err[-500:]}")
++        evs, kl = _srl_gov(root), _srl_kill(root)
++        check("S1 ①治理帳 situation-rule 那筆 imports 欄是 [那一行]", len(evs) == 1 and evs[0].get("imports") == [_SRA_IMP], str(evs)[:500])
++        check("S1 ①殺傷力帳本那筆 killed、note 帶補的 import", len(kl) == 1 and kl[0].get("verdict") == "killed"
++              and _SRA_IMP in str(kl[0].get("note")), str(kl)[:500])
++        rc, out, err, got = _sra_inproc(m, root, cat, seg)
++        check("S1 ★對照★沒給 --import → 配方沒有 also 鍵", _sra_also(got) == "<沒有>", str(got))
++        for label, kt, line, want_old in (("②只有 package 行 → 插在 package 行之後", _SRA_KT_PKG, 4, "package app\n"),
++                                          ("③檔頭前有註解與 @file:、字串裡有 import foo.Bar → 插在檔頭第三行 import 之後",
++                                           _SRA_KT_STR, 12, "import kotlinx.coroutines.flow.map\n")):
++            root, _plan, sha = _sra_repo(kt)
++            roots.append(root)
++            rc, out, err, got = _sra_inproc(m, root, cat, _sra_seg(root, cat, sha, line), imports=[_SRA_IMP])
++            check(f"S1 {label}", _sra_also(got) == [{"old": want_old, "new": want_old + _SRA_IMP + "\n"}], f"{got} {err[-300:]}")
++        root, _plan, sha = _sra_repo(_SRA_KT_D6)
++        roots.append(root)
++        rc, out, err, got = _sra_inproc(m, root, cat, _sra_seg(root, cat, sha, 7), row="D-6", old="WhileSubscribed(5000)",
++                                        new="SharingStarted.Lazily", imports=["import kotlinx.coroutines.flow.SharingStarted"])
++        check("S1 ④名稱 SharingStarted 不是觸發字、檔頭只有 SharingStarted.Companion.WhileSubscribed → 收下、also 插在 stateIn 那行之後",
++              _sra_also(got) == [{"old": "import kotlinx.coroutines.flow.stateIn\n",
++                                  "new": "import kotlinx.coroutines.flow.stateIn\nimport kotlinx.coroutines.flow.SharingStarted\n"}], f"{got} {err[-300:]}")
++    finally:
++        for x in roots:
++            _ksp_sh.rmtree(x, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_import_flag_rejects():
++    """[人裁殺傷力在真實Android專案 S2] --import 不合一律 rc2、殺傷力不跑、計劃與兩本帳不動。逐列對預期值表 S2:
++    ①名稱 flatMapLatest 在 --new 出現、但檔頭已 import 它 → 拒絕(講已經 import);②debounce 不在 --new → 拒絕(講 --new);
++    ③形狀不合:`.*`、帶 as、尾隨空白、反引號、只有一段、非 ASCII → 拒絕;④檔頭已有同一行 flatMapConcat → 拒絕;
++    另依〈範圍〉1「同名不同套件、或 <套件>.* 都算已有」:⑤檔頭有 `import other.pkg.flatMapConcat` 或 `import kotlinx.coroutines.flow.*` → 拒絕;
++    ⑥檔頭區既沒有 import 也沒有 package → 拒絕(沒有插入點);⑦同一行給兩次 → 拒絕。
++    判準來源:計劃〈範圍〉1、〈用詞〉補 import 與預期值表 S2 四列;應抓到的錯:只比同一行、不比同名或萬用字元;形狀用 search 不用 fullmatch;
++    先跑殺傷力才判 --import。"""
++    m = _load_lumos_inproc()
++    cat = _sit_catalog(_SRA_CATALOG)
++    roots = []
++
++    def no_run(label, root, plan, before, rc, err, got, word):
++        check(f"S2 {label} → rc2、講原因、殺傷力沒跑、計劃與兩本帳不動", rc == 2 and word in err and got == [] and plan.read_bytes() == before
++              and not _srl_kill(root) and not _srl_gov(root), f"rc={rc} got={got} {err[-400:]}")
++    try:
++        root, plan, sha = _sra_repo(_SRA_KT_IMP)
++        roots.append(root)
++        seg = _sra_seg(root, cat, sha, 8)
++        before = plan.read_bytes()
++        rc, _out, err, got = _sra_inproc(m, root, cat, seg, new="flatMapConcat { search(it) }.flatMapLatest { it }",
++                                        imports=["import kotlinx.coroutines.flow.flatMapLatest"])
++        no_run("①檔頭已 import flatMapLatest", root, plan, before, rc, err, got, "已經 import")
++        rc, _out, err, got = _sra_inproc(m, root, cat, seg, imports=["import kotlinx.coroutines.flow.debounce"])
++        no_run("②debounce 不在 --new", root, plan, before, rc, err, got, "--new")
++        for bad in ("import kotlinx.coroutines.flow.*", "import kotlinx.coroutines.flow.flatMapConcat as fc",
++                    "import kotlinx.coroutines.flow.flatMapConcat ", "import kotlinx.coroutines.flow.`flatMapConcat`",
++                    "import flatMapConcat", "import kotlinx.coroutines.flow.flatMapConcaт", " import kotlinx.coroutines.flow.flatMapConcat"):
++            rc, _out, err, got = _sra_inproc(m, root, cat, seg, imports=[bad])
++            no_run(f"③形狀不合 {bad!r}", root, plan, before, rc, err, got, "形狀")
++        rc, _out, err, got = _sra_inproc(m, root, cat, seg, imports=[_SRA_IMP, _SRA_IMP])
++        no_run("⑦同一行給兩次", root, plan, before, rc, err, got, "重複")
++        for label, extra_imp, word in (("④檔頭已有同一行 flatMapConcat(多餘)", _SRA_IMP, "已經 import"),
++                                       ("⑤同名不同套件 other.pkg.flatMapConcat", "import other.pkg.flatMapConcat", "已經 import"),
++                                       ("⑤套件萬用字元 kotlinx.coroutines.flow.*", "import kotlinx.coroutines.flow.*", "已經 import")):
++            root, plan, sha = _sra_repo(_sra_kt("package app\n\n" + _SRA_IMPORTS3 + extra_imp + "\n"))
++            roots.append(root)
++            before = plan.read_bytes()
++            rc, _out, err, got = _sra_inproc(m, root, cat, _sra_seg(root, cat, sha, 9), imports=[_SRA_IMP])
++            no_run(label, root, plan, before, rc, err, got, word)
++        root, plan, sha = _sra_repo(_sra_kt("// 沒有 package 也沒有 import\n"))
++        roots.append(root)
++        before = plan.read_bytes()
++        rc, _out, err, got = _sra_inproc(m, root, cat, _sra_seg(root, cat, sha, 4), imports=[_SRA_IMP])
++        no_run("⑥檔頭區沒有 import 也沒有 package", root, plan, before, rc, err, got, "插入點")
++    finally:
++        for x in roots:
++            _ksp_sh.rmtree(x, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def _sra_kill_env(run_tpl):
++    """_mk_kill_env 加一支假平台:run_cmd 由 run_tpl 給({log} 換成工作樹外的紀錄檔;每跑一次把當時的 prod.py 與分隔線附加進去),
++    runner 檔另外提交。回 (root, vault, 紀錄檔)。"""
++    root, v = _mk_kill_env()
++    log = Path(tempfile.mkdtemp(prefix="gctl-sra-log-")) / "runs.txt"
++    (root / ".lumos" / "config.json").write_text(_json_mod_dumps({"test": {"run_cmd": run_tpl.format(log=log)}}), encoding="utf-8")
++    _kr_commit(root, "cfg")
++    return root, v, log
++
++
++def _json_mod_dumps(obj):
++    import json as _j
++    return _j.dumps(obj, ensure_ascii=False)
++
++
++def _sra_guard(m, v, recipes, keep=False, floor="5", note_run=False):
++    """行程內跑 cmd_guard_kill(臨時配方;note_run 為真時改照筆記跑)→ (rc, result_out, stdout, stderr)。"""
++    import os, contextlib, io
++    out = {}
++    o_env = dict(os.environ)
++    os.environ["LUMOS_KILL_TIMEOUT_FLOOR"] = floor
++    so, se = io.StringIO(), io.StringIO()
++    try:
++        with contextlib.redirect_stdout(so), contextlib.redirect_stderr(se):
++            if note_run:
++                rc = m.cmd_guard_kill(m.Env(v), "Systems/Limit", result_out=out)
++            else:
++                rc = m.cmd_guard_kill(m.Env(v), "Systems/Limit", recipes_override=recipes, result_out=out, keep_worktree=keep)
++    finally:
++        os.environ.clear()
++        os.environ.update(o_env)
++    return rc, out, so.getvalue(), se.getvalue()
++
++
++_SRA_PROD = "LIMIT = 5\n\ndef check(n):\n    return n <= LIMIT\n"
++_SRA_RUN_TPL = "python3 test_guard.py; rc=$?; cat prod.py >> {log}; echo '----' >> {log}; exit $rc"
++
++
++def _sra_recipe(also=None, **kw):
++    r = {"invariant": "臨時", "test": "TestLimitFive", "file": "prod.py", "old": "return n <= LIMIT", "new": "return n < LIMIT", "note": ""}
++    if also is not None:
++        r["also"] = also
++    r.update(kw)
++    return r
++
++
++def t_guard_kill_also_rejects_non_import():
++    """[人裁殺傷力在真實Android專案 S3] 殺傷力驗證認臨時配方的 also(連帶替換):
++    ①共用小檢查 _kill_also_issue 的判法逐種:合格的(一整行 old、new 以 old 開頭、多出來的是 import 行)回空字串;
++    沒有 also 回空字串;多出來是 `val x = 1`、old 不以換行結尾、old 是兩行、new 不以 old 開頭、多出來是 `import a.*`、
++    多出來沒以換行結尾、兩筆、不是清單、元素不是物件都回原因;
++    ②真跑 guard kill:also 多出來是 `val x = 1` → 判 error、壞法那一次沒跑(紀錄檔只有基準那一次)、保留的工作樹裡 prod.py 跟原本一樣;
++    ③also 的 old 那一行在檔裡 0 次或 2 次 → error、壞法沒跑;④★對照★合格的 also(`import os.path`)→ 壞法那一次的 prod.py 是主替換加那一行 import、判 killed。
++    判準來源:計劃〈範圍〉2、〈實務隱患〉只准多加 import 與預期值表 S3 列;應抓到的錯:多出來的不驗形狀、套不上時當 drifted 或照寫、套不上照跑壞法。"""
++    m = _load_lumos_inproc()
++    ok_also = [{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nimport os.path\n"}]
++    check("S3 ①合格的 also → 空字串", m._kill_also_issue({"also": ok_also}) == "", repr(m._kill_also_issue({"also": ok_also})))
++    check("S3 ①沒有 also → 空字串", m._kill_also_issue({"old": "x"}) == "", "")
++    bads = [("多出來是 val x = 1", [{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nval x = 1\n"}]),
++            ("old 不以換行結尾", [{"old": "LIMIT = 5", "new": "LIMIT = 5\nimport os.path\n"}]),
++            ("old 是兩行", [{"old": "LIMIT = 5\n\n", "new": "LIMIT = 5\n\nimport os.path\n"}]),
++            ("new 不以 old 開頭", [{"old": "LIMIT = 5\n", "new": "LIMIT = 6\nimport os.path\n"}]),
++            ("多出來是 import a.*", [{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nimport a.*\n"}]),
++            ("多出來沒以換行結尾", [{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nimport os.path"}]),
++            ("多出來兩行、第二行不是 import", [{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nimport os.path\nprint(1)\n"}]),
++            ("兩筆", ok_also + ok_also), ("不是清單", ok_also[0]), ("元素不是物件", ["LIMIT = 5\n"]),
++            ("old 不是字串", [{"old": 5, "new": "5\nimport os.path\n"}])]
++    for label, also in bads:
++        why = m._kill_also_issue({"also": also})
++        check(f"S3 ①{label} → 回原因", isinstance(why, str) and bool(why), repr(why))
++    root, v, log = _sra_kill_env(_SRA_RUN_TPL)
++    kept = []
++    try:
++        rc, out, so, se = _sra_guard(m, v, [_sra_recipe(also=bads[0][1])], keep=True)
++        runs = log.read_text(encoding="utf-8").split("----\n") if log.exists() else []
++        kept = [ln.split("現場保留: ", 1)[1].strip() for ln in so.splitlines() if "現場保留: " in ln]
++        check("S3 ②also 多 val x = 1 → 判 error、rc2", rc == 2 and [r["verdict"] for r in out.get("rows") or []] == ["error"], f"rc={rc} {out} {se[-300:]}")
++        check("S3 ②壞法那一次沒跑:紀錄檔只有基準那一次(原本的 prod.py)", runs == [_SRA_PROD, ""], repr(runs))
++        check("S3 ②保留的工作樹裡 prod.py 跟原本一樣(沒寫檔)", len(kept) == 1 and Path(kept[0], "prod.py").read_text(encoding="utf-8") == _SRA_PROD,
++              f"{kept} {so[-300:]}")
++        # 2 次那條:主替換把 return 那行換成第二行 LIMIT = 5(also 在主替換之後才套,所以對到兩行)
++        for label, also, kw in (("③old 那一行在檔裡 0 次", [{"old": "NOPE = 1\n", "new": "NOPE = 1\nimport os.path\n"}], {}),
++                                ("③主替換之後 old 那一行出現 2 次", ok_also, {"old": "    return n <= LIMIT", "new": "LIMIT = 5"})):
++            log.unlink()
++            rc, out, so, se = _sra_guard(m, v, [_sra_recipe(also=also, **kw)])
++            runs = log.read_text(encoding="utf-8").split("----\n") if log.exists() else []
++            check(f"S3 {label} → error、壞法沒跑", rc == 2 and [r["verdict"] for r in out.get("rows") or []] == ["error"]
++                  and runs == [_SRA_PROD, ""], f"rc={rc} {out} {runs}")
++        log.unlink()
++        rc, out, so, se = _sra_guard(m, v, [_sra_recipe(also=ok_also)])
++        runs = log.read_text(encoding="utf-8").split("----\n") if log.exists() else []
++        want_mut = "LIMIT = 5\nimport os.path\n\ndef check(n):\n    return n < LIMIT\n"
++        check("S3 ④★對照★合格的 also → 壞法那一次是主替換加 import 行、判 killed", [r["verdict"] for r in out.get("rows") or []] == ["killed"]
++              and runs == [_SRA_PROD, want_mut, ""], f"rc={rc} {out} {runs}")
++    finally:
++        for k in kept:
++            _ksp_sh.rmtree(Path(k).parent, ignore_errors=True)
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(log.parent, ignore_errors=True)
++
++
++def t_guard_kill_also_only_override():
++    """[人裁殺傷力在真實Android專案 S4] 筆記宣告的配方帶了 also 欄位(而且是會被判 error 的 `val x = 1`),guard kill 正常呼叫照舊跑:
++    判定跟同一條不帶 also 的配方一樣是 killed,壞法那一次的 prod.py 只有主替換、沒有 also 的那一行。
++    判準來源:計劃〈範圍〉2 只有臨時配方認 also 與預期值表 S4 列;應抓到的錯:筆記配方也套 also(會判 error 或多寫一行)。"""
++    m = _load_lumos_inproc()
++    root, v, log = _sra_kill_env(_SRA_RUN_TPL)
++    try:
++        verdicts = []
++        for also in ([{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nval x = 1\n"}], None):
++            rec = _kr_recipe("prod.py", old="return n <= LIMIT", new="return n < LIMIT")
++            if also is not None:
++                rec["also"] = also
++            (v / "Systems" / "Limit.md").write_text(_kr_note([rec]), encoding="utf-8")
++            _kr_commit(root, "recipe")
++            if log.exists():
++                log.unlink()
++            _rc, out, _so, _se = _sra_guard(m, v, None, note_run=True)
++            runs = log.read_text(encoding="utf-8").split("----\n") if log.exists() else []
++            verdicts.append(([r["verdict"] for r in out.get("rows") or []], runs))
++        want_mut = "LIMIT = 5\n\ndef check(n):\n    return n < LIMIT\n"
++        check("S4 筆記配方帶 also → 照舊 killed、壞法那一次沒有 also 的那一行", verdicts[0] == (["killed"], [_SRA_PROD, want_mut, ""]), str(verdicts[0]))
++        check("S4 跟不帶 also 的同一條配方結果一樣", verdicts[0] == verdicts[1], str(verdicts))
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(log.parent, ignore_errors=True)
++
++
++def _sra_init(files):
++    """_init_skel 的同一套做法(暫存資料夾寫檔 → _init_config_skeleton → 讀回設定),讀完刪掉暫存資料夾。"""
++    import json as _j
++    d = Path(tempfile.mkdtemp(prefix="gctl-sra-init-"))
++    try:
++        for rel, txt in files.items():
++            p = d / rel
++            p.parent.mkdir(parents=True, exist_ok=True)
++            p.write_text(txt, encoding="utf-8")
++        m = _load_lumos_inproc()
++        import contextlib, io
++        with contextlib.redirect_stdout(io.StringIO()):
++            m._init_config_skeleton(d)
++        return _j.loads((d / ".lumos" / "config.json").read_text(encoding="utf-8"))
++    finally:
++        _ksp_sh.rmtree(d, ignore_errors=True)
++
++
++_SRA_AND_CMD = "./gradlew :YOUR_MODULE:testDebugUnitTest --tests '*{method}'"
++_SRA_JVM_CMD = "./gradlew test --tests '*{method}'"
++
++
++def t_init_android_run_cmd():
++    """[人裁殺傷力在真實Android專案 S5] lumos init 的設定骨架:判斷是 Android 專案(建置檔剝完註解後有 Android 外掛宣告)時,
++    kotlin-junit 與 java-junit 的 run_cmd 給 `./gradlew :YOUR_MODULE:testDebugUnitTest --tests '*{method}'`,
++    _請先確認 多一句(換成測試所在模組、flavor 時任務名是 test<Flavor>DebugUnitTest、./gradlew tasks --all 看實際名稱)。逐列對預期值表 S5:
++    ①app/build.gradle.kts 宣告 com.android.application;②alias(libs.plugins.android.application);③不是 Android 的 Kotlin 專案 → 照舊;
++    另:④多平台骨架的 kotlin 平台一樣換;⑤Java 的 Android 專案(java-junit)一樣換;⑥Android 外掛只寫在註解裡 → 不算 Android、照舊。
++    判準來源:計劃〈範圍〉3、〈用詞〉Android 專案與預期值表 S5 三列;應抓到的錯:只改單平台那條路、註解也算宣告、不是 Android 也換、說明沒提 flavor。"""
++    kts_app = 'plugins {\n    id("com.android.application")\n}\n'
++    kts_alias = "plugins {\n    alias(libs.plugins.android.application)\n}\n"
++    kts_jvm = 'plugins {\n    kotlin("jvm")\n}\n'
++
++    def kt_files(ext=".kt"):
++        return {f"app/src/main/java/a/C{n}{ext}": "x\n" for n in range(4)}
++
++    m_skel = _load_lumos_inproc()._SKELETON_RUN_CMD
++
++    def note_ok(d):
++        n = d.get("_請先確認", "")
++        return "YOUR_MODULE" in n and "flavor" in n and "test<Flavor>DebugUnitTest" in n and "./gradlew tasks --all" in n
++
++    for label, build in (("①com.android.application", kts_app), ("②alias(libs.plugins.android.application)", kts_alias)):
++        d = _sra_init({**kt_files(), "app/build.gradle.kts": build})
++        check(f"S5 {label} → run_cmd 是 YOUR_MODULE 的 testDebugUnitTest 格式、_請先確認 提到模組、flavor 與 tasks --all",
++              (d.get("test") or {}).get("run_cmd") == _SRA_AND_CMD and note_ok(d), str(d)[:600])
++    d = _sra_init({**kt_files(), "build.gradle.kts": kts_jvm})
++    check("S5 ③不是 Android 的 Kotlin 專案 → run_cmd 照舊、_請先確認 不提 flavor",
++          (d.get("test") or {}).get("run_cmd") == _SRA_JVM_CMD and "flavor" not in d.get("_請先確認", ""), str(d)[:600])
++    d = _sra_init({**kt_files(), **{f"ios/V{n}.swift": "x\n" for n in range(4)}, "app/build.gradle.kts": kts_app})
++    kp = (d.get("platforms") or {}).get("kotlin") or {}
++    check("S5 ④多平台骨架的 kotlin 平台 → Android 格式、_請先確認 多那一句;swift 平台照舊", kp.get("run_cmd") == _SRA_AND_CMD and note_ok(d)
++          and ((d.get("platforms") or {}).get("swift") or {}).get("run_cmd") == m_skel.get("swift-xctest"), str(d)[:600])
++    d = _sra_init({**kt_files(".java"), "app/build.gradle": "apply plugin: 'com.android.application'\n"})
++    check("S5 ⑤Java 的 Android 專案(java-junit)→ Android 格式", d.get("test_profile") == "java-junit"
++          and (d.get("test") or {}).get("run_cmd") == _SRA_AND_CMD and note_ok(d), str(d)[:600])
++    d = _sra_init({**kt_files(), "app/build.gradle.kts": 'plugins {\n    // id("com.android.application")\n    kotlin("jvm")\n}\n'})
++    check("S5 ⑥Android 外掛只在註解裡 → 不算 Android、照舊", (d.get("test") or {}).get("run_cmd") == _SRA_JVM_CMD, str(d)[:600])
++
++
++_SRA_GRADLEW = "#!/bin/sh\necho 'BUILD SUCCESSFUL in 1s'\nexit 0\n"
++_SRA_BUILD_ANDLIB = 'plugins {\n    id("com.android.library")\n}\n'
++_SRA_BUILD_ANDAPP = 'plugins {\n    id("com.android.application")\n}\n'
++_SRA_BUILD_JVM = 'plugins {\n    kotlin("jvm")\n}\n'
++_SRA_FEAT = "feature/search/src/main/kotlin/app/Screen.kt"
++
++
++def _sra_android_repo(run_cmd, multi=True, plat_root=".", android=True, profile="kotlin-junit"):
++    """Android 版面的人裁 repo:平台根(plat_root)底下 settings、app(Android 應用)、feature/search(Android 函式庫,被改檔在這裡)、
++    core/domain(純 JVM)各一支建置檔;android=False 時三支都是純 JVM。假 gradlew 一律回成功。回 (root, 計劃檔, sha, 被改檔路徑)。"""
++    pre = "" if plat_root == "." else plat_root + "/"
++    builds = {f"{pre}settings.gradle.kts": 'include(":app", ":feature:search", ":core:domain")\n',
++              f"{pre}app/build.gradle.kts": _SRA_BUILD_ANDAPP if android else _SRA_BUILD_JVM,
++              f"{pre}feature/search/build.gradle.kts": _SRA_BUILD_ANDLIB if android else _SRA_BUILD_JVM,
++              f"{pre}core/domain/build.gradle.kts": _SRA_BUILD_JVM, "gradlew": _SRA_GRADLEW}
++    cfg = ({"default_platform": "kotlin", "platforms": {"kotlin": {"profile": profile, "root": plat_root, "run_cmd": run_cmd}}} if multi
++           else {"test_profile": profile, "test": {"run_cmd": run_cmd}})
++    path = pre + _SRA_FEAT
++    root, plan, sha = _sra_repo(_SRL_KT, path=path, config=cfg, extra=builds, exe=("gradlew",))
++    return root, plan, sha, path
++
++
++def t_situation_rule_android_run_cmd_check():
++    """[人裁殺傷力在真實Android專案 S6] 預設平台 profile 是 kotlin-junit 或 java-junit、run_cmd 的任務清單有擋下的 test 任務或含 YOUR_MODULE 時,
++    人裁在跑殺傷力之前拒絕(rc2、殺傷力帳本沒寫),印要改的設定鍵、正確格式、模組候選、flavor 與 tasks --all 提示。逐列對預期值表 S6:
++    ①多平台鍵 kotlin(看 profile 名)、`./gradlew test`、--file 在 feature/search → 拒絕、印 platforms.kotlin.run_cmd 與候選 :feature:search;
++    ②單平台 `./gradlew clean test` → 拒絕、印 test.run_cmd;③沒改的 YOUR_MODULE → 拒絕;④`:app:testDevDebugUnitTest` → 不擋、照跑殺傷力;
++    ⑤`:core:domain:test`(純 JVM 模組)→ 不擋;⑥平台根是 android → 拒絕、格式以 `cd android && ` 開頭。
++    另:⑦`:feature:search:test`(Android 模組)→ 拒絕;⑧不是 Android 專案的 `./gradlew test` → 不擋;⑨profile 是 python(平台鍵照叫 kotlin)→ 不查;
++    ⑩`-x test`(選項的值)與⑪`&& echo test`(&& 之後)都不算任務 → 不擋。
++    判準來源:計劃〈範圍〉4、〈用詞〉任務清單與擋下的 test 任務、預期值表 S6 六列;應抓到的錯:看平台鍵名不看 profile、擋了變體任務或純 JVM 模組、
++    平台根在子目錄時格式沒加 cd、模組候選從 repo 根算。"""
++    cat = _srl_cat()
++    roots = []
++
++    def go(run_cmd, **kw):
++        root, plan, sha, path = _sra_android_repo(run_cmd, **kw)
++        roots.append(root)
++        seg = _sra_seg(root, cat, sha, 4, path=path)
++        r = _srl_run(root, cat, *_srl_args(seg or "x", **{"--file": path}))
++        return r, root, plan
++
++    try:
++        fmt = "./gradlew :<模組>:test<Variant>UnitTest --tests '*{method}'"
++        cand = "模組候選::feature:search("
++        blocked = [("①多平台鍵 kotlin、頂層 test", "./gradlew test --tests '*{method}'", {}, ["platforms.kotlin.run_cmd", cand]),
++                   ("②單平台 clean test", "./gradlew clean test --tests '*{method}'", {"multi": False}, ["test.run_cmd", cand]),
++                   ("③YOUR_MODULE 沒改", _SRA_AND_CMD, {}, ["YOUR_MODULE", cand]),
++                   ("⑦:feature:search:test 是 Android 模組", "./gradlew :feature:search:test --tests '*{method}'", {}, [cand])]
++        for label, cmd, kw, words in blocked:
++            r, root, _plan = go(cmd, **kw)
++            msg = r.stderr
++            fmt_lines = [ln.strip() for ln in msg.splitlines() if fmt in ln]
++            check(f"S6 {label} → rc2、殺傷力沒跑", r.returncode == 2 and not _srl_kill(root), f"rc={r.returncode} {msg[-600:]}")
++            check(f"S6 {label} → 印正確格式(不以 cd 開頭)、要改的鍵、模組候選、flavor 與 tasks --all",
++                  bool(fmt_lines) and not any("cd " in ln.split("./gradlew")[0] for ln in fmt_lines)
++                  and all(w in msg for w in words) and "flavor" in msg and "./gradlew tasks --all" in msg, msg[-800:])
++        r, root, _plan = go("./gradlew test --tests '*{method}'", plat_root="android")
++        fmt_lines = [ln for ln in r.stderr.splitlines() if fmt in ln]
++        check("S6 ⑥平台根是 android → rc2、格式以 cd android && 開頭、候選 :feature:search", r.returncode == 2 and not _srl_kill(root)
++              and bool(fmt_lines) and all(("cd android && " + fmt) in ln for ln in fmt_lines) and "模組候選::feature:search(" in r.stderr, r.stderr[-800:])
++        for label, cmd, kw in (("④變體任務 :app:testDevDebugUnitTest", "./gradlew :app:testDevDebugUnitTest --tests '*{method}'", {}),
++                               ("⑤純 JVM 模組 :core:domain:test", "./gradlew :core:domain:test --tests '*{method}'", {}),
++                               ("⑧不是 Android 專案的頂層 test", "./gradlew test --tests '*{method}'", {"android": False}),
++                               ("⑨profile 是 python", "./gradlew test --tests '*{method}'", {"profile": "python"}),
++                               ("⑩-x 後面的 test 是選項的值", "./gradlew :app:testDevDebugUnitTest -x test --tests '*{method}'", {}),
++                               ("⑪&& 之後的詞不算任務", "./gradlew :app:testDevDebugUnitTest --tests '*{method}' && echo test", {})):
++            r, root, _plan = go(cmd, **kw)
++            check(f"S6 {label} → 不擋、照舊跑殺傷力(殺傷力帳本有一筆)", len(_srl_kill(root)) == 1 and fmt not in r.stderr,
++                  f"rc={r.returncode} {r.stderr[-600:]}")
++    finally:
++        for x in roots:
++            _ksp_sh.rmtree(x, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_diff_flag():
++    """[人裁殺傷力在真實Android專案 S7] 人裁的 --diff:①repo 只有 develop(沒有 main、master)、帶 --diff develop~2..HEAD → 用那個範圍算出情境段、
++    寫回(rc0)、不印算不出範圍、不印沒採用;★對照★同一個 repo 不帶 --diff → 算不出範圍、rc2;
++    ②分支找得到主線分岔點、帶 --diff HEAD..HEAD(照它算會一段都沒有)→ 照分岔點算(寫回 rc0)、印「--diff 沒採用,改用 <分岔點>..<HEAD>」;
++    ③入口驗:`--diff=--output=x`、三點寫法、右端不是 HEAD(main..main)、左端解析不到、右端空 → rc2、殺傷力沒跑、沒寫出 x。
++    判準來源:計劃〈範圍〉5 與預期值表 S7 三列;應抓到的錯:給了 --diff 就蓋過分岔點、沒採用時不講、值原樣進 git。"""
++    cat = _srl_cat()
++    roots = []
++    try:
++        root, plan, sha = _sra_repo(_SRL_KT, runner=_SRL_RUNNER)
++        roots.append(root)
++        g = lambda *a: subprocess.run(["git", *a], cwd=root, capture_output=True, text=True)   # noqa: E731
++        for a in (("checkout", "-q", "main"), ("merge", "-q", "--ff-only", "feat/sit"), ("branch", "-m", "main", "develop"),
++                  ("branch", "-D", "feat/sit")):
++            g(*a)
++        (root / "README.md").write_text("y\n", encoding="utf-8")
++        g("commit", "-qam", "readme")
++        sha = g("rev-parse", "HEAD").stdout.strip()
++        seg = _sra_seg(root, cat, sha, 4, rng="develop~2..HEAD")
++        r0 = _srl_run(root, cat, *_srl_args(seg or "x"))
++        check("S7 ★對照★develop、不帶 --diff → rc2、講算不出改動範圍", r0.returncode == 2 and "算不出改動範圍" in r0.stderr, r0.stderr[-400:])
++        r = _srl_run(root, cat, *_srl_args(seg or "x"), "--diff", "develop~2..HEAD")
++        check("S7 ①develop、--diff develop~2..HEAD → 用那個範圍算出段、寫回 rc0、不印算不出範圍與沒採用",
++              seg is not None and r.returncode == 0 and "算不出" not in r.stderr and "沒採用" not in (r.stdout + r.stderr)
++              and "[S8]" in plan.read_text(encoding="utf-8"), f"seg={seg} rc={r.returncode} {r.stderr[-500:]}")
++        root, plan, sha = _sra_repo(_SRL_KT, runner=_SRL_RUNNER)
++        roots.append(root)
++        mb = subprocess.run(["git", "merge-base", "main", sha], cwd=root, capture_output=True, text=True).stdout.strip()
++        seg = _sra_seg(root, cat, sha, 4)
++        r = _srl_run(root, cat, *_srl_args(seg), "--diff", "HEAD..HEAD")
++        both = r.stdout + r.stderr
++        check("S7 ②找得到分岔點、--diff HEAD..HEAD → 照分岔點算、寫回 rc0、印沒採用與實際範圍",
++              r.returncode == 0 and "--diff 沒採用" in both and f"{mb}..{sha}" in both and "[S8]" in plan.read_text(encoding="utf-8"),
++              f"rc={r.returncode} {both[-600:]}")
++        root, plan, sha = _sra_repo(_SRL_KT, runner=_SRL_RUNNER)
++        roots.append(root)
++        seg = _sra_seg(root, cat, sha, 4)
++        before = plan.read_bytes()
++        for label, arg in (("--diff=--output=x", "--diff=--output=x"), ("三點寫法", "--diff=main...HEAD"), ("右端不是 HEAD", "--diff=main..main"),
++                           ("左端解析不到", "--diff=nope-zzz..HEAD"), ("右端空", "--diff=main.."), ("單一版本", "--diff=main")):
++            r = _srl_run(root, cat, *_srl_args(seg), arg)
++            check(f"S7 ③{label} → rc2、殺傷力沒跑、計劃不動", r.returncode == 2 and "--diff" in r.stderr and not _srl_kill(root)
++                  and plan.read_bytes() == before and not (root / "x").exists(), f"rc={r.returncode} {r.stderr[-400:]}")
++    finally:
++        for x in roots:
++            _ksp_sh.rmtree(x, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++_SRA_GRADLE_TAIL = ("\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':app:compileDebugKotlin'.\n"
++                    "> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction\n"
++                    "   > Compilation error. See log for more details\n\n* Try:\n> Run with --stacktrace option to get the stack trace.\n"
++                    "> Run with --info or --debug option to get more log output.\n> Run with --scan to get full insights.\n"
++                    "> Get more help at https://help.gradle.org.\n\nBUILD FAILED in 12s\n")
++_SRA_WWW = ("* What went wrong:\nExecution failed for task ':app:compileDebugKotlin'.\n"
++            "> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction\n"
++            "   > Compilation error. See log for more details")
++# S8 端到端的假平台:被改檔用到 flatMapConcat 就照真 Gradle 編譯失敗的樣子印(e: 行在 FAILURE 與 Try 區塊之前;路徑一行用 realpath、一行用字面)
++_SRA_GRADLE_RUNNER = ("import os, sys\n"
++                      "src = open('app/Screen.kt', encoding='utf-8').read()\n"
++                      "if 'flatMapConcat' in src:\n"
++                      "    cwd = os.getcwd()\n"
++                      "    lit = cwd[len('/private'):] if cwd.startswith('/private/') else cwd\n"
++                      "    print('> Task :app:kspDebugKotlin')\n"
++                      "    for p, n in ((cwd, 12), (lit, 20), (cwd, 31)):\n"
++                      "        print('e: file://' + p + '/app/src/main/java/com/ex/SearchViewModel.kt:' + str(n) + ':5 Unresolved reference: flatMapConcat')\n"
++                      f"    sys.stdout.write({_SRA_GRADLE_TAIL!r})\n"
++                      "    sys.exit(1)\n"
++                      "print('ok')\n")
++
++
++def t_kill_log_fail_excerpt():
++    """[人裁殺傷力在真實Android專案 S8] 殺傷力判定是 killed_unattributed、timed_out_weak、abort 時,殺傷力帳本那筆多 fail_excerpt:
++    先遮路徑(工作樹的字面與 realpath → <worktree>、家目錄 → ~)再挑錯誤行(e: 、error:、E  、FAILED 開頭,FAILED 結尾,
++    * What went wrong: 到下一個空行),每行 200 字、總共 800 字,挑不到才退回結尾 800 字。逐列對預期值表 S8:
++    ①真 Gradle 樣式(三行 e:、一行是字面 /var 一行是 /private/var、後面 FAILURE、What went wrong、Try 四行、BUILD FAILED):
++    單元與人裁端到端都得三行 e:(<worktree>)加 What went wrong 區塊,tail 欄照舊是空的,人裁拒絕訊息印出摘錄;
++    ②`OtherTest > foo() FAILED` 那一行要挑到。另:③每行截 200、總共 800;④挑不到退回結尾 800 字;⑤家目錄遮成 ~;
++    ⑥guard kill 基準非綠(abort)→ 帳本有摘錄(含 What went wrong 與 ~)、tail 照舊是原文最後 200 字;⑦壞法逾時(timed_out_weak)→ 有摘錄;
++    ⑧killed 那筆帳本沒有 fail_excerpt、result_out 每列都有 fail_excerpt(killed 是空字串);⑨拒絕訊息最多印 12 行、控制字元跳脫。
++    判準來源:計劃〈範圍〉6 與預期值表 S8 兩列;應抓到的錯:只取結尾(會只剩 Try 區塊)、先挑行再遮路徑、短路徑先遮(/private 前綴殘留)、
++    改到既有 tail 欄。"""
++    import os
++    m = _load_lumos_inproc()
++    wt = tempfile.mkdtemp(prefix="gctl-sra-wt-")
++    real = os.path.realpath(wt)
++    home = "/Users/someone"
++    try:
++        e_lines = [f"e: file://{p}/app/src/main/java/com/ex/SearchViewModel.kt:{n}:5 Unresolved reference: flatMapConcat"
++                   for p, n in ((real, 12), (wt, 20), (real, 31))]
++        out = "> Task :app:kspDebugKotlin\n" + "\n".join(e_lines) + "\n" + _SRA_GRADLE_TAIL
++        want = "\n".join(f"e: file://<worktree>/app/src/main/java/com/ex/SearchViewModel.kt:{n}:5 Unresolved reference: flatMapConcat"
++                         for n in (12, 20, 31)) + "\n" + _SRA_WWW
++        got = m._kill_fail_excerpt(out, wt, home=home)
++        check("S8 ①單元:三行 e:(兩種路徑都遮成 <worktree>)加 What went wrong 區塊", got == want, f"\n{got}\n---\n{want}")
++        got = m._kill_fail_excerpt("> Task :app:testDebugUnitTest\n\nOtherTest > foo() FAILED\n    java.lang.AssertionError at OtherTest.kt:9\n\n"
++                                   "2 tests completed, 1 failed\n", wt, home=home)
++        check("S8 ②紅燈來自別支測試 → 挑到 OtherTest > foo() FAILED 那一行", got == "OtherTest > foo() FAILED", repr(got))
++        got = m._kill_fail_excerpt("error: " + "x" * 300 + "\n" + "".join(f"E  line{i} " + "y" * 150 + "\n" for i in range(8)), wt, home=home)
++        want3 = ("error: " + "x" * 300)[:200] + "\n" + "\n".join(f"E  line{i} " + "y" * 150 for i in range(8))
++        check("S8 ③每行截 200 字、依原順序取到 800 字", got == want3[:800], f"{len(got)} {got[:120]!r}")
++        tail_src = "".join(f"step {i} ok\n" for i in range(200))
++        got = m._kill_fail_excerpt(tail_src, wt, home=home)
++        check("S8 ④一行都挑不到 → 退回結尾 800 字", got == tail_src[-800:], repr(got[:80]))
++        got = m._kill_fail_excerpt(f"error: SDK location not found at {home}/Library/Android/sdk\n", wt, home=home)
++        check("S8 ⑤家目錄遮成 ~", got == "error: SDK location not found at ~/Library/Android/sdk", repr(got))
++        lines = m._kill_excerpt_show("\n".join(f"e: x{i}" for i in range(20)) + "\n\x1b[31me: red")
++        check("S8 ⑨拒絕訊息最多 12 行、控制字元跳脫", len(lines) == 12 and lines[0] == "e: x0" and lines[-1] == "e: x11"
++              and all("\x1b" not in ln for ln in m._kill_excerpt_show("\x1b[31me: red")), str(lines))
++    finally:
++        _ksp_sh.rmtree(wt, ignore_errors=True)
++    # ①端到端:人裁、假平台照真 Gradle 樣式編譯失敗 → killed_unattributed、帳本存摘錄、tail 照舊、拒絕訊息印摘錄
++    cat = _srl_cat()
++    root, _plan, sha = _sra_repo(_SRL_KT, runner=_SRA_GRADLE_RUNNER)
++    try:
++        seg = _sra_seg(root, cat, sha, 4)
++        r = _srl_run(root, cat, *_srl_args(seg))
++        kl = _srl_kill(root)
++        k0 = kl[0] if len(kl) == 1 else {}
++        want_e2e = "\n".join(f"e: file://<worktree>/app/src/main/java/com/ex/SearchViewModel.kt:{n}:5 Unresolved reference: flatMapConcat"
++                             for n in (12, 20, 31)) + "\n" + _SRA_WWW
++        check("S8 ①端到端:killed_unattributed、帳本 fail_excerpt 是三行 e:(<worktree>)加 What went wrong 區塊", k0.get("verdict") == "killed_unattributed"
++              and k0.get("fail_excerpt") == want_e2e, f"{k0}")
++        check("S8 ①端到端:tail 欄照舊(killed_unattributed 是空字串)", k0.get("tail") == "", repr(k0.get("tail")))
++        check("S8 ①端到端:人裁 rc2、拒絕訊息印出摘錄的 e: 行與 What went wrong", r.returncode == 2
++              and "e: file://<worktree>/app/src/main/java/com/ex/SearchViewModel.kt:20:5 Unresolved reference: flatMapConcat" in r.stderr
++              and "* What went wrong:" in r.stderr and "/private/" not in r.stderr, r.stderr[-1200:])
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++    # ⑥⑦⑧ guard kill:基準非綠、壞法逾時、killed
++    abort_runner = ("import os\n"
++                    "print('FAILURE: Build failed with an exception.')\nprint('')\nprint('* What went wrong:')\n"
++                    "print(\"Could not determine the dependencies of task ':app:testDebugUnitTest'.\")\n"
++                    "print('> SDK location not found at ' + os.path.expanduser('~') + '/Library/Android/sdk, see ' + os.getcwd() + '/local.properties')\n"
++                    "print('')\nprint('* Try:')\nprint('> Run with --stacktrace option to get the stack trace.')\nprint('')\nprint('BUILD FAILED in 1s')\n"
++                    "raise SystemExit(1)\n")
++    slow_runner = ("import sys, time\nsrc = open('prod.py', encoding='utf-8').read()\n"
++                   "if 'LIMIT = 99' in src:\n    print('e: boom', flush=True)\n    time.sleep(30)\nprint('ok')\n")
++    root, v = _mk_kill_env()
++    try:
++        (root / "abort_run.py").write_text(abort_runner, encoding="utf-8")
++        (root / "slow_run.py").write_text(slow_runner, encoding="utf-8")
++        _kr_commit(root, "runners")
++        cfgp = root / ".lumos" / "config.json"
++        ov = [{"invariant": "臨時", "test": "TestLimitFive", "file": "prod.py", "old": "LIMIT = 5", "new": "LIMIT = 99", "note": ""}]
++        cfgp.write_text('{"test": {"run_cmd": "python3 abort_run.py"}}', encoding="utf-8")
++        _rc, out, _so, _se = _sra_guard(m, v, ov)
++        k = _kill_log_rows_of(v)[-1]
++        hm = os.path.expanduser("~")
++        check("S8 ⑥基準非綠 → abort、帳本 fail_excerpt 含 What went wrong 區塊、家目錄遮成 ~、工作樹遮成 <worktree>",
++              k.get("verdict") == "abort" and "* What went wrong:" in k.get("fail_excerpt", "")
++              and "~/Library/Android/sdk" in k.get("fail_excerpt", "") and "<worktree>/local.properties" in k.get("fail_excerpt", "")
++              and hm not in k.get("fail_excerpt", ""), str(k)[:800])
++        check("S8 ⑥tail 照舊是原文最後 200 字(不遮路徑、不挑行)", k.get("tail", "").endswith("BUILD FAILED in 1s\n") and len(k.get("tail", "")) == 200
++              and "<worktree>" not in k.get("tail", ""), repr(k.get("tail")))
++        check("S8 ⑧result_out 那列帶 fail_excerpt(abort 時是摘錄)", (out.get("rows") or [{}])[0].get("fail_excerpt") == k.get("fail_excerpt"), str(out)[:400])
++        cfgp.write_text('{"test": {"run_cmd": "python3 slow_run.py"}}', encoding="utf-8")
++        _rc, out, _so, _se = _sra_guard(m, v, ov, floor="1")
++        k = _kill_log_rows_of(v)[-1]
++        check("S8 ⑦壞法逾時 → timed_out_weak、帳本 fail_excerpt 是 e: boom", k.get("verdict") == "timed_out_weak" and k.get("fail_excerpt") == "e: boom", str(k)[:600])
++        cfgp.write_text('{"test": {"run_cmd": "python3 test_guard.py"}}', encoding="utf-8")
++        _rc, out, _so, _se = _sra_guard(m, v, ov)
++        k = _kill_log_rows_of(v)[-1]
++        check("S8 ⑧killed → 帳本沒有 fail_excerpt、result_out 那列 fail_excerpt 是空字串", k.get("verdict") == "killed" and "fail_excerpt" not in k
++              and (out.get("rows") or [{}])[0].get("fail_excerpt") == "", f"{k} {out}")
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++
++
++def t_situation_rule_import_e2e():
++    """[人裁殺傷力在真實Android專案 S9] 假平台:被改檔用到 flatMapConcat 卻沒有它的 import 就印 `e: … Unresolved reference` 回 1(像 Gradle 編譯失敗),
++    否則跑測試;基準用 flatMapLatest 照常綠。檔頭三行逐一 import:①不帶 --import 跑人裁 → 殺傷力 killed_unattributed、rc2、計劃不動、
++    治理帳沒有 situation-rule、拒絕訊息印出 Unresolved reference 摘錄;②帶對的 --import → killed、寫回 S8、治理帳 imports 欄有那一行。
++    判準來源:計劃〈範圍〉1 端到端與預期值表 S9 列(設計審 r1 整合席);應抓到的錯:補了 import 卻沒進殺傷力的工作樹、人裁不認 killed 以外的判定。"""
++    cat = _sit_catalog(_SRA_CATALOG)
++    root, plan, sha = _sra_repo(_SRA_KT_IMP)
++    try:
++        seg = _sra_seg(root, cat, sha, 8)
++        before = plan.read_bytes()
++        r = _srl_run(root, cat, *_srl_args(seg or "x"))
++        kl = _srl_kill(root)
++        check("S9 ①不帶 --import → killed_unattributed、rc2、計劃不動、治理帳沒寫", r.returncode == 2 and [k.get("verdict") for k in kl] == ["killed_unattributed"]
++              and plan.read_bytes() == before and not _srl_gov(root), f"rc={r.returncode} {kl} {r.stderr[-500:]}")
++        check("S9 ①拒絕訊息印出 Unresolved reference 摘錄", "Unresolved reference: flatMapConcat" in r.stderr, r.stderr[-600:])
++        r = _srl_run(root, cat, *_srl_args(seg or "x"), "--import", _SRA_IMP)
++        kl, evs = _srl_kill(root), _srl_gov(root)
++        check("S9 ②帶對的 --import → killed、rc0、寫回 S8", r.returncode == 0 and [k.get("verdict") for k in kl] == ["killed_unattributed", "killed"]
++              and f"- [S8] {_SRL_CLAUSE} [test:test_latest]" in plan.read_text(encoding="utf-8"), f"rc={r.returncode} {kl} {r.stderr[-500:]}")
++        check("S9 ②治理帳那筆 imports 是 [那一行]", len(evs) == 1 and evs[0].get("imports") == [_SRA_IMP], str(evs)[:400])
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
+ def t_spec_gate_ruled_ai_reminder():
+     """[代碼審 r2 x2] 規格閘認到 origin 為 ai 的人裁條款時多印一行提醒(帶 consent 原話),不擋:
+     ①風險低(兩向閘那條路):帳上 S2 那筆 origin ai → 印「AI 依對話核可代跑」與原話,rc 跟 human 那次一樣;★對照★ origin human → 不印;
+     ②風險高(預期值表那條路,_spec_gate_expected_part):只剩人裁條款、origin ai → 印提醒、不擋(回 None);
+     ③原話裡的控制字元經 _kill_esc,不原樣進終端。判準來源:r2-intake 分組 7;應抓到的錯:只有一條路印、原話不清洗。"""
+     import hashlib, json as _j, contextlib, io
+     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "srlai")
+     body2 = "當按下儲存,系統應存檔"
+     _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]", f"- [S2] {body2} [test:t_green]"])
+     _sg_commit(d, "plan")
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index 0893469cf..b8a6a253c 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -16,21 +16,21 @@ description: '分支要推之前的代碼審查迴圈——先 lumos pitfalls --
+ 
+ ## 一輪怎麼跑
+ 1. **凍結材料**:`git -c core.quotePath=false diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`(旗標讓中文檔名不被 git 跳脫成引號,同本 repo 各處 git 呼叫的慣例;處置閘資安席一步會讀這份檔的檔名與改動);超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。凍結前先把手上的改動提交(之後修正關卡拿這個提交當「修正前」)。
+    **首輪派審前先自己變異**:新功能第一次凍結材料之前,編排者對這次新寫的判斷函式逐條分支在複本上改壞一處(條件反過來、邊界差一、回傳值換掉)跑相關測試,沒翻紅的那條補斷言;介面測試的假輸入照真實輸出的形狀造(抓一次真輸出當樣本),不要用手寫的簡化形狀——這兩類漏洞留到審查席才抓,每條都多花一輪(週評通知代碼審跑滿回顧,卷證 `governance/review-reports/code-週評通知/cap-retro.json`)。
+    **先表態**(派審查員之前做;`skip` 也要先表態):`lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json`,把 status 留空的題填成:
+    - `satisfied`(附 `evidence`:`path:line` 或 `test:<名>`)
+    - `na`(附 `reason`,≥10 個中文字)
+    - `todo`(附 `issue: Issues/<名>` 與 `reason`)
+    - `tension`:這題的做法跟鄰居不同(刻意沿用既有寫法、或刻意改用建議做法),不要塞進 `na`;附 `chosen`(existing|suggested)、`existing`(既有寫法的 `path:line` 清單,1–20 項)、`hazard`(隱患)、`suggestion`(建議改法),選 suggested 再附 `evidence`。pitfalls 印了「可能撞」、或樣板那題帶 `hint`,就是在提醒你考慮這個值。合法的 tension 不擋,`check` 印成 ⚠ 讓人裁([[Projects/兩席相反時端出張力_計劃]])。
+    再 `lumos code-loop dispositions /tmp/disp.json`(推 `HEAD:別名` 時加 `--branch 別名`)。未觸發的題工具已自動記「未觸發」,不用碰。派工鏡頭會把這份表態附進派工單——審查席反駁的就是這些答案;席位若抓到「對得上某未觸發題」的問題,`lumos code-loop recall-miss <題目id> --note "<一句>"` 記一筆(累積 3 次列「觸發太窄候選」)。工具只驗證據存在(檔案/行號在被推送的樹裡、測試名在樹裡整字找得到、Issue 存在且 open/doing),不驗答案對不對。(例外:`java-concurrency`、`swift-concurrency`、`sql-transaction`、`sql-nplus1`、`cs-data`、`node-data`、`java-data` 這七題的 satisfied,寫表態時工具另在本機算「破壞測試背書」存進記錄,沒有背書就在推送前印一行提醒、不擋;補法見 lumos-project-notes 寫合約那節,[[Projects/併發與效能表態要合約背書_計劃]])
+-   **Android 情境題要盲判**(表態裡有 `kt-situation` 時;跟 tier 無關,推送前那一道會核):①`lumos code-loop blind-judge --template > /tmp/<分支>-bj.json`(超過 30 段會分份,stderr 會講,用 `--part 2…` 各印一份)②每份派一個全新的 sonnet 代理,派工詞只放那份材料與它自帶的作答格式,寫明不得讀表態檔與 `governance/code-loop/`、不准附你自己的答案(材料已附型錄那列的出處給它當依據)③`lumos code-loop blind-judge <結果.json>`④`code-loop check` 說作者與第一盲判對不上時,`--template --disagreements` 再派一個全新代理,結果用 `--arbiter` 寫入。缺盲判、缺仲裁會擋;兩位盲判一致判沒照做(多數判作者沒照做)與三方各異(沒有多數,要人裁)只提醒並記帳(升擋前要人抽樣,見 [[Projects/Android寫法語意情境表態與盲判_計劃]] 的 REVISIT);盲判紀錄只在治理帳,寫錯撤不掉,同一格重跑不算數(整份都是已有的格會回 2),票面要重判只能等段材料變,確定寫對就用提醒後面附的 `lint-waive kt-situation:<段身分>` 關掉那段提醒。推 `HEAD:別名` 時每步加 `--branch 別名`。**情境題要引規格**(表態寫於生效日之後):作者答適用的列 `spec` 填 `Projects/<計劃>#S<n>`、`quote` 從那條逐字引至少 10 個實字,沒出處、計劃不在對應名單、引句對不上都擋;盲判材料頂層附 `specs`(派工詞照舊只放材料),盲判判適用時依它填 `spec`、引不到留空。作者答不適用而盲判引到存在的條款判適用會擋(捷徑擋:依那條重答或段放行),兩邊出處不同只提醒。規格沒寫就交人裁:在對話裡把要寫回的條款講給使用者,使用者同意後跑擋下訊息印的 `lumos situation-rule --seg … --row … --plan Projects/<計劃名> --clause "<條款>" --test <測試> --file <檔> --old "<原文>" --new "<壞法>" --consent "<使用者原話>"`(殺傷力驗證要真跑測試,放背景跑);寫回後提交計劃、重答那一列引新條款、重跑表態(`--carry`)與代碼審留痕。沒有測試平台或沒有計劃的專案,出口是段放行。
++   **Android 情境題要盲判**(表態裡有 `kt-situation` 時;跟 tier 無關,推送前那一道會核):①`lumos code-loop blind-judge --template > /tmp/<分支>-bj.json`(超過 30 段會分份,stderr 會講,用 `--part 2…` 各印一份)②每份派一個全新的 sonnet 代理,派工詞只放那份材料與它自帶的作答格式,寫明不得讀表態檔與 `governance/code-loop/`、不准附你自己的答案(材料已附型錄那列的出處給它當依據)③`lumos code-loop blind-judge <結果.json>`④`code-loop check` 說作者與第一盲判對不上時,`--template --disagreements` 再派一個全新代理,結果用 `--arbiter` 寫入。缺盲判、缺仲裁會擋;兩位盲判一致判沒照做(多數判作者沒照做)與三方各異(沒有多數,要人裁)只提醒並記帳(升擋前要人抽樣,見 [[Projects/Android寫法語意情境表態與盲判_計劃]] 的 REVISIT);盲判紀錄只在治理帳,寫錯撤不掉,同一格重跑不算數(整份都是已有的格會回 2),票面要重判只能等段材料變,確定寫對就用提醒後面附的 `lint-waive kt-situation:<段身分>` 關掉那段提醒。推 `HEAD:別名` 時每步加 `--branch 別名`。**情境題要引規格**(表態寫於生效日之後):作者答適用的列 `spec` 填 `Projects/<計劃>#S<n>`、`quote` 從那條逐字引至少 10 個實字,沒出處、計劃不在對應名單、引句對不上都擋;盲判材料頂層附 `specs`(派工詞照舊只放材料),盲判判適用時依它填 `spec`、引不到留空。作者答不適用而盲判引到存在的條款判適用會擋(捷徑擋:依那條重答或段放行),兩邊出處不同只提醒。規格沒寫就交人裁:在對話裡把要寫回的條款講給使用者,使用者同意後跑擋下訊息印的 `lumos situation-rule --seg … --row … --plan Projects/<計劃名> --clause "<條款>" --test <測試> --file <檔> --old "<原文>" --new "<壞法>" --consent "<使用者原話>"`(殺傷力驗證要真跑測試,放背景跑;兄弟寫法要多一行 import 才編譯得過就加 `--import "import <套件>.<名稱>"`,算不出主線分岔點加 `--diff <起點>..HEAD`,Android 的 run_cmd 要是 `:<模組>:test<Variant>UnitTest` 變體任務);寫回後提交計劃、重答那一列引新條款、重跑表態(`--carry`)與代碼審留痕。沒有測試平台或沒有計劃的專案,出口是段放行。
+    **修訂輪先準備修補鏡頭**：上一輪有修補時，按共用派工範本 §3.1 固定兩端版本、產生 `rN-repair.patch` 與 `rN-repair-binding.json`；完整改動與上下文仍在審材內。先核對上一輪派工單與 fix-check 的起點，缺漏或不同就記材料不可得、釐清後再比較。材料不可得不等於沒有回歸；不改現有閘結果與輪數。
+    **派審查員前先機械查**:`lumos lint-new --diff <merge-base>..HEAD`(跟推送前的新增告警那道同判),rc0 才派;rc1 先修或放行;rc3 是「沒檢查到」不是乾淨——先裝好工具,或在派工詞寫明哪些類別沒被機械檢查。派工材料附這次的結果,寫明「機械已查(rc0 且狀態 clean)的類別席位不報」。這步是建議,機器擋的是 `code-loop pass`(記通過前先跑新增告警與表態兩道,不乾淨回 rc2)與推送前閘([[Projects/Android寫法寫完當下自動檢查_計劃]])。
+ 2. **派審查員**:Agent、sonnet(Codex 編排時的完整做法——點誰、唯讀怎麼開、版本差異——**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**;外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。派工詞照 `templates.md` §3,正確性鏡頭含資料狀態五問(新舊互讀、寫一半、衍生資料、時間、不可逆)。
+    - standard 只派一位審查員(另加架構對齊);多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制,記帳與問閘見步驟 6–7。(工具鏈本 repo:資安席只看三類、併發與資源改資源鏡頭、§3 第 1 點併發兩問不問,見 templates.md §7.8〈工具鏈三類〉與 §7.7;跨 repo 派工時看被審 repo 的根自己判;消費專案照舊)
+    - **每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill(專案在 `.lumos/config.json` 的 `arch_targets` 宣告了目標架構的目錄改標目標節點,規則由範本裡的 `LUMOS-ARCH-TARGET: on` 讓 hook 附上),派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。
+    - **high 的鏡頭5 通才照 Claude Code `/code-review` 的八角度審法**(使用者裁):派工詞用 §3 整份,只把「審查鏡頭」第 4 點換成 `templates.md` §7.9 那段(圖譜鏡頭照留,五問與角色卡留給正確性席);引句、嚴重度、翻紅重現、唯讀隔離全照 §3。單源 [[Projects/原生代碼審當通才席_計劃]]。
+    - **high 另必派一席「資安」**(不佔人數):站攻擊者那邊只看能被利用的洞,派工用 `templates.md` §7.8,席名寫 `資安-<模型>`。★問閘會擋★——定錨 high 的代碼審,整個迴圈沒有資安席出席、它的報告 sha 對不上、或它看過的檔沒涵蓋最後一版的凍結 patch,`loop status --disposal` 判不過(生效日 2026-09-12;單源 [[Projects/代碼審資安席_計劃]])。`code-loop pass` 寫入前讀這個迴圈的凍結判定,判定沒過也擋([[Projects/留痕驗過審查_計劃]]);`loop next --tier` 要照 `pitfalls --diff` 算出的分級給——第一筆定成 standard,這個迴圈就不會要求資安席。
+    - **資安包與記帳順序**(high,[[Projects/記帳與迴圈工具小修_計劃]]):資安包要含這輪凍結 patch 改到的全部檔(含筆記與文件),不拆;最後一次修補之後要對最新凍結 patch 再派一次資安。記帳時資安與其他席先記、載體最後記——載體帶了 `--finding-source` 的話,記完同輪不能再補,補資安只能記到下一輪(已到上限先 `cap-decision`)。`loop next` 派工時會印這兩條提醒。
+    - **圖譜鏡頭**:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..<head 完整提交編號>`(★不要寫 HEAD★:掛鉤在會談的專案目錄解讀它,你在另一個工作目錄做事時會算到別的提交);派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/裸合約——裸合約=閘守不到、只剩你讀,優先看;合約行後面另印帶 `[來源:外部]` 的外部事實行,只從主線版讀)、逐條必答;改動碰到外部回應碼比對(例:`respCode == "0000"`)時,固定席之後再附一段自帶框的「外部碼表」補選段(最多 3 篇,只印外部事實行);超出只列名、不必答;一句話層已砍(自由文字=注入管道)。派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取(大範圍算一次 25 秒起,hook 45 秒超時就附不到節點,超時會在派工詞尾端附一行說明)。標記不在/格式差→靜默放行;★範圍在會談專案算不出來(提交不存在、不是 git 專案、base 不在主線)→附一行 `LUMOS-LENS:` 說明★——會談開在別的專案、審另一個專案的分支時會這樣,照說明從開在目標專案的會談派席,或手動 `lumos impact --diff` 貼固定席;0 篇時改附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約、不必逐條答)。派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。★範圍內新增了殘留、判測不到的問答,或改到存著已登記殘留的筆記(`pitfalls` 理由寫「新增了殘留」「新增了判測不到的問答」「改到存著已登記殘留的筆記」)時,鏡頭另附「這次新增的殘留」一小節(殘留決策內容與那條合約的問答列,從頂端讀、自帶注入框)和一題逐條必答「這筆殘留的問答有沒有換編號或改字重問、第二個代理是不是另一個代理」;讀不出或時間不夠時附「算不出來」那句,題目照附。附得上的前提:派工詞有 `LUMOS-IMPACT` 標記、base 在主線、鏡頭沒逾時、殘留已提交(鏡頭照頂端提交讀,不讀工作目錄)。把關強度照實講:推送升 high、要過一輪高風險代碼審;審查席有沒有答這題沒有機械核對,收貨時編排者自己看★([[Projects/審查收斂規則_計劃]])。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。Codex 編排時標記行無效:派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`。
+    - **角色鏡頭**:正確性席(standard 單席就是那一席)派工詞另留一行 `LUMOS-ROLE-CARDS: on`,hook 依這次改到前端或後端在框外附角色鏡頭卡(範本 §3 第 5 點;其他席不放這行;Codex 編排的代碼審目前不附,見 [[Projects/代碼審前後端角色鏡頭_計劃]] d4)。
+diff --git a/skills/lumos-project-notes/commands/06-代碼審與推送.md b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+index b35510933..630a4553a 100644
+--- a/skills/lumos-project-notes/commands/06-代碼審與推送.md
++++ b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+@@ -6,21 +6,21 @@
+ | 「這次改動觸發了幾題效能檢核,要先交代」 | `lumos pitfalls --diff <範圍> --dispositions-template --carry > /tmp/disp.json`(填 status 留空的題:satisfied 附 evidence `path:line`/`test:<名>`、na 附 reason、todo 附 issue+reason、tension 附 chosen/existing/hazard/suggestion——這題的做法跟鄰居不同、兩席相反時用,不擋、check 印 ⚠ 交人裁;樣板帶 `hint` 的題就是候選)→ `lumos code-loop dispositions /tmp/disp.json [--branch <推送目的分支>]` | 未觸發的題工具已自動記「未觸發」;寫入綁當下版本,改碼後重跑樣板加 `--carry` 只答新題;審查席抓到未觸發題的問題 → `lumos code-loop recall-miss <id> --note` | `code-loop check` 擋(缺表態≠缺審查,訊息分開);`.lumos/config.json` 的 `stack_questions.gate` 可設 all/high-only/off |
+ | 「審完了/決定不審,要留痕才能推」 | 先 `lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>`,再 `lumos code-loop pass --loop <編號> --note "<審了什麼>"`(有審查帳就必帶編號,工具驗判定);不審走 `lumos code-loop skip --note "<為什麼不審>"` | 留痕綁當下版本;之後再改 code(簿記檔除外)就失效,要重跑。合併請求合進主線時,主線的檢查也認合進來那一側的留痕——條件是分支合併前先跟上主線(合過主線、重記留痕)、合併提交本身不手改;不然主線那邊照擋,要補審或補記 | pre-push 與 CI 都擋 |
+ | 「我現在推得上去嗎?」 | `lumos code-loop check [--diff … --at-sha … --branch …]` | OK/BLOCKED + 原因,六個獨立判定:有資安登記時安全證據不合格(排最前、不看 tier;沒登記的專案輸出不變)→ 有 e2e 段時 Android 端到端驗收沒過或沒紀錄(不看 tier)→ 受波及合約綁的測試紅(高風險擋;低風險 pre-push 帶 `--bound-tests-advisory` 只提醒)→ 有適用效能檢核題表態不完整(不看 tier)→ 這次改動帶進新的告警(不看 tier)→ high 無審查留痕。不帶旗標是序列早退(先中的先報);帶 `--keep-going` 每一道都判完、每道擋下各印各的,最後多一行 `LUMOS-BLOCKS: <種類,…>`(`--json` 多一個 `blocks` 清單) | pre-push 對每個分支 ref 都呼叫它(2026-09-09 起無條件;2026-10-14 起認得 `--keep-going` 的版本就帶上,一次看到這個 ref 的全部原因) |
+ | 「推送被『碰到的筆記裡有指不到真測試的綁定』擋下」 | 照它印的改法修那篇筆記(改成真的測試名;測試已刪寫 `[test-gone:名稱]`;作廢的條目把綁定移走)再推;擋不擋看 `.lumos/config.json` 的 `note_shape.test_refs`(沒設是 warn 只提醒、設 block 才擋),只關這組設 warn;誤擋單次 `LUMOS_SKIP_NOTE_SHAPE=1`(留帳) | 碰到的筆記整篇都要乾淨,舊行上的也算;簽出的不是推送終點、或測試檔與設定有沒提交的改動時只提醒、交給 CI | 指不到的 `[test:]` 是假的守衛,讀的人會以為有測試守著 |
+ | 「推送被 Room 守衛擋下(Android 專案改了 Room 資料庫或 DAO)」 | 照擋下訊息每一條補:升級路徑(`Migration`/`AutoMigration`)、這一版的結構檔(重新編譯後提交 `schemas/<類別>/<版本>.json`)、升級測試(`MigrationTestHelper`)、改到的 DAO 方法用真的 Room(記憶體資料庫)寫測試;手動跑 `lumos room-guard --diff <範圍>` | 升級那半跟主線分岔點比:只存在分支上的版本怎麼改都不擋;DAO 那半只看這次改到的方法,mock 那個 DAO 的測試不算;型別轉換、判不出的升級寫法、`exportSchema = false` 只提醒。只鬆 DAO 那半設 `.lumos/config.json` 的 `room_guard.dao: warn`、整道只提醒 `room_guard.gate: warn`、純快取資料庫列進 `room_guard.allow_destructive`;確定誤擋單次 `LUMOS_SKIP_ROOM_GUARD=1`(留帳) | 升級缺路徑在使用者手機上閃退或清空資料;DAO 只用 mock 測,SQL 寫錯也照綠 |
+ | 「推送被『資安護欄的證據不合格』擋下,哪一條缺什麼?」 | `lumos security evidence [--commit <sha>] [--json]`(唯讀,跟 `code-loop check` 那一道同一支判定) | 逐條列必驗集合(active 資安護欄)的整體判定、最先要修的代碼與每份證據的判定;沒有資安登記就印「這一道不判」 | 只看到擋下不知道是哪一份證據、哪一個欄位不合格 |
+ | 「資安護欄的例外、變弱或改成只提醒,要人核可才算數」 | 產生要簽的那一筆 `lumos security approvals payload <type> <target> --signer <principal> --expires-on YYYY-MM-DD --out <檔>`(釘金鑰另帶 `--key <principal>=<公鑰檔>`;例外、人審、修訂、考量、工具清單的內容從 HEAD 那個提交算,要先提交;target:例外 `<護欄 id>#<排序後的 covers_kinds>`、人審 `<護欄 id>#<種類>`、修訂 `<護欄 id>\|<decision_ref>`;考量另帶 `--outcome risk_accepted\|not_applicable`(到期上限照它分 30／180 天)、壓制另帶 `--reason`、內容不從提交算的可用 `--content-file <JSON 檔>`、`--commit <sha>` 改用別的提交算)→ 自己用 `ssh-keygen -Y sign -n lumos-security` 簽 → **在你自己的終端機** `lumos code-loop security-approval-add <檔>` 接進核可鏈(要照抄當場的確認碼);驗整條鏈 `lumos security approvals verify` | 追加前用同一支驗證函式驗過「整條鏈加這一筆」才寫入;非互動或只有一端是終端一律擋(只管這一支指令);鏈跟主線分岔、金鑰已撤或過期、核可日早於前面的筆都不算數 | 手改例外內容(雜湊對不上)閘門照樣不認;繞過這支指令直接把自己簽的一行寫進核可檔,閘門分不出來——依信賴原則屬範圍外(計劃 d19),不要這樣做;把 payload 輸出轉存成檔會多結尾換行、簽章對不上(用 `--out`) |
+ | 「資安護欄靠故障翻紅當證據,要寫背書」 | 先照 `guard kill` 那一列跑過殺傷力配方,再 `lumos code-loop security-backing <護欄 id> [--supersede]` 把這一版的背書寫進 `docs/.security-backing.jsonl` 並一起提交 | 背書綁程式版本;背書後再改程式就失效、要重跑 | 故障證據判 `backing_missing`,推不上去 |
+ | 「送審或記通過前,先看這次改動帶進哪些新告警」 | `lumos lint-new --diff <merge-base>..HEAD`(`--all` 列全部) | 跟推送前新增告警閘同一套判定、不寫治理帳;退出碼 1 擋、0 乾淨、3 沒檢查到(不算乾淨);`code-loop pass` 記通過前也會跑這道 | 送審或記通過之後才在推送前被新增告警閘擋下,改完要重審、重記通過 |
+ | 「表態裡有 Android 情境題(kt-situation),推送前說要盲判」 | `lumos code-loop blind-judge --template > /tmp/<分支>-bj.json`(超過 30 段分份,`--part 2…`;作者與盲判對不上時加 `--disagreements` 印仲裁材料) | 印不含任何表態的段材料給沒看過表態的代理判 `{applies, followed}`,材料頂層附這次對應計劃的驗收條款(`specs`),判適用的列依它填 `spec`、引不到留空;判完記回治理帳;推送前表態那一道會核盲判紀錄,作者答不適用而盲判引到存在的條款判適用就擋(依那條重答或段放行),兩邊出處不同只提醒 | 表態說照做、程式其實沒照做,只有作者自己說了算;答不適用就不用引規格變成捷徑 |
+-| 「情境題答適用卻引不到計劃條款,推送前擋下要人裁」 | 先在對話裡把要寫回的條款講給使用者,同意後 `lumos situation-rule --seg <段> --row D-<n> --plan Projects/<計劃名> --clause "<條款>" --test <測試> --file <檔> --old "<原文>" --new "<壞法>" --consent "<使用者原話>"`(擋下訊息印好骨架;殺傷力要真跑測試,放背景跑) | 把這一段換成同一列另一種寫法、綁的測試必須在斷言上紅(沒有弱證據)才把條款寫回計劃〈驗收條款〉並記治理帳;之後提交計劃、重答那一列引新條款、重跑表態(`--carry`)與代碼審留痕 | 規格沒寫的需求被 AI 用常識猜掉,人的決定沒進規格、也沒有會紅的測試守住 |
++| 「情境題答適用卻引不到計劃條款,推送前擋下要人裁」 | 先在對話裡把要寫回的條款講給使用者,同意後 `lumos situation-rule --seg <段> --row D-<n> --plan Projects/<計劃名> --clause "<條款>" --test <測試> --file <檔> --old "<原文>" --new "<壞法>" --consent "<使用者原話>"`(擋下訊息印好骨架;殺傷力要真跑測試,放背景跑;換成兄弟寫法要多一行 import 才編譯得過就加 `--import "import <套件>.<名稱>"`(可重複,工具不猜套件);repo 算不出主線分岔點時加 `--diff <起點>..HEAD`;Android 的 `run_cmd` 要是 `./gradlew :<模組>:test<Variant>UnitTest --tests '*{method}'`,頂層 `test` 或 `YOUR_MODULE` 佔位會在跑之前被擋) | 把這一段換成同一列另一種寫法、綁的測試必須在斷言上紅(沒有弱證據)才把條款寫回計劃〈驗收條款〉並記治理帳;之後提交計劃、重答那一列引新條款、重跑表態(`--carry`)與代碼審留痕 | 規格沒寫的需求被 AI 用常識猜掉,人的決定沒進規格、也沒有會紅的測試守住 |
+ | 「新增告警閘擋下來,那條是誤報」 | `lumos lint-waive <指紋> --note "<為什麼放行>"`;看放行過什麼 `--list`(標出 AI 放的、還沒人看過的);人看過之後 `--ack --all` | 理由去掉空白至少 10 個字;放行時在終端問一句是不是本人確認,答 y 記成人放的、答 n 不放行,沒有互動終端記成 AI 放的(推送前小結與健檢會一直列,直到人在終端 `--ack --all`)。放行綁指紋不綁版本,寫進 `.lumos/lint-waivers.json`(要一起提交)並記一筆治理帳 | 不放行就推不上去;健檢會數這個專案放行了幾條 |
+ | 「新增告警閘列了作弊候選(`tq/` 開頭)」 | 照擋下訊息每條的「該確認」看那個改動是不是需求要的:是就照印好的放行指令放行、理由寫為什麼是需求要的;不是就改回去。手動看一段範圍 `lumos test-guard --diff <起點>..<終點> [--json]` | 從跟主線的分岔點起算;刪測試、加跳過標記、斷言變少變弱、預期值被改、沒斷言的新測試、try 沒 fail 或 catch 吞掉斷言、逾時調大、基準圖有變、正式程式偵測測試環境,新測試相對規格閘紅燈版被改弱(`tq/redbase-weakened`)、紅燈版的測試不見了(`tq/redbase-unmatched`)、紅燈版讀不到或沒提交(`tq/redbase-unreadable`,沒提交就 `git add` 那支 `governance/redbase/` 底下的檔),都只是候選不是定罪。比對工具自己出錯時擋下(訊息寫「作弊比對沒跑完」),單次出口 `LUMOS_SKIP_LINT_NEW=1`(留帳)。設成 warn 只報不擋、off 時比對照樣在背後跑、有候選或比對出錯時留帳;同一次推送把閘放寬照放寬前判 | 測試被改成不會紅,壞掉的程式照樣過推送 |
+ | 「把一個坑固化成每次提交都會跑的規則」 | 規則放 `.lumos/rules/`、會被它抓到的樣本放 `.lumos/rules/samples/`,登記進 `index.json`,再 `lumos rule-check` | 每條規則都要有一支真的翻紅的樣本;沒樣本或樣本不翻紅 rc1 | 沒有會翻紅的樣本的規則可能是死的,跟沒有規則一樣 |
+ | 「漏網的問題本來哪條規則該抓」 | 記逃逸帳時帶 `--rule <規則id\|none>`;看待辦 `lumos rule-gap` | 列出「標了該抓、但規則還沒寫」的,附漏過幾次 | 逃逸帳只記漏掉了,不標規則就不會長出新守衛 |
+ | 「這次改動有沒有打破哪條硬合約?」 | `lumos bound-tests --diff <範圍> [--advisory]` | green / red / 沒東西可跑。**紅了是要修測試,不是補審查留痕** | ★2026-09-07 起低風險推送也跑★,紅了印出來記帳但不擋;高風險照舊擋。預設一支一支跑;要同時跑見安裝維運的 `bound_tests.parallel` |
+ | 「受波及合約的測試真的跑不了(外部 DB 不在)」 | `lumos code-loop check … --skip-bound-tests --note "<為什麼>"` 或 `lumos bound-tests --skip --note "<為什麼>"`;CI 用環境變數 `LUMOS_SKIP_BOUND_TESTS=1` | 留痕進治理帳,被統計(旗標記 `skipped-flag`、環境變數記 `skipped-env`,分開數) | 沒理由拒絕 |
+ | 「合約綁測試的狀態」 | `lumos guard list` | 真綁/懸空/偽證據/裸/未審 | doctor [T] 擋裸合約 |
+ | 「幫合約產一個測試骨架」 | `lumos guard scaffold <節點> "<KEY 片段>" --method <名> [--platform …]` | 預設紅燈 stub,斷言留 TODO | — |
+ | 「把寫好的測試綁回合約」 | `lumos guard bind <節點> "<KEY 片段>" <測試名>` | 寫回 [test:] | 裸合約擋推 |
+ | 「合約被不知道脈絡的人審過了」 | `lumos guard audit <節點> "<KEY 片段>"` | 寫回 [audit:] | lint 報「未獨立審計」,pre-push 擋 |
