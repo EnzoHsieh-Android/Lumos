@@ -2,9 +2,10 @@
 type: system
 status: done
 created: 2026-07-10
-updated: 2026-11-13
+updated: 2026-11-14
 self_audit: gpt-5.6-sol/2026-10-07
 about_code_stamp: batch-2026-08-23/2026-08-23/2faf3eec082c
+responsibility: guard kill 殺傷力驗證:合約配方(kill-add/kill-rm)、隔離工作樹裡套宣告式壞法跑綁定測試的八態判定、殺傷力帳本與背書讀者;也是人裁(situation-rule)與改動選擇點(choice-kill)臨時配方的唯一判法(它們只用選用參數接上)。不負責:挑哪些行產生壞法(規格閘的選擇點那段)、治理帳的判定紀錄
 tags:
   - type/system
   - status/done
@@ -20,13 +21,12 @@ summary: |-
   PITFALL:[2026-09-28 設計審 r3 外家席]plan、settle、abandon 原本改家筆記都在寫入鎖外,兩個指令同時改同一篇家筆記,後寫的會用舊內容蓋掉先寫的(例:settle 蓋掉同時 plan 寫的預告行,留下 pending 守衛紀錄卻沒有預告行);現在三支各自從讀到寫整段拿鎖。settle 第一步做完、第二步失敗時重跑只補第二步,守衛紀錄已是 pass 就回 0 [test:t_guard_commands_hold_vault_lock] [test:t_guard_settle_recovers_half_done]
   KEY:★INVARIANT★ guard kill rc 優先序:survived→rc1、drifted/abort/error→rc2、弱證據(unattributed/timeout)不放行執行錯誤 [test:t_guard_kill_rc_precedence] [audit:sonnet/2026-07-29]
   KEY:★INVARIANT★ guard kill --json 模式**成功跑完時(rc 0/1)** stdout 恰一行合法 JSON(所有診斷走 stderr;rc2 早退路徑不印 JSON=範圍外,明文收窄) [test:t_guard_kill_json_purity] [audit:sonnet/2026-07-29]
-  FLOW:kill-add(配方進kill_recipes+KEY行[kill:recipes],同檔原子寫)→kill(依platform分組→worktree於系統temp→baseline綠→套壞法(圍欄+唯一命中)→綁定測試必翻紅→七態verdict→docs/.kill-log.jsonl留痕)
-  KEY:宣告式壞法(人寫,從業務行為推導非實作反轉;繞開等價變異不可判定)｜run_cmd由config宣告(platforms.X.run_cmd/legacy test.run_cmd,{method}佔位+shlex.quote+killpg)｜**七態**(2026-07-29 oracle品質包升級,取代舊六態):killed(強證據,歸因到綁定測試)/killed_unattributed(紅了但歸不到該測試)/timed_out_weak(**不再計為 killed**,舊版歸 killed 是假強殺)/survived(稻草人rc1)/drifted/abort/error
+  KEY:宣告式壞法(人寫,從業務行為推導非實作反轉;繞開等價變異不可判定)｜run_cmd由config宣告(platforms.X.run_cmd/legacy test.run_cmd,{method}佔位+shlex.quote+killpg)｜**八態**(2026-07-29 oracle品質包升級,取代舊六態):killed(強證據,歸因到綁定測試)/killed_unattributed(紅了但歸不到該測試)/timed_out_weak(**不再計為 killed**,舊版歸 killed 是假強殺)/survived(稻草人rc1)/drifted/abort/error/skipped(2026-11-14 改動選擇點起:只在傳了 stop_group_on 時出現,同一組已有決定性結果就略過,不算進 rc)
   KEY:baseline前置(cargo-mutants)防假殺;timeout=baseline×5下限20s(LUMOS_KILL_TIMEOUT_FLOOR可覆寫);worktree只隔離原始碼不隔離DB(hermetic警語);HEAD基準(dirty大聲警告)
   KEY:★DEBT★ hydration(未提交帶入)與lockfile v1砍(否決位裁);E2E maestro {method}不適用;冷build成本;submodule不init
   KEY:★誠實界線[2026-07-23 日報吸收]★——殺傷率有天花板:「殺得掉」≠「殺得準」。研究(arXiv 2606.10417)實測突變殺傷率 7-9 成的測試仍漏一大片未真正驗到的行為,且很多「殺掉」是程式碰巧崩(rc≠0)、非斷言真的檢查了被改壞的行為。(更正 2026-10-12：原文數字是殺傷率超過九成、甚至百分之百的方法仍有一半以上漏驗行為,7–9 成那兩桶只占 5.6%;「很多殺掉是碰巧崩」原文找不到,原文反而以「殺掉要靠斷言偵測」為前提。「killed 只證翻紅、不證斷言指到被改的欄位」是 Lumos 自己的推論)**對 lumos 兩重意義**:①guard-kill 判 killed 只證「綁定測試對這個壞法翻紅」,不證斷言指到被改的業務欄位——高風險合約可加一句「準殺」檢查(失敗測試斷言須提及被弄壞的欄位/行為,非只看 rc)②**打臉 2026-07-22 日報 inspiration「把 Check K 健康指標從『數測試』換成『殺傷率』」**(該 inspiration 未落地)——別把可鑽的『數量』換成另一個可鑽的『殺傷率』;真要換,健康指標得是『準殺』(斷言驗到規則),不是裸殺傷率。載重合約留「這條到底驗了哪些行為」比留一個殺傷率數字誠實
   DEP:[[Systems/check-t-sentinel]][[Systems/test-profile-multiplatform]]
-  TEST:t_guard_kill(七態+M1/M2殺手測試)+t_guard_kill_attribution+t_guard_kill_rc_precedence+t_guard_kill_json_purity+全套923綠 | VERIFY:[[Verification/2026-07-10_guard殺傷力驗證]]
+  TEST:t_guard_kill(八態+M1/M2殺手測試)+t_guard_kill_attribution+t_guard_kill_rc_precedence+t_guard_kill_json_purity+全套923綠 | VERIFY:[[Verification/2026-07-10_guard殺傷力驗證]]
   WHY:[2026-09-29 Projects/存量漂移改法_計劃]guard settle 對「已 pass 但預告句還在」補改句(以前一律回 0 印已轉正),前提不符回 2——把 settle 當重跑無害在腳本裡呼叫的地方會看到新的失敗;--test 只在待完成時要、--date 只給補改句用。轉正日期依序取 --date、那篇已寫的日期、守衛紀錄第一次變成 pass 的提交(那筆也是檔案第一次出現就不算、shallow 擋),★不拿今天充數★;不用 git log -S 合約文字:settle 是原地換行、出現次數不變,找不到轉正那次(設計審 r1 四席報到)
   WHY:[2026-09-30 [[Projects/漂移修法補強_計劃]] 第 3 節]settle 找不到某種預告句時的提醒改成「找不到<名稱>——可能已經是轉正後的說法(不用改),或被手改過(看一下)」:rtb 用 drift fix --kind c1 修時,已經手改成轉正說法的句子被講得像出錯。不區分兩種情形(前兩版要工具自己辨認轉正後的說法,設計審 r2 整類拿掉),由人看;drift fix c1 的結果訊息接同一支函式的同一句,不改判定與回傳值 [test:t_drift_fix_c1_missing_message]
   WHY:[2026-09-29 Projects/存量漂移改法_計劃]改句、前提、轉正日期推導放 guard 這邊,drift fix 往下呼叫、guard 不呼叫 drift;settle 句下一個非空行已經是人手補的「已轉正」段時刪掉 settle 句、不再疊一行,待完成的轉正與補改走同一支——同一種句子不因入口不同而結果不同
@@ -46,6 +46,12 @@ summary: |-
   WHY:人裁的訊號處理(_situation_rule_signals)照業界兩段式:第一個 SIGTERM、SIGHUP、Ctrl-C 印「再按一次…強制結束」並轉成 KeyboardInterrupt,經過 _isolated_worktree 的 finally 溫和收尾(worktree remove、刪暫存資料夾);第二個訊號強制結束——收掉還在跑的測試程序群組(_KILL_RUN_LIVE)、刪自己建的寫入鎖檔、印目前進度(計劃已寫帳沒記時先印補記事件)後 os._exit,工作樹與暫存資料夾留給一天後的清殘骸(人裁開 sweep_repo);寫回段只從拿到寫入鎖之後才把第一個訊號延後到檢查點,等鎖時照樣中斷;跟 lint 工作樹(_lint_wt_on_term,任何地方都立刻 os._exit)不同的只在第一個訊號:人裁的收尾在 finally 裡,只有轉成例外才經過;keep=True 但樹沒建起來時不寫保留標記、照一般收掉、on_keep 給 None(guard kill 印沒建成) [出處:governance/review-reports/code-情境題引規格出處/r3-intake.md 分組 1、4;https://github.com/h3js/srvx/pull/163] [因:os._exit 不跑 finally;r2 把第二個訊號改成只記下後,收尾卡住時實測 20 秒停不下來、等寫入鎖時最長 60 秒不理 Ctrl-C] [不選:第二個以後只記下(r2 做法,沒有逃生口);抽一支兩邊共用的訊號處理(要不要經過 finally 是兩邊需求不同)] [代價:強制結束留工作樹殘骸,一天後才被清] [test:t_situation_rule_double_signal] [test:t_situation_rule_force_kills_live_group] [test:t_situation_rule_write_phase_signals] [test:t_situation_rule_signal_during_write] [test:t_isolated_worktree_keep_failed_build]
   WHY:臨時配方(recipes_override,只有人裁在用)多認一欄連帶替換 also(清單、這一版最多一筆,只由人裁 --import 產生):主替換之後在記憶體逐行套,old 那一行要恰好一行整行相等;格式不合(共用小檢查 _kill_also_issue:old 是一整行、new 以 old 開頭、多出來每一行都是 import 行)或套不上判 error、不寫檔、不跑壞法那一次;筆記宣告的配方帶了也不理。判定是 killed_unattributed、timed_out_weak、abort 時,kill-log 那筆與 result_out 每列多 fail_excerpt:先把工作樹的字面與 realpath 遮成 <worktree>、家目錄遮成 ~(只在路徑邊界換:後面接 / 或不是檔名字元,/Users/a2 不會被 /Users/a 換掉)再挑 e:、error:、E  、FAILED 開頭與 FAILED 結尾的行和 What went wrong 區塊,每行 200 字、總共 800 字,挑不到才退回結尾;既有 tail 欄不動 [出處:[[Projects/人裁殺傷力在真實Android專案跑得起來_計劃]] 範圍 2、6] [因:真實 Android 專案逐一 import 時換成兄弟寫法編譯失敗、人裁一律被拒,而帳本只留 Gradle 固定的結尾提示、看不出原因] [不選:工具依觸發字猜 import 的套件(設計審 r1 四席:型錄觸發字混著成員名與跨套件名,會補出不存在的 import);另抽一支共用的殺傷力函式] [代價:連帶替換放寬了只改這一段,所以只准多加 import 行] [test:t_guard_kill_also_rejects_non_import] [test:t_guard_kill_also_only_override] [test:t_kill_log_fail_excerpt]
   WHY:guard kill 的基準與壞法在隔離工作樹裡的平台根跑 run_cmd(工作樹加上平台根相對所在 repo 最上層的路徑,_kill_run_dir),跟推送前的合約測試閘(_run_bound_tests 在平台根跑)同一處;平台根就是 repo 最上層時是工作樹本身、行為不變;平台根在 HEAD 那一版不是資料夾(沒提交)判 error、基準不跑;配方的 file 照舊從工作樹最上層算,撞名判定與人裁的模組候選本來就從平台根算 [出處:[[Projects/人裁殺傷力在真實Android專案跑得起來_計劃]] 範圍 2;代碼審 code-人裁殺傷力android r1 g1] [因:原本殺傷力在工作樹最上層跑、合約測試閘在平台根跑,平台根是子資料夾時同一條 run_cmd 只能顧一邊——人裁叫人加 cd <平台根> && 讓殺傷力過,之後每次推送的合約測試閘都紅] [不選:run_cmd 前面加 cd 的慣例(只顧殺傷力一邊);兩處各一條 run_cmd(同一個設定兩種語意)] [代價:平台根是子資料夾、run_cmd 原本寫成從 repo 最上層跑的舊設定要改成從平台根寫(合約測試閘本來就照平台根跑,這種設定原本在推送前就是紅的)] [test:t_guard_kill_runs_at_platform_root] [test:t_isolated_worktree_shared]
+  WHY:cmd_guard_kill 多四個選用參數給改動選擇點的 choice-kill(都不傳時行為與輸出不變):source 記到殺傷力帳本(是 choice-kill 時整個不寫帳本)、stop_group_on(配方的 group 同一組出現強 killed、編不過、逾時就把其餘記 skipped 略過,skipped 不算進 rc)、on_row(每條配方結束就交出那一列,weak 當場蓋好)、should_stop(配方之間問要不要停);活著的隔離工作樹登記在 _KILL_WT_LIVE,第二個終止訊號強制結束時印出路徑 [出處:論文 2.1 每個壞法只跑相關測試的近似 https://arxiv.org/pdf/2102.11378;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 2] [因:沒有覆蓋率挑最小測試集,一個壞法已判定就不該再花 Gradle 時間] [不選:另抽一支共用的殺傷力函式(本篇既有否決)] [test:t_choice_kill_batch]
+  WHY:背書讀者(_backing_kill_rows:doctor P2、表態與資安背書)改成殺傷力帳本那筆 source 非空就略過,不再只認 situation-rule:臨時配方不是筆記宣告的配方,任何呼叫端帶的都不算背書 [出處:[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 5] [因:將來別的臨時配方呼叫端帶 source 時不用再改讀者] [test:t_kill_log_situation_rule_rows_skipped]
+  PITFALL:帶弱證據的 killed(修改時間沒錯開、平台標 flaky)也被當成決定性結果,stop_group_on 停組、同組其餘測試記略過,壞法落成 no_result,本來能強殺它的下一支測試沒跑 [出處:代碼審 code-改動選擇點 r1 b21;論文 2.1 https://arxiv.org/pdf/2102.11378] [根因:_KillHooks.flush 的停組鍵三元式兩邊都回 killed] [修法:弱證據的 killed 記成 killed_weak(不在 stop_group_on 裡)] [test:t_choice_kill_weak_evidence]
+  PITFALL:兩個平台各有一支同名測試守同一個壞法時,配方身分(_kill_recipe_id 不含平台)撞號,choice-kill 收列時一支永遠收不到、存活被記成缺結果、殺掉被記到另一個平台 [出處:代碼審 code-改動選擇點 r1 b22] [根因:_ChoiceKillRun 只用配方身分對回列] [修法:對回時用 (配方身分, 平台);列上本來就帶平台] [test:t_choice_kill_same_name_two_platforms]
+  PITFALL:guard kill 原地數 old 與配方判讀用 str.count(不算重疊出現),old 在檔裡重疊出現兩次時被當成恰好一次、replace 第一處改到的可能是別處 [出處:代碼審 code-改動選擇點 r1 b11 同族] [根因:Python str.count 只算不重疊 https://docs.python.org/3/library/stdtypes.html#str.count] [修法:兩處改走 _count_overlapping(重疊也算;說明字面照舊「命中 N 次」「原文出現 N 次」)] [test:t_choice_unique_overlapping]
+  WHY:cmd_guard_kill 的新選用參數(stop_group_on、on_row、should_stop、source)另有一支直接守「不傳時同組兩條都跑、沒有略過列;傳 stop_group_on 時略過列不算進 rc 與全部 killed 的配方數」 [出處:代碼審 code-改動選擇點 r1 k4;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 2] [因:rc 優先序與 --json 純度兩條合約原本只靠 choice-kill 的端到端測試間接守] [test:t_choice_guard_kill_new_params]
 related:
   - "[[Projects/guard殺傷力驗證_計劃]]"
   - "[[Systems/check-t-sentinel]]"
@@ -94,7 +100,7 @@ about_code:
 - guard kill 每次寫檔(套壞法、還原)之前,等到跟同一組上一次寫檔、上一次跑測試結束都不同秒(最多等 3 秒),寫完讀回修改時間確認錯開(只到 2 秒的檔案系統會再碰一次,最多 3 次;還是不行就把那條結果記成弱證據、標準錯誤整次印一行)。理由:測試工具靠「修改時間到秒 + 大小」判斷要不要重編(Python 編譯快取、macOS 內建 make),同一秒寫出同大小的檔會沿用上一次的編譯結果,誤判雙向——無害壞法被判 killed、傷害壞法被判 survived。不把時間設到未來(綁定測試拿修改時間跟現在比時會造出新的假 killed)。代價每條配方多約 1.4–1.9 秒([[Projects/殺傷力驗證編譯快取誤判_計劃]])。還原沒錯開的檔在被成功重寫之前、以及在那期間跑出來的 baseline,同組後面沿用到的結果都記弱證據。
 - 還原(`git checkout`)用的是解開連結後實際被改的那支檔、照字面認路徑(`:(literal)`);原本用配方寫的字串,`file` 是連結時只還原連結本身、真檔一直壞著,同組後面的配方被判成強證據的 killed(2026-10-02 代碼審第 3 輪抓到,改動前就有)。
 - guard kill 人讀輸出每條結果行在判定之後附 `id=<短身分>`(放在人寫的合約片段與 test 名前面,偽造的 id 只會出現在真的後面);`--json` 不變(旁路欄 `_rid` 與 `_logged` 一起濾掉,既有 `recipe_id` 照舊)。
-- rc（2026-07-29 七態後的優先序，`[test:t_guard_kill_rc_precedence]`）：任一 survived=1；drifted/abort/error 存在且無 survived=2；**全部只有弱證據（`killed_unattributed`／`timed_out_weak`）=1**(這裡的弱證據指這兩種判定;`weak` 欄是另一件事,不影響 rc——修改時間沒錯開只讓 `weak` 為 true)（不放行——弱證據不算接住）；有強證據 killed 且無錯誤=0。舊版「全 killed（含 timed_out）=0」已作廢：把逾時當殺掉是假強殺。
+- rc（2026-07-29 八態後的優先序，`[test:t_guard_kill_rc_precedence]`）：任一 survived=1；drifted/abort/error 存在且無 survived=2；**全部只有弱證據（`killed_unattributed`／`timed_out_weak`）=1**(這裡的弱證據指這兩種判定;`weak` 欄是另一件事,不影響 rc——修改時間沒錯開只讓 `weak` 為 true)（不放行——弱證據不算接住）；有強證據 killed 且無錯誤=0。舊版「全 killed（含 timed_out）=0」已作廢：把逾時當殺掉是假強殺。
 - `lumos gov` 第 5 支 load 撈 kill 留痕；guard list 顯示 `[kill✓]`。
 
 ## 配方失配提醒(kill-add 提醒、doctor P2、kill-rm)

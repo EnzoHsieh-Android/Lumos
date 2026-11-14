@@ -1648,4 +1648,68 @@
 - 逐列查證(來源欄有〔查證 日期:網址〕):534 列;沒有的 1 列都是查不到權威原文、已標出處不全(2026-11-07 逐列查證,卷證見 [[Projects/Android寫法型錄逐列查證_計劃]];2026-11-08 使用者裁 API-14、TEST-31 標出處不全、DATA-12 照官方改寫並改成人裁列;同日再查,ARCH-3 等 6 列找到直接講到規則判定寫法的官方原文、拿掉出處不全;API-14、API-36、UI-103、TEST-31 查不到或跟官方相反,維持出處不全,五條規則移出規則包(其中 API-36 於 2026-11-09 依 CERT ERR51-J 拿掉出處不全,規則仍不在規則包),見 [[Projects/Android不接閘資安規則重量_計劃]])
 - 情境決策表列數:60(證據樣式:主寫 `(無)` 的 19 列、例外寫 `(無)` 的 37 列、兩段都 `(無)` 的 15 列;2026-11-09 補 D-58 到 D-60、D-38 停用;2026-11-08 用 check.py 的 dt_table 重數,先前寫的 8、31、5 已過期)
 - API 決策點:公開名稱 434(每列每個歸屬項各算一筆:D-n 62、撞名 4、決策不問主表列 18、決策不問代碼審 95、無決策 266;母體 kotlinx-coroutines-core 1.10.2,2026-11-12 用 check.py 的 _api_names 抽,含 jvm-only.txt 手列的 19 個)
+- 選擇點表:31 列;乾節點規則:14 列(2026-11-14 第一版,用 check.py 的 choice_tables 重數)
 - 叫不出的壞寫法:111 個(改由:規則 5、範本 0、代碼審 104、不是寫法 2;2026-11-12 用 check.py 的反查重數,補了 D-4、D-5、D-8、D-9 的觸發字之後)
+
+## 選擇點表
+
+改動選擇點([[Projects/改動選擇點都要有需求守住_計劃]])的壞法來源:每列一個語法節點(ast-grep 規則,`configs/ast-grep/kotlin-choice/rules-choice/` 裡 id 等於列號的那條)對應一組一對一機械壞法,照 Google 差異式變異測試(論文〈Practical Mutation Testing at Scale〉https://arxiv.org/pdf/2102.11378 ,以下稱「論文」)表 1 的五個運算子,外加 Kotlin API 兄弟寫法(MutApi 形狀)。`lumos choice-points` 讀這張表與下一張〈乾節點規則〉,改到的每一行最多挑一個壞法(論文 4.1 Listing 2)。
+
+欄位:ast-grep 規則寫「`規則檔` 樣式或說明」,規則檔在 `rules-choice/` 底下、裡面要有 id 等於列號的規則;錨點只用「運算子」「運算元起始」「陳述起始」「方法名」四種,決定這一列用哪個記號的所在行判「在改到的行上」;候選壞法是反引號包住的樣板(`$A`、`$B` 是規則的後設變數、`$X` 是命中的節點本身;API 列是換成的方法名),或「(刪掉)」「(拿掉呼叫)」;型別前提只用「(無)」「運算元有 null 字面值」「運算元是字串」三種(論文 3.2.1:編不過的壞法事前擋);需補的 import 是兄弟寫法的完整名稱,檔頭逐一 import 了原寫法時自動補那一行;對應決策表寫〈情境決策表〉的列號,沒有寫 —。跟決策表的分工:決策表每列是「要看情境判」的題目,這張每列是一對一機械壞法;重疊的成員用列號互指,壞法只有這張表一個來源。
+
+不收(單元測試分不出或常掛住):`first`/`last`、`take`/`takeLast`、`drop`/`dropLast`、`collectLatest`/`collect`、`coroutineScope`/`supervisorScope`、`Dispatchers.*`、`SharingStarted.*`、`flowOn`、`buffer`、`conflate`(論文附錄 A.1.4 時間類、A.3.2 被假實作換掉)。
+
+| 列號 | 類別 | ast-grep 規則 | 錨點 | 候選壞法 | 型別前提 | 需補的 import | 對應決策表 | 為什麼行為不同 | 出處 |
+|---|---|---|---|---|---|---|---|---|---|
+| C-1 | ROR | `ror.yml` `$A > $B` | 運算子 | `$A < $B`、`$A <= $B`、`$A >= $B`、`true`、`false` | (無) | (無) | — | 比較的方向或邊界換了,大於、小於、等於的那一側結果不同 | 論文表 1 ROR;Just 等非冗餘變異(只取部分替換) |
+| C-2 | ROR | `ror.yml` `$A < $B` | 運算子 | `$A > $B`、`$A >= $B`、`$A <= $B`、`true`、`false` | (無) | (無) | — | 比較的方向或邊界換了,大於、小於、等於的那一側結果不同 | 論文表 1 ROR;Just 等非冗餘變異(只取部分替換) |
+| C-3 | ROR | `ror.yml` `$A >= $B` | 運算子 | `$A > $B`、`$A < $B`、`$A <= $B`、`true`、`false` | (無) | (無) | — | 比較的方向或邊界換了,大於、小於、等於的那一側結果不同 | 論文表 1 ROR;Just 等非冗餘變異(只取部分替換) |
+| C-4 | ROR | `ror.yml` `$A <= $B` | 運算子 | `$A < $B`、`$A > $B`、`$A >= $B`、`true`、`false` | (無) | (無) | — | 比較的方向或邊界換了,大於、小於、等於的那一側結果不同 | 論文表 1 ROR;Just 等非冗餘變異(只取部分替換) |
+| C-5 | ROR | `ror.yml` `$A == $B` | 運算子 | `$A != $B` | 運算元有 null 字面值 | (無) | — | 相等與不相等對調,判斷結果整個反過來 | 論文附錄 A.1.23(只換對應的否定);A.1.10(跟 null 比較不產生) |
+| C-6 | ROR | `ror.yml` `$A != $B` | 運算子 | `$A == $B` | 運算元有 null 字面值 | (無) | — | 相等與不相等對調,判斷結果整個反過來 | 論文附錄 A.1.23(只換對應的否定);A.1.10(跟 null 比較不產生) |
+| C-7 | ROR | `ror.yml` `$A === $B` | 運算子 | `$A !== $B` | 運算元有 null 字面值 | (無) | — | 相等與不相等對調,判斷結果整個反過來 | 論文附錄 A.1.23(只換對應的否定);A.1.10(跟 null 比較不產生) |
+| C-8 | ROR | `ror.yml` `$A !== $B` | 運算子 | `$A === $B` | 運算元有 null 字面值 | (無) | — | 相等與不相等對調,判斷結果整個反過來 | 論文附錄 A.1.23(只換對應的否定);A.1.10(跟 null 比較不產生) |
+| C-9 | LCR | `lcr.yml` `$A && $B` | 運算子 | `$A \|\| $B`、`$A`、`$B`、`true`、`false` | (無) | (無) | — | 兩個條件要同時成立還是成立一個就好,或只看其中一個 | 論文表 1 LCR |
+| C-10 | LCR | `lcr.yml` `$A \|\| $B` | 運算子 | `$A && $B`、`$A`、`$B`、`true`、`false` | (無) | (無) | — | 兩個條件要同時成立還是成立一個就好,或只看其中一個 | 論文表 1 LCR |
+| C-11 | AOR | `aor.yml` `$A + $B` | 運算子 | `$A - $B`、`$A * $B`、`$A / $B`、`$A % $B`、`$A`、`$B` | 運算元是字串 | (無) | — | 算出來的數值不同 | 論文表 1 AOR;3.2.1(字串串接換成別的運算編不過,事前擋) |
+| C-12 | AOR | `aor.yml` `$A - $B` | 運算子 | `$A + $B`、`$A * $B`、`$A / $B`、`$A % $B`、`$A`、`$B` | 運算元是字串 | (無) | — | 算出來的數值不同 | 論文表 1 AOR;3.2.1(字串串接換成別的運算編不過,事前擋) |
+| C-13 | AOR | `aor.yml` `$A * $B` | 運算子 | `$A + $B`、`$A - $B`、`$A / $B`、`$A % $B`、`$A`、`$B` | 運算元是字串 | (無) | — | 算出來的數值不同 | 論文表 1 AOR;3.2.1(字串串接換成別的運算編不過,事前擋) |
+| C-14 | AOR | `aor.yml` `$A / $B` | 運算子 | `$A + $B`、`$A - $B`、`$A * $B`、`$A % $B`、`$A`、`$B` | 運算元是字串 | (無) | — | 算出來的數值不同 | 論文表 1 AOR;3.2.1(字串串接換成別的運算編不過,事前擋) |
+| C-15 | AOR | `aor.yml` `$A % $B` | 運算子 | `$A + $B`、`$A - $B`、`$A * $B`、`$A / $B`、`$A`、`$B` | 運算元是字串 | (無) | — | 算出來的數值不同 | 論文表 1 AOR;3.2.1(字串串接換成別的運算編不過,事前擋) |
+| C-16 | UOI | `uoi.yml` `!$B` | 運算子 | `$B` | (無) | (無) | — | 拿掉否定,條件整個反過來 | 論文表 1 UOI(b → !b 的反向) |
+| C-17 | UOI | `uoi.yml` if/while/do-while 條件或 `&&`/`\|\|` 運算元裡的簡單識別字、屬性或呼叫 | 運算元起始 | `!$X` | (無) | (無) | — | 加上否定,條件整個反過來 | 論文表 1 UOI(b → !b;a++/a-- 不做,Kotlin 多半是 val) |
+| C-18 | SBR | `sbr.yml` 陳述清單的直接子節點、而且是呼叫 | 陳述起始 | (刪掉) | (無) | (無) | — | 少做一件事(呼叫的副作用不見了) | 論文表 1 SBR;附錄 A.1.12(lambda 最後一個陳述、當值用的區塊最後一個陳述、只有一個陳述的函式本體不刪) |
+| C-19 | API | `api.yml` `$R.filter` 後接呼叫 | 方法名 | `filterNot` | (無) | `kotlinx.coroutines.flow.filterNot` | — | 留下的元素正好相反 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-20 | API | `api.yml` `$R.filterNot` 後接呼叫 | 方法名 | `filter` | (無) | `kotlinx.coroutines.flow.filter` | — | 留下的元素正好相反 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-21 | API | `api.yml` `$R.any` 後接呼叫 | 方法名 | `none` | (無) | (無) | — | 有一個符合對上沒有一個符合 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-22 | API | `api.yml` `$R.all` 後接呼叫 | 方法名 | `any` | (無) | (無) | — | 全部符合對上有一個符合 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-23 | API | `api.yml` `$R.none` 後接呼叫 | 方法名 | `any` | (無) | (無) | — | 沒有一個符合對上有一個符合 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-24 | API | `api.yml` `$R.sortedBy` 後接呼叫 | 方法名 | `sortedByDescending` | (無) | (無) | — | 排序方向相反 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-25 | API | `api.yml` `$R.sortedByDescending` 後接呼叫 | 方法名 | `sortedBy` | (無) | (無) | — | 排序方向相反 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-26 | API | `api.yml` `$R.minByOrNull` 後接呼叫 | 方法名 | `maxByOrNull` | (無) | (無) | — | 取到最小對上最大 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-27 | API | `api.yml` `$R.maxByOrNull` 後接呼叫 | 方法名 | `minByOrNull` | (無) | (無) | — | 取到最大對上最小 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-28 | API | `api.yml` `$R.flatMapLatest` 後接呼叫 | 方法名 | `flatMapConcat` | (無) | `kotlinx.coroutines.flow.flatMapConcat` | D-4 | 新值來時取消前一個對上每一個都做完(搜尋框只要最新一次) | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-29 | API | `api.yml` `$R.flatMapConcat` 後接呼叫 | 方法名 | `flatMapMerge` | (無) | `kotlinx.coroutines.flow.flatMapMerge` | D-4 | 依序做完對上同時做、結果交錯 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-30 | API | `api.yml` `$R.flatMapMerge` 後接呼叫 | 方法名 | `flatMapConcat` | (無) | `kotlinx.coroutines.flow.flatMapConcat` | D-4 | 同時做對上依序做 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+| C-31 | API | `api.yml` `$R.distinctUntilChanged` 後接呼叫 | 方法名 | (拿掉呼叫) | (無) | (無) | — | 連續相同的值會再送一次 | MutApi(API 兄弟寫法改寫表);論文2.2 |
+
+## 乾節點規則
+
+論文 3.1 的乾節點(arid node):命中節點的範圍內(含跨行引數與尾隨 lambda)不產生壞法。每列對應 `configs/ast-grep/kotlin-choice/rules-arid/` 裡 id 等於列號的規則。乾節點規則由人照回饋手動增補(論文 3.1、3.2.5:有用比例從 15% 提到 89%);`lumos gov --stats` 列「乾節點候選」(同形狀放行 3 次以上)給人決定要不要加新列。論文 3.1 公式 1 的「複合節點所有子節點都乾才乾」不做遞迴(ast-grep 規則不能遞迴),乾的範圍就是規則命中的節點;這一版收附錄 A.1.1–A.1.5、A.1.10、A.1.11、A.1.15、A.1.20–A.1.22、A.1.24、A.3.2。
+
+| 列號 | ast-grep 規則 | 乾的範圍 | 論文對應節 | 為什麼沒用 | 加入日期與依據 |
+|---|---|---|---|---|---|
+| A-1 | `arid.yml` 呼叫鏈的根接收者是 `Log`、`Timber`、`logger`、`log` 的呼叫(含 `Timber.tag(T).d(…)`),或裸呼叫 `println`、`print`、`.printStackTrace()` | 整個呼叫(含跨行引數與尾隨 lambda) | 論文附錄 A.1.1 | log 內容換了沒有測試會在意,改它只會產生沒人要補測試的存活 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.1 |
+| A-2 | `arid.yml` 沒有接收者的 `require`、`check`、`assert`、`requireNotNull`、`checkNotNull`、`error` 呼叫 | 整個呼叫 | 論文附錄 A.1.5 | 斷言與前置條件本身是給開發者的檢查,換掉它不代表功能需求少了 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.5 |
+| A-3 | `arid.yml` `BuildConfig.DEBUG` 這個引用本身;條件恰好就是 `BuildConfig.DEBUG` 的整個 `if` | 那個引用;或那整個 if | 論文附錄 A.1.5(除錯碼) | 除錯專用的程式只在除錯版跑,測試不該為它寫 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.5(除錯碼) |
+| A-4 | `arid.yml` `delay(…)`、`withTimeout(…)`、`withTimeoutOrNull(…)` 呼叫 | 整個呼叫(陳述本身也乾,SBR 不刪 delay) | 論文附錄 A.1.4 | 時間長短的壞法多半只讓測試變慢或掛住,單元測試分不出 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.4 |
+| A-5 | `arid.yml` 根接收者是 `Trace`、`FirebaseAnalytics`、`FirebaseCrashlytics`、`analytics` 的呼叫 | 整個呼叫 | 論文附錄 A.1.3 | 監控與追蹤不影響功能,測試不驗它 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.3 |
+| A-6 | `arid.yml` `ArrayList`、`HashMap`、`StringBuilder` 建構呼叫只有一個引數、而且是整數字面值或算術式時的那個引數 | 那個引數 | 論文附錄 A.1.2 | 容量預配只影響效能,換了行為一樣 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.2 |
+| A-7 | `arid.yml` `override fun equals`、`hashCode`、`toString` 的函式本體 | 整個函式本體 | 論文附錄 A.1.21 | 樣板方法多半是機械寫法,存活多是等價 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.21 |
+| A-8 | `arid.yml` 一邊是 `null` 字面值的相等比較 | 整個比較 | 論文附錄 A.1.10 | 跟 null 比較換掉多半編不過(破壞智慧轉型)或只是防呆 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.10 |
+| A-9 | `arid.yml` `$X.size`、`$X.length` 跟 `0` 的比較或相等 | 整個比較 | 論文附錄 A.1.20 | 集合是不是空的多半另有分支處理,換了常是等價 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.20 |
+| A-10 | `arid.yml` `if ($X.isEmpty()) return <空容器>`,空容器限 `emptyList()`、`emptyMap()`、`emptySet()`、`listOf()`、`mapOf()`、`setOf()`、`""` | 整個 if | 論文附錄 A.1.22 | 提早回傳空容器跟不提早回傳結果一樣(後面照樣算出空的),換了是等價 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.22 |
+| A-11 | `arid.yml` `coerceIn`、`coerceAtLeast`、`coerceAtMost`、`minOf`、`maxOf` 的引數 | 整個引數清單 | 論文附錄 A.1.24 | 取界的邊界值多半是防呆,測試難以分辨 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.24 |
+| A-12 | `arid.yml` 運算元是浮點字面值的比較 | 整個比較 | 論文附錄 A.1.11 | 浮點邊界換了多半分不出 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.11 |
+| A-13 | `arid.yml` `.flush()`、`.close()` 陳述 | 整個陳述 | 論文附錄 A.1.15 | 刪掉 flush 或 close 單元測試多半分不出(資源洩漏不在單元測試的範圍) | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.15 |
+| A-14 | `arid.yml` `@Module` 類別本體、`@Provides`/`@Binds` 函式本體(註記可在上一行) | 整個類別本體或函式本體 | 論文附錄 A.3.2 | 依賴注入的接線在測試裡會被假實作換掉 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.3.2 |

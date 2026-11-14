@@ -1,0 +1,284 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index dc478926b104bd07b9c7947120614cb9abb0cb2e..e88412834c2e291e7a3199a2916f48c8ec8ca84f 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -144238,20 +144238,22 @@ def t_choice_waive():
+         check("S13 理由沒寫 <等價|不是需求|不適用>: 開頭 → rc 2", r.returncode == 2, f"rc={r.returncode} {r.stderr[-300:]}")
+         r = waive(_ck_loc(2), "不適用:型別不合換了編不過不是需求")
+         check("S13 定位指到乾節點那一行 → rc 2", r.returncode == 2 and "乾節點" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
+         r = waive(f"{_CHOICE_MAIN}:2", "不適用:型別不合換了編不過不是需求")
+         check("S13 定位不是改到的選擇點行 → rc 2", r.returncode == 2, f"rc={r.returncode} {r.stderr[-300:]}")
+         r = waive(_ck_loc(1), "不適用:型別不合換了編不過不是需求")
+         wv = _j.loads((Path(root) / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8"))["waivers"] if r.returncode == 0 else []
+         fp = m._choice_fp(_CHOICE_MAIN, src.split("\n"), 5)
+         check("S13 放行檔多一筆 choice:<file>:<fp>(行指紋,不是行號)", r.returncode == 0 and [w["key"] for w in wv] == [f"choice:{_CHOICE_MAIN}:{fp}"]
+               and wv[0].get("origin") == "ai", f"rc={r.returncode} {r.stderr[-300:]} {wv}")
++        check("S13 r2 H2 AI 放的選擇點放行:提示照實講推送前小結的選擇點那一行與 doctor 會列", "推送前小結(選擇點那一行)與 lumos doctor" in r.stdout,
++              r.stdout[-400:])
+         wev = _ck_gov(root, gate="lint-new", kind="waived")
+         check("S13 放行事件帶列號與外層宣告(gov --stats 依 (列號, 外層宣告) 數乾節點候選,論文 3.1)", len(wev) == 1 and wev[0].get("scope") == "choice-kill"
+               and wev[0].get("row") == "C-7" and str(wev[0].get("decl", "")).startswith("fun load()") and wev[0].get("label") == "不適用", str(wev)[:400])
+         subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
+         subprocess.run(["git", "commit", "-qm", "放行"], cwd=root, capture_output=True)
+         log = tmp / "run.log"
+         r = _ck_run(root, fake, runlog=log)
+         check("S13 choice-kill 視放行的那一行已處置(不跑、不記)、rc 0", r.returncode == 0 and not [x for x in _ck_log(log) if x[1] != "base"]
+               and not _ck_gov(root, kind="choice-kill"), f"rc={r.returncode} {_ck_log(log)} {r.stdout[-300:]} {r.stderr[-300:]}")
+     finally:
+@@ -144894,36 +144896,40 @@ def t_choice_kill_rerun_rules():
+     x = {"file": _CHOICE_MAIN, "fp": "f" * 16, "line": 5, "status": "mutant"}
+     key = (x["file"], x["fp"])
+ 
+     def pick(verdict, sha):
+         todo, carried, _done, _nu = m._choice_kill_pick({"lines": [x]}, {key: [{"verdict": verdict, "tests_sha": "S1"}]}, set(), set(), sha, None)
+         return [y["line"] for y in todo], carried
+     check("G3 no_result、守的測試沒變 → 照樣重跑(不帶過去)", pick("no_result", "S1") == ([5], {}), str(pick("no_result", "S1")))
+     check("G3 ★對照★ survived、守的測試沒變 → 帶過去不重跑", pick("survived", "S1") == ([], {key: "survived"}), str(pick("survived", "S1")))
+     check("G3 ★對照★ survived、守的測試變了 → 重跑", pick("survived", "S2") == ([5], {}), "")
+     t = [{"plat": "kotlin-junit", "name": "alphaCase"}]
+-    check("G3 守的測試雜湊:同名測試、所在檔物件編號不同 → 雜湊不同", m._choice_tests_sha(t, [["alphaCase", "b1"]]) != m._choice_tests_sha(t, [["alphaCase", "b2"]]))
+-    check("G3 查不到物件編號(空字串)→ 只算名字(跟不給一樣)", m._choice_tests_sha(t, [["alphaCase", ""]]) == m._choice_tests_sha(t))
++    check("G3 守的測試雜湊:同名測試、所在檔物件編號不同 → 雜湊不同",
++          m._choice_tests_sha(t, [["kotlin-junit", "alphaCase", "b1"]]) != m._choice_tests_sha(t, [["kotlin-junit", "alphaCase", "b2"]]))
++    # r2 H1 改:查不到不再只算名字,記「?」、雜湊尾端帶標記(_choice_kill_pick 一律重跑;t_choice_kill_test_files_in_test_paths 守)
++    check("G3 r2 查不到物件編號(?)→ 雜湊帶不明標記", m._choice_tests_sha(t, [["kotlin-junit", "alphaCase", "?"]]).endswith("?"))
+     root, fake = _ck_repo(1, {"alphaCase": {}, "bravoCase": {}})
+     tmp = Path(tempfile.mkdtemp(prefix="gctl-ckrr-"))
++    tt2 = [{"plat": "kotlin-junit", "name": "alphaCase"}, {"plat": "kotlin-junit", "name": "bravoCase"}]
++    plats = {"kotlin-junit": {"root": Path(root), "profile": {"exts": {".kt"}}}}
+     try:
+         import time as _t
+         calls, real_git = [], m._lens_git
+         m._lens_git = lambda *a, **k: calls.append(a) or real_git(*a, **k)
+         try:
+-            got, complete = m._choice_test_blobs(root, "HEAD", ["alphaCase", "bravoCase"], deadline=_t.monotonic() - 1)
++            got, complete = m._choice_test_blobs(root, "HEAD", tt2, plats, deadline=_t.monotonic() - 1)
+         finally:
+             m._lens_git = real_git
+-        check("G3 r4 時限已用完 → 一次 git 都不跑、物件編號空字串、回報沒查完", complete is False and all(b == "" for _n, b in got) and not calls,
++        check("G3 r4 時限已用完 → 一次 git 都不跑、記不明標記、回報沒查完", complete is False and all(b == "?" for _p, _n, b in got) and not calls,
+               f"{got} {calls}")
+-        got, complete = m._choice_test_blobs(root, "HEAD", ["alphaCase"], deadline=_t.monotonic() + 30)
+-        check("G3 ★對照★ 時限內 → 查到測試檔的物件編號", complete is True and len(got[0][1]) == 40, str(got))
++        got, complete = m._choice_test_blobs(root, "HEAD", tt2[:1], plats, deadline=_t.monotonic() + 30)
++        check("G3 ★對照★ 時限內 → 查到測試檔的物件編號", complete is True and len(got[0][2]) == 40, str(got))
+         log = tmp / "run.log"
+         r = _ck_run(root, fake)
+         check("G3 前置:兩支都綠 → survived、rc 1", r.returncode == 1, f"rc={r.returncode} {r.stderr[-300:]}")
+         vt = Path(root) / "app/src/test/java/x/VmTest.kt"
+         vt.write_text(_CK_KT_TEST.replace("@@EXTRA@@", "    // 補強:多驗一個邊界(測試名不變)\n"), encoding="utf-8")
+         subprocess.run(["git", "add", str(vt)], cwd=root, capture_output=True)
+         subprocess.run(["git", "commit", "-qm", "補強既有測試"], cwd=root, capture_output=True)
+         r = _ck_run(root, fake, runlog=log)
+         ran = sorted({x2[1] for x2 in _ck_log(log) if x2[1] != "base"})
+         check("G3 原地補強既有測試(名字不變、內容變了)再跑 → 存活那行重跑", ran == ["1"], f"{ran} {r.stdout[-400:]}")
+@@ -145360,20 +145366,209 @@ def t_choice_ledger_write_semantics():
+     chk = Path(GRAPHCTL).resolve().parents[1] / "configs" / "ast-grep" / "kotlin-android" / "check.py"
+     nob = _lwt_nogit_path(tempfile.mkdtemp(prefix="gctl-nosg-"))
+     env = dict(_os_mod.environ, PATH=str(nob))
+     r = subprocess.run([sys.executable, str(chk), "--catalog-only", "--sg", str(sg)], capture_output=True, text=True, env=env, timeout=300)
+     check("G12 ③PATH 沒有 ast-grep、帶 --sg → --catalog-only 照跑選擇點樣本(不印沒檢查到)", "沒檢查到" not in r.stdout and "型錄問題" in r.stdout,
+           r.stdout[-400:] + r.stderr[-200:])
+     r = subprocess.run([sys.executable, str(chk), "--catalog-only", "--sg"], capture_output=True, text=True, env=env, timeout=120)
+     check("G12 ③--sg 後面沒給路徑 → rc 2", r.returncode == 2 and "--sg" in r.stderr, r.stderr[-200:])
+ 
+ 
++# ── 改動選擇點代碼審第二輪修補(governance/review-reports/code-改動選擇點/r2-intake.md 的 H1 到 H3)──
++# 判準來源:各席報告的輸入與兩版證據(正確性 c1 c2、邊界 b1 b2、資源 r1 r2、合約 k1、通才 g1 g2、架構對齊 a1);預期是席位寫的預期或人算的例子。
++
++def _ckt_repo(files):
++    """臨時 git repo(檔 {路徑: 內容})、提交一次 → (根, 提交函式 commit({路徑: 內容}) → 新 HEAD)。"""
++    root = Path(tempfile.mkdtemp(prefix="gctl-ckt-"))
++
++    def g(*a):
++        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t.t", *a], cwd=root, capture_output=True, text=True)
++
++    def commit(fs):
++        for p, c in fs.items():
++            (root / p).parent.mkdir(parents=True, exist_ok=True)
++            (root / p).write_text(c, encoding="utf-8")
++        g("add", "-A")
++        g("commit", "-qm", "c", "--allow-empty")
++        return g("rev-parse", "HEAD").stdout.strip()
++    g("init", "-q")
++    commit(files)
++    return root, commit
++
++
++def t_choice_kill_test_files_in_test_paths():
++    """[代碼審 code-改動選擇點 r2 H1 c1 b1 r2 k1 g2] 守的測試雜湊只看測試路徑裡含那支測試名(整個字)的檔、同名測試在多支測試檔都收、
++    以 (平台, 測試名) 為鍵、查不完或找不到標「?」並一律重跑。輸入照席位:計劃筆記 docs/p/plan.md 寫 [test:alphaCase]、測試在
++    feature/src/test/…(排在 docs 後面);正式碼裡有 alphaCaseLabel(測試名是它的子字串);兩個平台 app、lib 各有一支 sameName。
++    預期(席位寫的):只改筆記 → 雜湊不變;只補強測試 → 雜湊變;改正式碼 → 不變;改 lib 那支 → 雜湊變、app 那筆不變;查詢逾時 → 存活的行照樣重跑、
++    推送端不印「另一組守的測試」。翻紅釘:取全樹第一個含測試名的檔 → 前三條紅;只取一支定義檔 → 「第二支測試檔」紅;鍵只用測試名 → 兩平台那條紅;
++    逾時記空字串或沒標記也帶過去 → 逾時那幾條紅。"""
++    import time as _t
++    m = _load_lumos_inproc()
++    one = {"kotlin-junit": {"root": None, "profile": {"exts": {".kt"}}, "profile_name": "kotlin-junit"}}
++    t = [{"plat": "kotlin-junit", "name": "alphaCase"}]
++    test_kt = "package x\n\nclass VmTest {\n    @Test fun alphaCase() {}\n@@X@@}\n"
++    root, commit = _ckt_repo({"docs/p/Projects/plan.md": "- [S1] 當開頁 應 顯示 [test:alphaCase]\n",
++                              "feature/src/test/java/x/VmTest.kt": test_kt.replace("@@X@@", "")})
++    roots = [root]
++    try:
++        one["kotlin-junit"]["root"] = root
++
++        def sha(at):
++            got, _c = m._choice_test_blobs(root, at, t, one, deadline=_t.monotonic() + 30)
++            return m._choice_tests_sha(t, got)
++        s0 = sha(commit({}))
++        s1 = sha(commit({"docs/p/Projects/plan.md": "- [S1] 當開頁 應 顯示輸入框 [test:alphaCase]\n"}))
++        check("H1 ①計劃筆記在 docs/、測試在 feature/src/test/(排在 docs 後面):只改筆記 → 雜湊不變", s1 == s0, f"{s0} {s1}")
++        s2 = sha(commit({"feature/src/test/java/x/VmTest.kt": test_kt.replace("@@X@@", "    // 補強:多驗一個邊界\n")}))
++        check("H1 ①只補強測試(名字不變)→ 雜湊變", s2 != s1, f"{s1} {s2}")
++        s3 = sha(commit({"feature/src/test/java/x/More.kt": "package x\n\nclass More {\n    fun alphaCase() {}\n}\n"}))
++        check("H1 同名測試在第二支測試檔也出現 → 收進來(雜湊變)", s3 != s2, f"{s2} {s3}")
++        s4 = sha(commit({"feature/src/test/java/x/More.kt": "package x\n\nclass More {\n    fun alphaCase() { check() }\n}\n"}))
++        check("H1 ★對照★ 改第二支測試檔 → 雜湊變(不是只取第一支)", s4 != s3, f"{s3} {s4}")
++        s5 = sha(commit({"feature/src/test/java/x/Helper.kt": "package x\n\nval alphaCaseHelper = 1\n"}))
++        check("H1 測試路徑裡只有 alphaCaseHelper(測試名是它的子字串)→ 不算定義檔、雜湊不變", s5 == s4, f"{s4} {s5}")
++        got, _c = m._choice_test_blobs(root, "HEAD", t, one, deadline=_t.monotonic() + 30)
++        check("H1 清單形狀 [平台, 測試名, 所在檔物件編號(多支排序後用 + 接)]", len(got) == 1 and got[0][:2] == ["kotlin-junit", "alphaCase"]
++              and len(got[0][2].split("+")) == 2 and got[0][2].split("+") == sorted(got[0][2].split("+")), str(got))
++        root2, commit2 = _ckt_repo({"app/src/main/java/x/Vm.kt": "package x\n\nval alphaCaseLabel = 1\n",
++                                    "feature/src/test/java/x/VmTest.kt": test_kt.replace("@@X@@", "")})
++        roots.append(root2)
++        one["kotlin-junit"]["root"] = root2
++
++        def sha2(at):
++            got2, _c = m._choice_test_blobs(root2, at, t, one, deadline=_t.monotonic() + 30)
++            return m._choice_tests_sha(t, got2)
++        p0 = sha2(commit2({}))
++        p1 = sha2(commit2({"app/src/main/java/x/Vm.kt": "package x\n\nval alphaCaseLabel = 2\n"}))
++        check("H1 ②測試名是正式碼裡另一個字的子字串(alphaCaseLabel,排在測試檔前面):改正式碼 → 雜湊不變", p1 == p0, f"{p0} {p1}")
++        p2 = sha2(commit2({"app/src/main/java/x/Vm.kt": "package x\n\nfun alphaCase() = 3\n"}))
++        check("H1 ②正式碼裡有同名函式(整個字)也不算:不在測試路徑 → 雜湊不變", p2 == p0, f"{p0} {p2}")
++        two_t = [{"plat": "app", "name": "sameName"}, {"plat": "lib", "name": "sameName"}]
++        kt = "package x\n\nclass T {\n    @Test fun sameName() {}\n@@X@@}\n"
++        root3, commit3 = _ckt_repo({"app/src/main/java/x/A.kt": "package x\n", "lib/src/main/java/x/L.kt": "package x\n",
++                                    "app/src/test/java/x/AT.kt": kt.replace("@@X@@", ""), "lib/src/test/java/x/LT.kt": kt.replace("@@X@@", "    // lib\n")})
++        roots.append(root3)
++        plats = {p: {"root": root3 / p, "profile": {"exts": {".kt"}}, "profile_name": "kotlin-junit"} for p in ("app", "lib")}
++
++        def two(at):
++            got3, _c = m._choice_test_blobs(root3, at, two_t, plats, deadline=_t.monotonic() + 30)
++            return {(a, b): c for a, b, c in got3}, m._choice_tests_sha(two_t, got3)
++        b0, h0 = two(commit3({}))
++        check("H1 ③兩平台同名:各自只收自己根底下的測試檔(兩筆物件編號不同)", b0.get(("app", "sameName")) != b0.get(("lib", "sameName"))
++              and "?" not in "".join(b0.values()), str(b0))
++        b1, h1 = two(commit3({"lib/src/test/java/x/LT.kt": kt.replace("@@X@@", "    // 補強 lib\n")}))
++        check("H1 ③只補強 lib 那支 → 雜湊變、app 那筆不變", h1 != h0 and b1.get(("app", "sameName")) == b0.get(("app", "sameName"))
++              and b1.get(("lib", "sameName")) != b0.get(("lib", "sameName")), f"{b0} {b1}")
++        b2, h2 = two(commit3({"app/src/test/java/x/AT.kt": kt.replace("@@X@@", "    // 補強 app\n")}))
++        check("H1 ③只補強 app 那支 → 雜湊變、lib 那筆不變", h2 != h1 and b2.get(("lib", "sameName")) == b1.get(("lib", "sameName")), f"{b1} {b2}")
++        # ④查不完:時限用完 / git grep 逾時 → 每支記「?」、雜湊帶標記、存活的行一律重跑、推送端不印另一組守的測試
++        one["kotlin-junit"]["root"] = root
++        calls, real_git = [], m._lens_git
++        m._lens_git = lambda *a, **k: calls.append(a) or real_git(*a, **k)
++        try:
++            got, complete = m._choice_test_blobs(root, "HEAD", t, one, deadline=_t.monotonic() - 1)
++        finally:
++            m._lens_git = real_git
++        check("H1 ④時限已用完 → 一次 git 都不跑、記「?」(不是空字串)、回報沒查完", complete is False and got == [["kotlin-junit", "alphaCase", "?"]]
++              and not calls, f"{got} {calls}")
++        real_dl = m._lens_git_dl
++        m._lens_git_dl = lambda rr, *a, **k: None if a and a[0] == "grep" else real_dl(rr, *a, **k)
++        try:
++            got_to, complete_to = m._choice_test_blobs(root, "HEAD", t, one, deadline=_t.monotonic() + 30)
++        finally:
++            m._lens_git_dl = real_dl
++        check("H1 ④git grep 逾時 → 記「?」、回報沒查完", complete_to is False and got_to == [["kotlin-junit", "alphaCase", "?"]], str(got_to))
++        got_nf, complete_nf = m._choice_test_blobs(root, "HEAD", [{"plat": "kotlin-junit", "name": "nowhereCase"}], one, deadline=_t.monotonic() + 30)
++        check("H1 測試路徑裡找不到那支測試 → 記「?」(查完了)", complete_nf is True and got_nf == [["kotlin-junit", "nowhereCase", "?"]], str(got_nf))
++        marked = m._choice_tests_sha(t, got)
++        x = {"file": _CHOICE_MAIN, "fp": "f" * 16, "line": 5, "status": "mutant"}
++        key = (x["file"], x["fp"])
++
++        def pick(old, new):
++            todo, carried, _d, _nu = m._choice_kill_pick({"lines": [x]}, {key: [{"verdict": "survived", "tests_sha": old}]}, set(), set(), new, None)
++            return [y["line"] for y in todo], carried
++        check("H1 ④這次帶標記、上次同一個帶標記的雜湊 → 照樣重跑", pick(marked, marked) == ([5], {}), str(pick(marked, marked)))
++        full = m._choice_tests_sha(t, m._choice_test_blobs(root, "HEAD", t, one, deadline=_t.monotonic() + 30)[0])
++        check("H1 ④上次帶標記、這次查完 → 重跑", pick(marked, full) == ([5], {}), str(pick(marked, full)))
++        check("H1 ★對照★ 兩次都查完而且一樣 → 帶過去不重跑", pick(full, full) == ([], {key: "survived"}), str(pick(full, full)))
++        ev = {"verdict": "killed", "tests_sha": marked, "via": "run"}
++        other = full[:-1] + ("1" if full[-1] == "0" else "0")
++        check("H1 ④推送端:紀錄或這次帶標記 → 不印另一組守的測試",
++              m._choice_push_stale_tests([x], {key: [ev]}, set(), full) == 0
++              and m._choice_push_stale_tests([x], {key: [dict(ev, tests_sha=full)]}, set(), marked) == 0, "")
++        check("H1 ★對照★ 推送端:兩邊都查完而且不同 → 照印", m._choice_push_stale_tests([x], {key: [dict(ev, tests_sha=full)]}, set(), other) == 1, "")
++    finally:
++        _ck_cleanup(*roots)
++
++
++def t_lint_waive_choice_ai_summary():
++    """[代碼審 code-改動選擇點 r2 H2 c2 b2 g1 a1] AI 放的選擇點放行:推送前小結有自己的一行(照情境段那行),不算進新增告警那行;doctor 照列。
++    輸入照席位:放行檔一筆 choice:<檔>:<指紋>、origin ai、沒 ack。預期:小結印「選擇點有 1 筆 AI 放行還沒人看過」、不印新增告警那行。
++    翻紅釘:小結不印選擇點那行 → 紅;選擇點混回新增告警 → 「不印新增告警那行」紅。"""
++    import shutil
++    root, commit = _tqg_gate_repo()
++    m = _tqg_module()
++    try:
++        ok, err = m._lint_waivers_add(root, "choice:app/A.kt:0123456789abcdef", "choice-kill", "app/A.kt", "不適用:型別不合換了編不過不是需求", "t", origin="ai")
++        check("H2 前置:AI 的選擇點放行寫得進放行檔", ok, str(err))
++        commit({".lumos/lint-waivers.json": (root / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8")})
++        mb = _e2e_tgit(root, "rev-parse", "main").strip()
++        h = _e2e_tgit(root, "rev-parse", "HEAD").strip()
++        _blk, lv = _tqg_step(root, f"{mb}..{h}")
++        say = _tqg_say(m._cl_say_lint_waive_notes)
++        check("H2 推送前小結印選擇點那一行", (lv or {}).get("ai_pending_choice") == 1 and "選擇點有 1 筆 AI 放行還沒人看過" in say, str(lv)[:200] + say)
++        check("H2 ★對照★ 不算進新增告警那一行", "新增告警閘有" not in say and "情境題有" not in say, say)
++        d = _e2e_run(root, "doctor", env=_e2eg_env()).stdout
++        check("H2 doctor 印選擇點放行裡 1 條是 AI 放的", "選擇點放行裡 1 條是 AI 放的" in d, d[-800:])
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++
++
++def t_choice_scan_batch_budget():
++    """[代碼審 code-改動選擇點 r2 H3 r1] 推送前那一圈:先整批掃一次(整批失敗才逐檔),掃描與挑壞法各自計時。輸入照資源席:1400 支各一行選擇點的小檔;
++    掃描把推送時限用光的情況(假掃描在回來前睡到時限過了;時限調成 5 秒)。預期:1400 支都判得到(不是全部算不出來);掃完的檔照判、不被丟成「挑壞法超過時限」。
++    翻紅釘:每支檔各開一個 ast-grep → 1400 支那條紅(時限內開不完);挑壞法跟掃描共用時限 → 第二條紅。一支會爆的檔加一支小檔照判由 t_choice_scan_per_file 守。"""
++    import time as _t
++    small = _choice_wrap("        if (a > b) go()\n")
++    hits = [_choice_hit(small, "C-1", "a > b", mv={"A": "a", "B": "b"})]
++
++    def scan(root, fake, **patch):
++        def g(*a):
++            return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True).stdout.strip()
++        at, mb = g("rev-parse", "HEAD"), g("rev-parse", "main")
++        (st, got), _out = _ckp_inproc(root, fake, lambda m: m._choice_push_scan(root, at, f"{mb}..{at}"), **patch)
++        return st, (got[0] if st == "ok" else {"lines": [], "unverified": [("?", str(got)[:200])]})
++    extra = {f"app/src/main/java/x/T{i}.kt": (small, hits) for i in range(1400)}
++    root, fake = _ckp_repo_src(small, hits, n_extra_files=extra)
++    try:
++        st, res = scan(root, fake, _KT_SIT_BUDGET=8.0)
++        n = sum(1 for x in res["lines"] if x["status"] == "mutant")
++        check("H3 推送前那一圈:1400 支小檔(加 Vm.kt)在時限內判得到(整批一次掃)", st == "ok" and n == 1401 and not res["unverified"],
++              f"{st} {n} {res['unverified'][:2]}")
++    finally:
++        _ck_cleanup(root, fake)
++    root, fake = _ckp_repo_src(small, hits)
++    try:
++        real_scan = _load_lumos_inproc()._choice_scan
++
++        def slow_scan(rr, texts, timeout):
++            r = real_scan(rr, texts, timeout)
++            _t.sleep(timeout + 0.3)   # 掃描把推送時限用光(timeout 是掃描拿到的剩餘時間)
++            return r
++        st, res = scan(root, fake, _KT_SIT_BUDGET=5.0, _choice_scan=slow_scan)
++        check("H3 掃描用光推送時限 → 掃完的檔照判(挑壞法有自己的時限)", st == "ok" and any(x["status"] == "mutant" for x in res["lines"])
++              and not res["unverified"], f"{st} {res['unverified'][:2]}")
++    finally:
++        _ck_cleanup(root, fake)
++
++
+ def _ckp_no_ast_grep_push():
+     """t_choice_no_ast_grep 的推送前那一道那半(S6):PATH 沒有 ast-grep、改了 .kt 正式碼、其他條件都符合 → 不擋、記 unverified、印安裝指令。"""
+     ck, fk = _ck_repo(1, {})
+     try:
+         _ckp_commit(ck, [])
+         nob = _lwt_nogit_path(tempfile.mkdtemp(prefix="gctl-nosg-"))
+         r = _ckp_push(ck, fk, path=nob)
+         uv = _ck_gov(ck, kind="unverified")
+         check("S6 推送前那一道:PATH 沒有 ast-grep → 不擋(rc 0)、提醒、印安裝指令、記 unverified",
+               r.returncode == 0 and "ast-grep" in r.stdout and "install" in r.stdout and len(uv) == 1 and uv[0].get("hard") is False,

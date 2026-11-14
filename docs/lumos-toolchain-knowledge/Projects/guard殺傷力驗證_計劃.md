@@ -29,6 +29,12 @@ decisions:
     why_chosen: PIT 把 TIMED_OUT 記 killed(變異致掛=被接住);hydration 為邊緣便利換一片 binary/untracked 新風險面;lockfile 唯一命名已防碰撞、stale 死鎖反成新風險
     decided: 2026-07-10
     valid: true
+  - content: d1「不做自動變異生成」限定在合約殺傷力配方;改動選擇點改由 Projects/改動選擇點都要有需求守住_計劃 依 Google 差異式變異測試論文以 ast-grep 語法樹自動產生壞法(每行一個、乾節點規則壓掉等價與誤報、存活交人處置),判法仍是 cmd_guard_kill
+    id: d4
+    context: 使用者 2026-11-13 方向:改動中的語法必定代表需求、要引得出規格,照論文實作;設計審兩輪被文字近似打穿後 2026-11-14 裁改用 ast-grep 語法樹
+    why_chosen: 論文 https://arxiv.org/pdf/2102.11378 的規模實證(2.3、4.1)與乾節點規則(3.1,有用比例 15% 到 89%)把等價與誤報壓到可處置的量;語言知識放在工具鏈 configs/ast-grep/ 的規則,lumos 本體仍零依賴
+    decided: 2026-11-14
+    valid: true
 related:
   - "[[Projects/社群演算法補強_調研]]"
   - "[[Systems/check-t-sentinel]]"

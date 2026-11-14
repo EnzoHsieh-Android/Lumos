@@ -219,14 +219,46 @@ def dt_evidence(cell):
     return dt_evidence_parse(cell)[1]
 
 
+def _table_header(sec, id_re, need, label):
+    """一節裡的表頭 → ({欄名: 位置}, None) 或 (None, 問題):第一個以「| 」開頭、不是資料列(id_re)的行;缺 need 裡的欄報缺哪幾欄。
+    決策表、選擇點表、乾節點規則共用(section_table)。"""
+    for ln in sec.splitlines():
+        if ln.startswith("| ") and not re.match(id_re, ln):
+            cols = {name: i for i, name in enumerate(_cells(ln))}
+            missing = [n for n in need if n not in cols]
+            return (None, f"{label}表頭缺欄:" + "、".join(missing)) if missing else (cols, None)
+    return None, f"找不到{label}表頭"
+
+
 def _dt_header(dt):
     """決策表表頭 → {欄名: 位置};缺欄回 (None, 問題)。"""
-    for ln in dt.splitlines():
-        if ln.startswith("| ") and not re.match(r"^\|\s*D-\d+\s*\|", ln):
-            cols = {name: i for i, name in enumerate(_cells(ln))}
-            missing = [n for n in _DT_HEADER if n not in cols]
-            return (None, "決策表表頭缺欄:" + "、".join(missing)) if missing else (cols, None)
-    return None, "找不到決策表表頭"
+    return _table_header(dt, _DT_ROW_RE, _DT_HEADER, "決策表")
+
+
+_DT_ROW_RE = r"^\|\s*D-\d+\s*\|"
+
+
+def section_table(text, title, id_re, need, label, tag):
+    """型錄依節名讀一張表 → (表頭 {欄名: 位置} 或 None, [(列號, 格子清單)], 問題 [(列號或 tag, 原因)])。
+    節從「## <title>」到下一個「## 」(_section 同一套);表頭照 _table_header 依欄名取欄(欄位順序可以換);資料列是 id_re 對得上的行,
+    欄位數跟表頭不同的列報出來、不收。情境決策表(dt_table)、〈選擇點表〉與〈乾節點規則〉(choice_tables)都走這一支
+    ([[Projects/改動選擇點都要有需求守住_計劃]]〈用詞〉讀表:dt_table 一般化成依節名讀,決策表行為不變)。"""
+    sec = _section(text, title)
+    if sec is None:
+        return None, [], [(tag, f"找不到〈{title}〉節")]
+    hdr, herr = _table_header(sec, id_re, need, label)
+    if herr:
+        return None, [], [(tag, herr)]
+    rows, probs = [], []
+    for ln in sec.splitlines():
+        if not re.match(id_re, ln):
+            continue
+        c = _cells(ln)
+        if len(c) != len(hdr):
+            probs.append((c[0], f"{label}欄位數 {len(c)},應為 {len(hdr)}"))
+            continue
+        rows.append((c[0], c))
+    return hdr, rows, probs
 
 
 def dt_row(get):
@@ -258,23 +290,11 @@ def dt_table(text):
     同一輪順手帶出處(給盲判材料,範圍 4):每列多 refs(來源格展開成網址)與 check_refs(對應檢查在型錄主表的 id、名稱、來源、網址),
     縮寫照〈來源縮寫〉表;主表或縮寫表找不到時那幾格留空、不報錯(讀得懂讀不懂歸這支的問題清單與 catalog_problems;
     代碼審 code-android情境題盲判 r1 架構對齊 F6:原本另有 dt_sources 再走一輪決策表)。"""
-    i = text.find("\n## 情境決策表")
-    if i < 0:
-        return [], [("<決策表>", "找不到〈情境決策表〉節")]
-    j = text.find("\n## ", i + 5)
-    dt = text[i:j if j >= 0 else len(text)]
-    hdr, herr = _dt_header(dt)
-    if herr:
-        return [], [("<決策表>", herr)]
-    rows, probs, seen = [], [], []
-    for ln in dt.splitlines():
-        if not re.match(r"^\|\s*D-\d+\s*\|", ln):
-            continue
-        c = _cells(ln)
-        did = c[0]
-        if len(c) != len(hdr):
-            probs.append((did, f"決策表欄位數 {len(c)},應為 {len(hdr)}"))
-            continue
+    hdr, cells, probs = section_table(text, "情境決策表", _DT_ROW_RE, _DT_HEADER, "決策表", "<決策表>")
+    if hdr is None:
+        return [], probs
+    rows, seen = [], []
+    for did, c in cells:
         seen.append(did)
         row, rp = dt_row(lambda name, c=c: c[hdr[name]])
         probs += [(did, p) for p in rp]
@@ -466,8 +486,10 @@ def _wiring_source_problems(src, rid, why):
     return ["〈接電證據〉出處要是\u3014真跑 日期:檔名\u3015或\u3014查證 日期:網址\u3015"]
 
 
-def catalog_problems(rules=None):
-    """型錄自己的格式檢查(計劃 S3,與第二、三批要的觸發字停用字、出處要求)。不需要 ast-grep。"""
+def catalog_problems(rules=None, sg=None):
+    """型錄自己的格式檢查(計劃 S3,與第二、三批要的觸發字停用字、出處要求)。不需要 ast-grep;
+    〈選擇點表〉〈乾節點規則〉一併檢查(choice_tables:欄位、列號、規則檔對應;choice_sample_problems:樣本命中要 sg,沒給時這一項不報——
+    沒裝 ast-grep 的「沒檢查到」由呼叫端另印,[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 6)。"""
     problems = []
     text = CATALOG.read_text(encoding="utf-8")
     i_dt, i_pend = text.find("\n## 情境決策表"), text.find("\n## 待查證")
@@ -525,6 +547,8 @@ def catalog_problems(rules=None):
             problems.append((r["id"], f"引用出處不全的 {m.group(1)},只准放 rules-unwired/"))
     problems += template_problems(rows)   # 主表只讀一次:把上面讀好的列交過去
     problems += pending_problems(text, rows) + wiring_problems(text, rows) + stats_problems(text, rows, rules)
+    tables, cprobs = choice_tables(text)
+    problems += cprobs + (choice_sample_problems(sg, tables) if sg else [])
     return problems
 
 
@@ -604,6 +628,9 @@ def _stats_expected(text, rows, rules):
     want += [("API 公開名稱", r"- API 決策點:公開名稱 (\d+)", len(api_rows))]
     want += [(f"API 歸屬 {k}", rf"- API 決策點:[^\n]*?{k} (\d+)", sum(1 for x in items if _api_item_kind(x) == k))
              for k in ("D-n", "撞名", "決策不問主表列", "決策不問代碼審", "無決策")]
+    ctabs, _cp = choice_tables(text, rules_dir=False)
+    want += [("選擇點表列數", r"- 選擇點表:(\d+) 列", len(ctabs["choice"])),
+             ("乾節點規則列數", r"- 選擇點表:[^\n]*?乾節點規則:(\d+) 列", len(ctabs["arid"]))]
     want += [("叫不出的單位", r"- 叫不出的壞寫法:(\d+) 個", len(reach_rows))]
     want += [(f"叫不出改由 {k}", rf"- 叫不出的壞寫法:[^\n]*?{k} (\d+)", sum(1 for _a, _b, _c, ro, _w in reach_rows if ro.split(" ")[0] == k))
              for k in ("規則", "範本", "代碼審", "不是寫法")]
@@ -1353,6 +1380,183 @@ _BEHAVIOR_RE = re.compile(r"行為測試或正向約束=([^;]*)")
 _TEMPLATE_VALUE_RE = re.compile(r"範本 (T\d+)")
 TEMPLATE_HEADING_RE = re.compile(r"^## (T\d+)(?:[ \t]|$)")   # 範本檔一組一節的標題;測試端也用這一條
 
+# ── 改動選擇點:〈選擇點表〉與〈乾節點規則〉([[Projects/改動選擇點都要有需求守住_計劃]]〈用詞〉選擇點表、乾節點規則、讀表)──
+# 照 Google 差異式變異測試(論文〈Practical Mutation Testing at Scale〉https://arxiv.org/pdf/2102.11378 ):每列一條 ast-grep 規則
+# (`configs/ast-grep/kotlin-choice/`,規則 id 就是列號),選擇點表每列是論文表 1 那種一對一機械壞法,乾節點規則照論文 3.1、附錄 A。
+# scripts/lumos 經 _kt_pack_check 借 choice_tables 讀表(讀表只有這一套,同 dt_table)。
+CHOICE = Path(__file__).resolve().parent.parent / "kotlin-choice"   # 照這支檔的真實位置找(規則包複本只換 HERE,選擇點規則照讀真的那份)
+CHOICE_TITLE, ARID_TITLE = "選擇點表", "乾節點規則"
+_CHOICE_ROW_RE, _ARID_ROW_RE = r"^\|\s*C-\d+\s*\|", r"^\|\s*A-\d+\s*\|"
+_CHOICE_HEADER = ("列號", "類別", "ast-grep 規則", "錨點", "候選壞法", "型別前提", "需補的 import", "對應決策表", "為什麼行為不同", "出處")
+_ARID_HEADER = ("列號", "ast-grep 規則", "乾的範圍", "論文對應節", "為什麼沒用", "加入日期與依據")
+CHOICE_CATEGORIES = ("AOR", "LCR", "ROR", "UOI", "SBR", "API")          # 論文表 1 的五個運算子 + API 兄弟寫法;順序也是 lumos 洗牌前的基準順序
+CHOICE_ANCHORS = ("運算子", "運算元起始", "陳述起始", "方法名")
+CHOICE_PRECONDITIONS = ("(無)", "運算元有 null 字面值", "運算元是字串")   # 論文 3.2.1 事前擋編不過的壞法;語法樹沒有型別,只能用語法情境近似
+CHOICE_SPECIALS = {"(刪掉)": "delete", "(拿掉呼叫)": "drop_call"}
+_CHOICE_IMPORT_RE = re.compile(r"^`([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)`$")
+_CHOICE_RULE_FILE_RE = re.compile(r"^`([\w-]+\.yml)`")
+_CHOICE_SAMPLE_MARK = re.compile(r"//\s*(HIT|MISS)\s+([\w -]+?)\s*$")
+CHOICE_SYNTAX_RULE = "syntax-error"
+
+
+def choice_rule_ids(rules_dir):
+    """規則目錄 → {規則 id: 檔名};同一檔多份文件以 --- 分隔(同 load_rules 的讀法)。目錄不在回 None。"""
+    d = Path(rules_dir)
+    if not d.is_dir():
+        return None
+    out = {}
+    for f in sorted(d.glob("*.yml")):
+        for doc in re.split(r"^---\s*$", f.read_text(encoding="utf-8"), flags=re.M):
+            m = re.search(r"^id:\s*(\S+)", doc, re.M)
+            if m:
+                out.setdefault(m.group(1), f.name)
+    return out
+
+
+def _choice_candidates(cell):
+    """候選壞法格子 → (樣板清單, 特殊動作 None/delete/drop_call, 問題或 None)。"""
+    s = cell.strip()
+    if s in CHOICE_SPECIALS:
+        return [], CHOICE_SPECIALS[s], None
+    pats = _snippets(s)
+    rest = re.sub(r"`[^`]+`", "", s).replace("、", "").strip()
+    if not pats or rest:
+        return [], None, "候選壞法要寫反引號包住的樣板(用「、」分隔),或「(刪掉)」「(拿掉呼叫)」"
+    return pats, None, None
+
+
+def _choice_row(rid, get):
+    """〈選擇點表〉一列 → (列 dict 或 None, 問題清單)。"""
+    probs = []
+    cat, anchor, pre = get("類別"), get("錨點"), get("型別前提")
+    if cat not in CHOICE_CATEGORIES:
+        probs.append(f"類別要是 {'、'.join(CHOICE_CATEGORIES)} 之一,這裡是「{cat}」")
+    if anchor not in CHOICE_ANCHORS:
+        probs.append(f"錨點要是 {'、'.join(CHOICE_ANCHORS)} 之一,這裡是「{anchor}」")
+    if pre not in CHOICE_PRECONDITIONS:
+        probs.append(f"型別前提要是 {'、'.join(CHOICE_PRECONDITIONS)} 之一,這裡是「{pre}」")
+    cands, special, why = _choice_candidates(get("候選壞法"))
+    if why:
+        probs.append(why)
+    imp = get("需補的 import").strip()
+    m = _CHOICE_IMPORT_RE.match(imp)
+    if imp != "(無)" and not m:
+        probs.append("需補的 import 要寫「(無)」或反引號包住的完整名稱(套件.名稱)")
+    mf = _CHOICE_RULE_FILE_RE.match(get("ast-grep 規則").strip())
+    if not mf:
+        probs.append("ast-grep 規則要以反引號包住的規則檔名開頭(rules-choice/ 底下的 .yml)")
+    if not get("出處").strip():
+        probs.append("出處不准空")
+    if probs:
+        return None, probs
+    return {"id": rid, "category": cat, "rule_file": mf.group(1), "rule": get("ast-grep 規則"), "anchor": anchor,
+            "candidates": cands, "special": special, "precondition": pre, "import": m.group(1) if m else None,
+            "dt": get("對應決策表"), "why": get("為什麼行為不同"), "source": get("出處")}, []
+
+
+def _arid_row(rid, get):
+    """〈乾節點規則〉一列 → (列 dict 或 None, 問題清單)。"""
+    probs = []
+    mf = _CHOICE_RULE_FILE_RE.match(get("ast-grep 規則").strip())
+    if not mf:
+        probs.append("ast-grep 規則要以反引號包住的規則檔名開頭(rules-arid/ 底下的 .yml)")
+    for col in ("乾的範圍", "論文對應節", "為什麼沒用", "加入日期與依據"):
+        if not get(col).strip():
+            probs.append(f"{col}不准空")
+    if probs:
+        return None, probs
+    return {"id": rid, "rule_file": mf.group(1), "rule": get("ast-grep 規則"), "scope": get("乾的範圍"), "paper": get("論文對應節"),
+            "why": get("為什麼沒用"), "added": get("加入日期與依據")}, []
+
+
+def _choice_rules_match(rows, rules_dir, sub, tag):
+    """表的列 ↔ 規則目錄 id 一一對上 → 問題清單:每列的規則檔在、裡面有 id 等於列號的規則;規則目錄裡多出來的 id 也報。"""
+    ids = choice_rule_ids(Path(rules_dir) / sub)
+    if ids is None:
+        return [(tag, f"找不到規則目錄 {sub}/")]
+    out = []
+    for r in rows:
+        if not (Path(rules_dir) / sub / r["rule_file"]).is_file():
+            out.append((r["id"], f"規則檔 {sub}/{r['rule_file']} 不在"))
+        elif ids.get(r["id"]) != r["rule_file"]:
+            out.append((r["id"], f"{r['id']} 在規則檔 {sub}/{r['rule_file']} 裡沒有對應規則(規則 id 要等於列號)"))
+    have = {r["id"] for r in rows}
+    out += [(i, f"規則 {i}({sub}/{f})在型錄沒有對應的列") for i, f in sorted(ids.items()) if i not in have]
+    return out
+
+
+def choice_tables(text, rules_dir=None):
+    """型錄全文 → ({"choice": [選擇點列], "arid": [乾節點列]}, 問題 [(列號或 <選擇點表>/<乾節點規則>, 原因)])。
+    兩節都依節名讀(section_table);列號重複、欄位壞、類別/錨點/型別前提不在固定詞表、候選空白都報;給了 rules_dir
+    (預設 CHOICE)再核列號跟規則檔對得上。scripts/lumos 讀到任何問題就整張表不用(表壞要擋並指出哪一列,S23)。"""
+    rules_dir = CHOICE if rules_dir is None else rules_dir
+    out, probs = {"choice": [], "arid": [], "categories": list(CHOICE_CATEGORIES)}, []
+    for key, title, id_re, need, mk, sub in (("choice", CHOICE_TITLE, _CHOICE_ROW_RE, _CHOICE_HEADER, _choice_row, "rules-choice"),
+                                             ("arid", ARID_TITLE, _ARID_ROW_RE, _ARID_HEADER, _arid_row, "rules-arid")):
+        tag = f"<{title}>"
+        hdr, cells, p = section_table(text, title, id_re, need, title, tag)
+        probs += p
+        if hdr is None:
+            continue
+        seen = set()
+        for rid, c in cells:
+            if rid in seen:
+                probs.append((rid, "列號重複"))
+                continue
+            seen.add(rid)
+            row, rp = mk(rid, lambda name, c=c, hdr=hdr: c[hdr[name]])
+            probs += [(rid, x) for x in rp]
+            if row:
+                out[key].append(row)
+        if not cells:
+            probs.append((tag, f"〈{title}〉一列都沒有"))
+        if rules_dir is not False:
+            probs += _choice_rules_match(out[key], rules_dir, sub, tag)
+    return out, probs
+
+
+def _choice_sample_marks(samples_dir):
+    """樣本檔的行尾標記 → [(檔名, 行號, HIT/MISS, 規則 id)]。"""
+    out = []
+    for f in sorted(Path(samples_dir).glob("*.kt")):
+        for i, ln in enumerate(f.read_text(encoding="utf-8").split("\n"), 1):
+            m = _CHOICE_SAMPLE_MARK.search(ln)
+            if m:
+                out += [(f.name, i, m.group(1), rid) for rid in m.group(2).split()]
+    return out
+
+
+def choice_sample_problems(sg, tables, rules_dir=None):
+    """選擇點與乾節點規則對樣本跑一次(計劃〈範圍〉6)→ 問題清單。樣本在 <rules_dir>/samples/*.kt,行尾 `// HIT <列號…>` 要有那條規則的節點
+    從這一行開始、`// MISS <列號…>` 要沒有;每個選擇點列至少一個 HIT、每個乾節點列至少一個 HIT 與一個 MISS。sg 是 None(沒裝 ast-grep)
+    回一筆「沒檢查到」。"""
+    rules_dir = Path(CHOICE if rules_dir is None else rules_dir)
+    if not sg:
+        return [("<choice-samples>", "選擇點規則樣本沒檢查到(沒裝 ast-grep)")]
+    samples = rules_dir / "samples"
+    got = _choice_scan_lines(sg, rules_dir / "sgconfig.yml", samples)
+    if got is None:
+        return [("<choice-samples>", "選擇點規則掃樣本跑不起來(掃描逾時或 ast-grep 跑不起來)")]
+    marks = _choice_sample_marks(samples)
+    out = [(rid, f"樣本 {f} 第 {ln} 行標 {kind}," + ("規則沒有節點從這一行開始" if kind == "HIT" else "規則卻有節點從這一行開始"))
+           for f, ln, kind, rid in marks if (kind == "HIT") != ((f, rid, ln) in got)]
+    for r in tables.get("choice", []):
+        if not any(k == "HIT" and x == r["id"] for _f, _l, k, x in marks):
+            out.append((r["id"], "樣本沒有這一列的 HIT"))
+    for r in tables.get("arid", []):
+        for k in ("HIT", "MISS"):
+            if not any(kk == k and x == r["id"] for _f, _l, kk, x in marks):
+                out.append((r["id"], f"樣本沒有這一列的 {k}"))
+    return out
+
+
+def _choice_scan_lines(sg, cfg, target):
+    """跑一次選擇點設定 → {(檔名, 規則 id, 節點起始行(1 起))} 或 None(跑不起來、逾時、輸出讀不懂)。"""
+    got = scan_ranges(sg, None, target, config_path=cfg)
+    return None if got is None else {(Path(f).name, rid, a) for rid, f, a, _b in got}
+
+
+
 
 def behavior_value(batch_cell):
     """通電批次格子裡「行為測試或正向約束=」那一段的值(到分號為止);沒有這一段回 None。
@@ -1521,13 +1725,14 @@ def scan(sg, cfg, target):
     return None if got is None else [(rid, f, a) for rid, f, a, _b in got]
 
 
-def scan_ranges(sg, cfg, target):
+def scan_ranges(sg, cfg, target, config_path=None):
     """同 scan,但每筆多回節點的結束行:[(ruleId, file, 起始行, 結束行)]。反查的「規則」改由要看起訖行涵蓋片段那一行
-    (Projects/情境決策點窮舉與壞寫法要叫得出_計劃 範圍 4;既有 scan 的三元組呼叫端不動)。"""
+    (Projects/情境決策點窮舉與壞寫法要叫得出_計劃 範圍 4;既有 scan 的三元組呼叫端不動)。
+    config_path:直接給設定檔路徑(選擇點規則在旁邊的 kotlin-choice/,不在 HERE 底下);沒給照 HERE / cfg。"""
     if _TIMED_OUT[0]:
         return None
     try:
-        r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--json=stream", str(target)],
+        r = subprocess.run([sg, "scan", "--config", str(config_path or (HERE / cfg)), "--json=stream", str(target)],
                            capture_output=True, text=True, cwd=str(HERE), timeout=SCAN_TIMEOUT)
     except subprocess.TimeoutExpired:
         _TIMED_OUT[0] = True
@@ -1623,7 +1828,7 @@ def check(sg):
         problems.append(("<pack>", "id 重複:" + ", ".join(dup)))
     cat_ids, _cat_text = catalog_ids()
     problems += message_problems(rules, cat_ids)
-    problems += catalog_problems(rules)
+    problems += catalog_problems(rules, sg=sg)
     lumos, lumos_why = load_lumos()
     problems += situation_sample_problems(lumos=lumos) if lumos else [("<situation>", "證據樣式自測要載入 scripts/lumos:" + lumos_why)]
     cat_text = CATALOG.read_text(encoding="utf-8")
@@ -1722,29 +1927,41 @@ def check(sg):
     return rules, problems
 
 
+def sg_arg(argv):
+    """--sg <路徑> → (路徑或 None, 錯誤或 None);沒帶 --sg 回 (None, None)。主流程與 --catalog-only 共用
+    (代碼審 code-改動選擇點 r1 a3:--catalog-only 原本只看 PATH,帶了 --sg 也印「沒裝 ast-grep」)。"""
+    if "--sg" not in argv:
+        return None, None
+    i = argv.index("--sg")
+    if i + 1 >= len(argv):
+        return None, "--sg 後面要給 ast-grep 執行檔路徑"
+    return argv[i + 1], None
+
+
 def main(argv):
+    sg, err = sg_arg(argv)
+    if err:
+        print(err, file=sys.stderr)
+        return 2
     if "--catalog-only" in argv:
         rules = load_rules()
         lumos, why = load_lumos()
         text = CATALOG.read_text(encoding="utf-8")
         rows = main_rows(text)
+        # 選擇點規則樣本要真的 ast-grep(帶 --sg 用它,沒帶找 PATH);沒裝只印「沒檢查到」,不算型錄問題
+        sg_c = sg if sg and os.access(sg, os.X_OK) else (None if sg else shutil.which("ast-grep"))
         if lumos:
-            probs = [*catalog_problems(rules), *situation_sample_problems(lumos=lumos), *api_decision_problems(text, rows, lumos=lumos),
+            probs = [*catalog_problems(rules, sg=sg_c), *situation_sample_problems(lumos=lumos), *api_decision_problems(text, rows, lumos=lumos),
                      *bad_snippet_reach_problems(text, rows, rules=rules, lumos=lumos)]
         else:
-            probs = [*catalog_problems(rules), ("<lumos>", "證據樣式自測、API 決策點與反查要載入 scripts/lumos:" + why)]
+            probs = [*catalog_problems(rules, sg=sg_c), ("<lumos>", "證據樣式自測、API 決策點與反查要載入 scripts/lumos:" + why)]
+        if not sg_c:
+            print(f"選擇點規則樣本:沒檢查到(--sg 給的 {sg} 不能執行)" if sg else "選擇點規則樣本:沒檢查到(沒裝 ast-grep)")
         for rid, why in probs:
             print(f"{rid}: {why}")
         print(f"型錄問題 {len(probs)} 個")
         _print_unverified()
         return 1 if probs else 0
-    sg = None
-    if "--sg" in argv:
-        i = argv.index("--sg")
-        if i + 1 >= len(argv):
-            print("--sg 後面要給 ast-grep 執行檔路徑", file=sys.stderr)
-            return 2
-        sg = argv[i + 1]
     sg = sg or shutil.which("ast-grep")   # 不退去找 sg:Linux 上 sg 是切換群組的系統工具
     if not sg or not os.access(sg, os.X_OK):
         print("找不到 ast-grep(帶 --sg <路徑>)", file=sys.stderr)
