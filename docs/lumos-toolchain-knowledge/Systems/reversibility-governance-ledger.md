@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-11-07
+updated: 2026-11-15
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/c7db662e286f
 tags:
@@ -53,6 +53,7 @@ summary: |-
   WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]doctor 另起一段唸「治理帳被 git 忽略」(附蓋到的規則與自查指令),不併進本機帳那段,判法 _gov_ledger_ignored 放在帳檔這一區、比對工具與規格閘也呼叫它 [出處:mOrangePos 考場實跑] [因:治理帳被忽略讓 CI 讀不到代碼審留痕與表態、乾淨 clone 推送前找不到規格閘留痕,今天都靜默失效;本機帳那段的提示是叫人補忽略規則,方向相反] [不選:只在紅燈版提醒裡講(不用紅燈版的專案看不到)] [test:t_doctor_gov_ledger_ignored]
   WHY:預期值表簽核寫 signoff 閘 kind expected-signed(plan、table_sha、row_count、origin=human|ai、who、token),推送前沒簽寫 spec-gate 閘 kind expected-unsigned(hard);gov --stats 的「預期值表簽核:人 N 次、AI M 次」讀前者、「因為沒簽被擋」讀後者;plan、table_sha、origin 進欄位型別表 [出處:[[Projects/高風險測試證據加嚴_計劃]] 做法 4、5、d10] [因:不設金鑰、不防代簽,人抽離多少只能從統計看] [test:t_push_check_expected_ai_signed]
   WHY:post-commit 開頭先把 PATH 濾成只剩絕對項、找 python 只認絕對路徑,寫跳過帳的那支 python 不會是 repo 根的同名檔 [出處:governance/review-reports/code-android寫法回合結束檢查/r6-資安-sonnet.md F1] [因:信任邊界見 [[Systems/hook信任邊界]]] [test:t_r6sh_path_attack]
+  PITFALL:新功能把欄位登記進 _GOV_FIELD_TYPES 時,另一本帳有同名但不同型的欄位,那本帳每一行都被整行跳過、gov 靜默少算 [出處:2026-11-14 主線 CI t_ci_status_and_gov 紅(改動選擇點把 run_id 登記成字串,CI 回流帳的 run_id 是整數)] [根因:七本帳共用一張型別表,新增欄位時沒對各帳逐欄核對] [修法:run_id 收字串、整數與 null(ci-wait 等不到 run 時寫 null,代碼審 code-選擇點CI紅燈 r1 c1);新增欄位前除了把各帳逐行跑過新舊兩版型別表,還要核對各帳寫端會寫的值] [test:t_ci_status_and_gov]
 decisions:
   - content: 可逆性走自己的平行函式 extract_reversibility,完全不碰 extract_contracts 管線
     id: d1

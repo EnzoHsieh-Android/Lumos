@@ -41326,6 +41326,14 @@ def t_ci_status_and_gov():
     # gov 第 7 源(帶 --since 9999:紀錄時間寫死,預設只看近 90 天,2026-10-28 起寫死的那筆掉出範圍而翻紅)
     r = _ci_run(root, v, env, "gov", "--since", "9999")
     check("gov 見得到 CI 事件", "ci" in r.stdout and "failure" in r.stdout, r.stdout[-400:])
+    # ci-wait 等不到 run 時寫 no-run / timeout-waiting,run_id 是 null(_ci_record 呼叫端);讀帳型別表要收,否則整行被跳過
+    # (代碼審 code-選擇點CI紅燈 r1 c1:改動選擇點把 run_id 登記成字串、修補只補了整數)
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(_json.dumps({"ts": "2026-07-30T10:00:00+08:00", "run_id": None, "attempt": 0, "sha": "def5678",
+                              "branch": "main", "workflow": "", "conclusion": "no-run", "title": "", "url": "",
+                              "failed_step": "", "dedup_key": "None:0:no-run"}, ensure_ascii=False) + "\n")
+    r = _ci_run(root, v, env, "gov", "--since", "9999")
+    check("gov 見得到 run_id 為 null 的 no-run 事件", "no-run" in r.stdout, r.stdout[-400:])
     # 總開關:移除 ci 區塊 → gov 不 load
     (root / ".lumos" / "config.json").write_text("{}", encoding="utf-8")
     r = _ci_run(root, v, env, "gov", "--since", "9999")
@@ -144188,7 +144196,7 @@ def t_choice_kill_interrupt():
         root, fake = _ck_repo(5, {"alphaCase": {"kill": [1, 2, 3, 4, 5], "mark": 3}})
         p = subprocess.Popen([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "choice-kill", "--diff", "main..HEAD"], cwd=root,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_ck_env(fake, log, CK_MARK=str(mark)),
-                             stdin=subprocess.DEVNULL)
+                             stdin=subprocess.DEVNULL, preexec_fn=_ppc_sigint_default)   # 分片在背景跑時繼承「忽略 SIGINT」,lumos 照設計不接手(CI 實測假紅)
         t0 = _time.time()
         while not mark.exists() and p.poll() is None and _time.time() - t0 < 120:
             _time.sleep(0.05)
