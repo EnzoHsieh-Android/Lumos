@@ -1,0 +1,46 @@
+# 刪掉呼叫陳述(論文表 1 SBR;不可刪的節點照附錄 A.1.12)
+id: C-18
+language: kotlin
+severity: hint
+message: 刪掉呼叫陳述(論文表 1 SBR)
+utils:
+  code:
+    # 註解也是具名節點:數第幾個陳述時不算它
+    not:
+      any:
+        - kind: line_comment
+        - kind: multiline_comment
+  value-pos:
+    # 值被拿去用的運算式:父節點不是陳述清單,或它是 lambda 的最後一個陳述
+    any:
+      - not: {inside: {kind: statements}}
+      - all:
+          - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
+          - inside: {kind: statements, inside: {kind: lambda_literal}}
+rule:
+  kind: call_expression
+  not:
+    any:
+      # 父節點不是陳述清單(= 只收陳述清單的直接子節點)。寫成「不在非陳述清單裡」的雙重否定:正面寫 inside: {kind: statements}
+      # 時 ast-grep 會把整個外層陳述清單當次要標記與後設變數塞進每個命中,長函式的輸出變成命中數乘函式大小
+      # (1500 條呼叫的函式超過讀取上限;代碼審 code-改動選擇點 r1 r1)。命中集合在樣本與真實專案上逐筆比對過相同。
+      - inside: {not: {kind: statements}}
+      # lambda 的最後一個陳述是 lambda 的值(論文附錄 A.1.12 不可刪)
+      - all:
+          - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
+          - inside: {kind: statements, inside: {kind: lambda_literal}}
+      # 當成值用的 if/when/try 區塊的最後一個陳述
+      - all:
+          - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
+          - inside:
+              kind: statements
+              any:
+                - inside: {kind: control_structure_body, inside: {kind: if_expression, matches: value-pos}}
+                - inside: {kind: control_structure_body, inside: {kind: when_entry, inside: {kind: when_expression, matches: value-pos}}}
+                - inside: {kind: try_expression, matches: value-pos}
+                - inside: {kind: catch_block, inside: {kind: try_expression, matches: value-pos}}
+      # 只有一個陳述的函式本體
+      - all:
+          - nthChild: {position: 1, ofRule: {matches: code}}
+          - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
+          - inside: {kind: statements, inside: {kind: function_body}}

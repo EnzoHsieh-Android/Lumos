@@ -1,0 +1,163 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 63ca22ce87ef12ef8db22af2cb37f9cdbee9cb2d..8589d014ec312635520e8ece16c4b528d6e99de3 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -144729,20 +144729,43 @@ def t_spec_gate_push_choice_unverifiable():
+             note = "choice-kill 跑了 5 個壞法(殺掉 1、存活 2、跑不出結果 2)"
+             nodes = m._gate_event_fit(root, "choice-kill", "run", note, rx, "tests", head_sha="d" * 40)
+             ev2 = m._gate_event_build(root, "choice-kill", "run", note, head_sha="d" * 40, nodes=nodes, extra=rx)
+             size2 = len((_j.dumps(ev2, ensure_ascii=False) + "\n").encode("utf-8"))
+             check(f"S20 守的測試 {n} 支、5 份計劃名、reason 300 字摘錄:choice-kill 事件 ≤ 4096({size1})、run 經 _gate_event_fit 後 ≤ 4096({size2})",
+                   size1 <= 4096 and size2 <= 4096, f"{size1} {size2}")
+     finally:
+         _ck_cleanup(root, fake)
+ 
+ 
++def t_spec_gate_push_choice_guard_cache():
++    """[代碼審 code-改動選擇點 r4 b1 g1] 推送前那一圈的碰到的計劃只算一次:判要不要求時(_choice_push_scan)算過,後面 _choice_guard 拿同一份快取
++    命中、不再重算(拿掉時限底線後就靠這個不吃第二份時限)。輸入:一行缺紀錄的選擇點、帳在 → 走到 _choice_guard 才判「缺紀錄」。
++    預期:整圈 _kt_sit_spec_names_calc 只被呼叫 1 次、照常擋下缺紀錄。翻紅釘:_choice_push_round 傳給 _choice_guard 的 cache=cache 拿掉 → 2 次,紅。"""
++    root, fake = _ck_repo(1, {})
++    try:
++        _ckp_commit(root, [])
++        m = _load_lumos_inproc()
++        orig, calls = m._kt_sit_spec_names_calc, []
++
++        def spy(*a, **k):
++            calls.append(a[1:3])
++            return orig(*a, **k)
++
++        def push(mm):
++            return mm._choice_push_round(mm.Env(Path(root) / _KSP_V), Path(root).resolve(), "main..HEAD")
++        bad, out = _ckp_inproc(root, fake, push, _kt_sit_spec_names_calc=spy)
++        check("r4 g1 ★前置★ 走到守的測試那一步:擋下缺紀錄 1 行", len(bad) == 1 and "缺紀錄 1 行" in str(bad[0]), f"{bad!r}\n{out[-600:]}")
++        check("r4 g1 推送前那一圈碰到的計劃只算 1 次(_choice_guard 命中判要不要求時的快取)", len(calls) == 1, f"calls={calls}")
++    finally:
++        _ck_cleanup(root, fake)
++
++
+ def t_gov_stats_choice_kill():
+     """[改動選擇點 S22] 治理帳有 choice-kill 事件 → gov --stats 印被回報的存活總數、每次呼叫的改動行數、有壞法行數與耗時中位數、第一次跑殺掉率、
+     存活處置分布、no_result 原因前 5、乾節點候選前 5、被擋筆數與過期占比。判準來源:計劃預期值表 S22 列(數字照抄)。
+     翻紅釘:殺掉率不限 attempt 1 → 3/5 那條紅;中位數改平均 → 120 秒仍對(兩筆)所以另驗三筆時的中位數。"""
+     import json as _j
+     import shutil
+     def ev(kind, **kw):
+         return _j.dumps({"ts": "2026-11-14T10:00:00", "commit": "c", "gate": "choice-kill", "kind": kind, "hard": kind == "blocked", "nodes": [],
+                          "note": "x", "token": _os_mod.urandom(8).hex(), **kw}, ensure_ascii=False) + "\n"
+     def ck(fp, verdict, attempt=1, via="run", kt="", reason="", f=_CHOICE_MAIN):
+@@ -145563,48 +145586,59 @@ def t_choice_scan_batch_budget():
+               and not res["unverified"], f"{st} {res['unverified'][:2]}")
+     finally:
+         _ck_cleanup(root, fake)
+ 
+ 
+ def t_choice_test_blobs_name_shape():
+     """[代碼審 code-改動選擇點 r3 a1 c2] 守的測試所在檔的查找照專案 `類別.方法` 慣例(_dotted_ident:點號兩邊都是識別字才取最後一段找;
+     句子名裡的點號照整串找,同 _classify_test_refs),雜湊鍵仍是 (平台, 原測試名);副檔名不屬於該平台的檔不算。
+     輸入照架構對齊席:app/src/test/java/FooTest.kt 含 `fun bar()`,綁名 FooTest.bar;正確性席:feature/src/test/resources/cases.md 寫著測試名。
+     預期:FooTest.bar 找得到 FooTest.kt(不是「?」)、改那支測試雜湊變;反引號句子名 `parses 1.5 values` 整串找、只含尾段的檔不算;
+-    改 cases.md 雜湊不變。翻紅釘:整串 -F 找點號名 → 第一條紅;句子名也取最後一段 → 「只含尾段」那條紅;拿掉副檔名路徑樣式 → cases.md 那條紅。"""
++    改 cases.md 雜湊不變。翻紅釘:整串 -F 找點號名 → 第一條紅;句子名也取最後一段 → 「只含尾段」那條紅;拿掉副檔名路徑樣式 → cases.md 那條紅。
++    r4 k1(合約席):綁名 QuxTest.zap、zap 只在 app/src/test/java/Other.kt、QuxTest 不在任何測試檔 → 找得到 Other.kt、改它雜湊變;
++    翻紅釘:點號名改取第一段 → 這兩條紅(FooTest.kt 兩段都含,原本分不出取哪段)。"""
+     import time as _t
+     m = _load_lumos_inproc()
+     plat = {"kotlin-junit": {"root": None, "profile": {"exts": {".kt"}}, "profile_name": "kotlin-junit"}}
+     foo = "package x\n\nclass FooTest {\n    @Test fun bar() {}\n@@X@@}\n"
+     sent = "package x\n\nclass ParseTest {\n    @Test fun `parses 1.5 values`() {}\n@@X@@}\n"
+     root, commit = _ckt_repo({"app/src/main/java/x/Foo.kt": "package x\n\nclass Foo\n",
+                               "app/src/test/java/FooTest.kt": foo.replace("@@X@@", ""),
+                               "app/src/test/java/ParseTest.kt": sent.replace("@@X@@", ""),
+                               "app/src/test/java/Tail.kt": "package x\n\n// 5 values\n",
++                              "app/src/test/java/Other.kt": "package x\n\nclass Other {\n    @Test fun zap() {}\n}\n",
+                               "feature/src/test/resources/cases.md": "- FooTest.bar\n- parses 1.5 values\n- alphaCase\n"})
+     try:
+         plat["kotlin-junit"]["root"] = root
+ 
+         def blobs(tests, at="HEAD"):
+             got, _c = m._choice_test_blobs(root, at, tests, plat, deadline=_t.monotonic() + 30)
+             return got, m._choice_tests_sha(tests, got)
+ 
+         def oid(path):
+             return subprocess.run(["git", "rev-parse", f"HEAD:{path}"], cwd=root, capture_output=True, text=True).stdout.strip()
+         dotted = [{"plat": "kotlin-junit", "name": "FooTest.bar"}]
+         got, s0 = blobs(dotted)
+         check("r3 a1 綁名 FooTest.bar(類別.方法)→ 找得到 FooTest.kt(不是「?」)、鍵仍是原測試名",
+               got == [["kotlin-junit", "FooTest.bar", oid("app/src/test/java/FooTest.kt")]], str(got))
+         commit({"app/src/test/java/FooTest.kt": foo.replace("@@X@@", "    // 補強\n")})
+         _g, s1 = blobs(dotted)
+         check("r3 a1 改 FooTest.kt 的測試內容 → 雜湊變", s1 != s0 and "?" not in s1, f"{s0} {s1}")
+-        both = [{"plat": "kotlin-junit", "name": "FooTest.bar"}, {"plat": "kotlin-junit", "name": "bar"}]
++        # r4 k1:方法只定義在不含類別名的檔(QuxTest 不在任何測試檔)→ 照取最後一段找得到 Other.kt;取第一段會找不到(上面 FooTest.kt 兩段都含,分不出)
++        lone = [{"plat": "kotlin-junit", "name": "QuxTest.zap"}]
++        got_l, l0 = blobs(lone)
++        check("r4 k1 綁名 QuxTest.zap、zap 只在 Other.kt、QuxTest 不在任何測試檔 → 找得到 Other.kt(取最後一段)",
++              got_l == [["kotlin-junit", "QuxTest.zap", oid("app/src/test/java/Other.kt")]], str(got_l))
++        commit({"app/src/test/java/Other.kt": "package x\n\nclass Other {\n    @Test fun zap() { check(1 == 1) }\n}\n"})
++        _g, l1 = blobs(lone)
++        check("r4 k1 改 Other.kt 的測試內容 → QuxTest.zap 的雜湊變", l1 != l0 and "?" not in l1, f"{l0} {l1}")
++        both =[{"plat": "kotlin-junit", "name": "FooTest.bar"}, {"plat": "kotlin-junit", "name": "bar"}]
+         got_b, _s = blobs(both)
+         check("r3 a1 同時綁 FooTest.bar 與 bar → 兩筆各自以原名為鍵、所在檔相同",
+               [x[:2] for x in got_b] == [["kotlin-junit", "FooTest.bar"], ["kotlin-junit", "bar"]] and got_b[0][2] == got_b[1][2] != "?", str(got_b))
+         sentence = [{"plat": "kotlin-junit", "name": "parses 1.5 values"}]
+         got_s, t0 = blobs(sentence)
+         check("r3 a1 反引號句子名含點(parses 1.5 values)→ 照既有慣例整串找、找得到 ParseTest.kt",
+               got_s == [["kotlin-junit", "parses 1.5 values", oid("app/src/test/java/ParseTest.kt")]], str(got_s))
+         commit({"app/src/test/java/Tail.kt": "package x\n\n// 5 values 補一句\n"})
+         _g, t1 = blobs(sentence)
+         check("r3 a1 句子名不取最後一段:只含尾段「5 values」的測試檔改了 → 雜湊不變", t1 == t0, f"{t0} {t1}")
+@@ -145697,20 +145731,52 @@ def t_choice_kill_partial_unverified_rc():
+         fake = _choice_fake_sg({src: hits}, bad=[bad_src])
+         r = _ck_run(root, fake)
+         ev = (_ck_gov(root, kind="choice-kill") or [{}])[0]
+         check("r3 k1 ★前置★ 好的那支照跑、壞法被殺掉", ev.get("verdict") == "killed", f"{ev}\n{r.stdout[-400:]}\n{r.stderr[-400:]}")
+         check("r3 k1 一支檔算不出選擇點 → rc 2、stderr 說那支這次不跑", r.returncode == 2 and f"{other} 算不出選擇點" in r.stderr and "這次不跑" in r.stderr,
+               f"rc={r.returncode}\n{r.stderr[-400:]}")
+     finally:
+         _ck_cleanup(*(p for p in (root, fake) if p))
+ 
+ 
++def t_choice_kill_waive_hint_shell_quote():
++    """[代碼審 code-改動選擇點 r4 s1] choice-kill 對不唯一的行印給人照貼的 lint-waive 指令:檔名含 `$(touch PWNED)` 與空白時,整個
++    choice:<檔>:<行> 參數要加 shell 引號(_sh_quote,同 situation-rule 那處)。預期:那行指令用 shlex.split 解回來,第二個參數等於
++    choice:<原檔名>:<行>、沒有被切開或展開;一般檔名照樣貼得上。翻紅釘:拿掉 _sh_quote → 解回來被空白切開,紅。"""
++    import io
++    import contextlib
++    import shlex
++    import time as _t
++    import types
++    m = _load_lumos_inproc()
++    saved = m._choice_gate_event
++    m._choice_gate_event = lambda *_a, **_k: True
++    try:
++        for f in ("app/src/main/Foo$(touch PWNED) x.kt", "app/src/main/java/x/Vm.kt", "app/src/main/java/x/It's.kt"):
++            kr = types.SimpleNamespace(plan_of={}, t0=_t.monotonic(), run_id="r", stats={"killed": 0, "survived": 0, "no_result": 0}, blobs=[],
++                                       interrupted=False, tests_sha="t" * 16, wrote_fail=0, head="h" * 40)
++            res = {"changed": 1, "lines": [], "ast_grep": "0.51.2"}
++            out = io.StringIO()
++            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
++                m._choice_kill_report(kr, res, "/nonexistent", "a" * 40, {}, [{"file": f, "line": 12}], 0, 0, 10, 60)
++            ln = next((x for x in out.getvalue().splitlines() if "不唯一" in x), "")
++            cmd = ln.partition("要放行:")[2]
++            try:
++                argv = shlex.split(cmd)
++            except ValueError as e:
++                argv = [f"解不開:{e}"]
++            check(f"r4 s1 檔名 {f!r}:照貼的 lint-waive 指令解回來第二個參數是 choice:<原檔名>:12",
++                  argv[:3] == ["lumos", "lint-waive", f"choice:{f}:12"] and argv[3:5] == ["--note", "不適用:<理由>"], f"{cmd}\n{argv}")
++    finally:
++        m._choice_gate_event = saved
++
++
+ def _ckp_no_ast_grep_push():
+     """t_choice_no_ast_grep 的推送前那一道那半(S6):PATH 沒有 ast-grep、改了 .kt 正式碼、其他條件都符合 → 不擋、記 unverified、印安裝指令。"""
+     ck, fk = _ck_repo(1, {})
+     try:
+         _ckp_commit(ck, [])
+         nob = _lwt_nogit_path(tempfile.mkdtemp(prefix="gctl-nosg-"))
+         r = _ckp_push(ck, fk, path=nob)
+         uv = _ck_gov(ck, kind="unverified")
+         check("S6 推送前那一道:PATH 沒有 ast-grep → 不擋(rc 0)、提醒、印安裝指令、記 unverified",
+               r.returncode == 0 and "ast-grep" in r.stdout and "install" in r.stdout and len(uv) == 1 and uv[0].get("hard") is False,

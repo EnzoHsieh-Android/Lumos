@@ -1,0 +1,1606 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e456084c6..58fa89bd6 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -143313,12 +143313,1601 @@ def t_graph_discipline_sources_line():
+     tpl = (_repo_root_for_discipline() / "scripts" / "templates" / "graph-discipline.md").read_text(encoding="utf-8")
+     with tempfile.TemporaryDirectory() as td:
+         root, mod = _make_reinject_root(td, tpl_content=tpl, claude_content="# 我的專案\n\n自己的規矩。\n")
+         res = mod._reinject_claude_block(root, "proj")
+         body = (root / "CLAUDE.md").read_text(encoding="utf-8")
+         check("S6 重新注入後 CLAUDE.md 含新子句", res.status in ("updated", "appended", "created")
+               and "每個機制的依據另寫進計劃〈依據來源〉表" in body, res.status)
+         check("S6 子句接在 PRIOR-ART 那句後面(同一行)", any("`PRIOR-ART:` 記進計劃筆記" in ln and "〈依據來源〉表" in ln for ln in body.splitlines()), "")
+ 
+ 
++# ── 改動選擇點都要有需求守住(Projects/改動選擇點都要有需求守住_計劃;論文 https://arxiv.org/pdf/2102.11378)第一段:choice-points ──
++# 判準來源:計劃〈預期值表〉S1 到 S6、S23、S25 各列(輸入照抄、預期照抄);另有幾支不靠 ast-grep 的單元釘(假命中、假 ast-grep 腳本)。
++# 真 ast-grep 那半照規則包測試的做法(_ktpack_sg):CI 裝了 0.51.1 一定跑,本機沒裝就只跑不靠 ast-grep 的那半並印一行。
++
++_CHOICE_MAIN = "app/src/main/java/x/Vm.kt"
++
++
++def _choice_wrap(body, imports=""):
++    """一支 ViewModel 樣的 Kotlin 檔:package、imports、class 包住一個函式本體 body(每行已帶縮排)。"""
++    return f"package x\n\n{imports}class Vm {{\n    fun load() {{\n{body}    }}\n}}\n"
++
++
++def _choice_real_cat():
++    """真型錄(測試執行器把 LUMOS_KT_CATALOG 指到凍結的小表,選擇點的測試要明指真的那份)。"""
++    return Path(GRAPHCTL).resolve().parents[1] / _KTCAT_REL
++
++
++def _choice_tables_ip():
++    m = _load_lumos_inproc()
++    tables, why, _missing = m._choice_tables(_choice_real_cat())
++    assert tables is not None, why
++    return m, tables
++
++
++def _choice_only(tables, cats=None, ids=None):
++    """表的子集:只留某些類別或列(用來驗某一列的錨點與候選,不受同一行其他類別的洗牌影響)。"""
++    return dict(tables, choice=[r for r in tables["choice"] if (cats is None or r["category"] in cats) and (ids is None or r["id"] in ids)])
++
++
++def _choice_real(base, change, tables=None, extra_files=None):
++    """真 ast-grep:臨時 repo(main 上 base、feat/sit 上 change)→ HEAD~1..HEAD 的 _choice_compute 結果。"""
++    m, t0 = _choice_tables_ip()
++    root = _sit_repo(base, change, extra=extra_files)
++    rng, sha, why = m._choice_range(root, "HEAD~1..HEAD", None)
++    assert why is None, why
++    return m._choice_compute(root, rng, sha, tables or t0), root
++
++
++def _choice_line(res, ln, rel=_CHOICE_MAIN):
++    return next((x for x in res["lines"] if x["file"] == rel and x["line"] == ln), None)
++
++
++def _choice_hit(src, rule, node, occ=0, mv=None):
++    """假命中(形狀同 _choice_scan):node 是 src 裡第 occ 次出現的那段字;mv={名: 子字串} 在節點範圍裡找第一次出現。"""
++    b, nb = src.encode("utf-8"), node.encode("utf-8")
++    s = -1
++    for _ in range(occ + 1):
++        s = b.index(nb, s + 1)
++    e = s + len(nb)
++    mvs = {}
++    for k, sub in (mv or {}).items():
++        ks = b.index(sub.encode("utf-8"), s, e)
++        mvs[k] = (ks, ks + len(sub.encode("utf-8")), sub)
++    return {"rule": rule, "s": s, "e": e, "line": b.count(b"\n", 0, s) + 1, "end_line": b.count(b"\n", 0, e) + 1, "mv": mvs}
++
++
++def _choice_fake_sg(src_hits, rc=0):
++    """假的 ast-grep:目錄裡一支可執行的 ast-grep(加 git 的連結),PATH 指這裡就只找得到它。--version 印 0.51.2;scan 照被掃目錄裡每支 .kt
++    內容的 sha256 吐固定命中(src_hits={內容: [假命中…]},位移就是假命中算好的位元組),rc 照給的值。回目錄路徑。"""
++    import hashlib as _hl
++    import json as _j
++    import os as _os
++    import shutil as _sh
++    d = Path(tempfile.mkdtemp(prefix="gctl-fakesg-"))
++    table = {_hl.sha256(src.encode("utf-8")).hexdigest(): hits for src, hits in src_hits.items()}
++    (d / "hits.json").write_text(_j.dumps(table), encoding="utf-8")
++    (d / "ast-grep").write_text(
++        f"#!{sys.executable}\n"
++        "import hashlib, json, sys, pathlib\n"
++        "if sys.argv[1:2] == ['--version']:\n    print('ast-grep 0.51.2'); sys.exit(0)\n"
++        f"table = json.loads(pathlib.Path({str(d / 'hits.json')!r}).read_text())\n"
++        "for f in sorted(pathlib.Path(sys.argv[-1]).glob('*.kt')):\n"
++        "    for h in table.get(hashlib.sha256(f.read_bytes()).hexdigest(), []):\n"
++        "        mv = {k: {'text': v[2], 'range': {'byteOffset': {'start': v[0], 'end': v[1]}}} for k, v in h['mv'].items()}\n"
++        "        print(json.dumps({'ruleId': h['rule'], 'file': str(f), 'range': {'byteOffset': {'start': h['s'], 'end': h['e']},\n"
++        "              'start': {'line': h['line'] - 1, 'column': 0}, 'end': {'line': h['end_line'] - 1, 'column': 0}},\n"
++        "              'metaVariables': {'single': mv}}))\n"
++        f"sys.exit({rc})\n", encoding="utf-8")
++    (d / "ast-grep").chmod(0o755)
++    g = _sh.which("git")
++    if g:
++        _os.symlink(g, d / "git")
++    return d
++
++
++def _choice_cli(root, path=None, cat=None):
++    """跑 lumos choice-points --diff HEAD~1..HEAD --repo <root>;path 給了就把 PATH 換成它(假 ast-grep 或沒有 ast-grep);
++    LUMOS_KT_CATALOG 指 cat,沒給指真型錄。"""
++    env = dict(_os_mod.environ)
++    if path is not None:
++        env["PATH"] = str(path)
++    env["LUMOS_KT_CATALOG"] = str(cat or _choice_real_cat())
++    # cwd 在臨時 repo(沒有圖譜):給了 --repo 就不需要圖譜
++    return subprocess.run([sys.executable, GRAPHCTL, "choice-points", "--diff", "HEAD~1..HEAD", "--repo", str(root)],
++                          capture_output=True, text=True, env=env, cwd=str(root))
++
++
++def t_choice_points_scan():
++    """[改動選擇點 S1] 改到的行怎麼收、每行最多一個壞法:測試檔與測試輔助 source set、.kts、只改縮排的行不收;一行有 ROR、LCR、UOI 三類時
++    只挑一個;乾節點(log、require)、字串與註解不挑;鏈式另起一行的方法名照算(錨點是方法名所在行),檔頭逐一 import 原寫法時補兄弟寫法。
++    判準來源:計劃預期值表 S1 九列。翻紅釘:一行收多個壞法 → 「只挑一個」紅;拿掉測試輔助 source set 判法 → testFixtures 那條紅;
++    API 錨點改用節點開頭 → 鏈式那條紅。"""
++    m, tables = _choice_tables_ip()
++    # 不靠 ast-grep:路徑判法(〈用詞〉改到的行)
++    for rel, want in (("shared/src/commonTest/kotlin/x/Helper.kt", True), ("app/src/testFixtures/java/x/Fake.kt", True),
++                      ("app/src/sharedTest/java/x/Rule.kt", True), ("core/testing/src/main/java/x/Fake.kt", True),
++                      ("core/test-utils/src/main/java/x/Fake.kt", True), (_CHOICE_MAIN, False)):
++        check(f"S1 測試判法 {rel} → {'測試' if want else '正式碼'}", m._choice_is_test(rel, ({}, {})) is want)
++    # 不靠 ast-grep:改到的行的過濾(測試輔助 source set、.kts、只改縮排)
++    body10 = "".join(f"        step{i}(a > b)\n" for i in range(10))
++    wrapped = "        withContext(io) {\n" + "".join("    " + ln + "\n" for ln in body10.splitlines()) + "        }\n"
++    root = _sit_repo({_CHOICE_MAIN: _choice_wrap(body10)},
++                     {_CHOICE_MAIN: _choice_wrap(wrapped), "shared/src/commonTest/kotlin/x/Helper.kt": "fun h() = a > b\n",
++                      "app/src/testFixtures/java/x/Fake.kt": "fun f() = a > b\n", "app/build.gradle.kts": "val x = a > b\n"})
++    rng, sha, _why = m._choice_range(root, "HEAD~1..HEAD", None)
++    changed, _big = m._choice_changed(root, rng, sha)
++    check("S1 測試輔助 source set 與 .kts 不收", set(changed) == {_CHOICE_MAIN}, str(set(changed)))
++    lines = changed.get(_CHOICE_MAIN, {}).get("lines", [])
++    check("S1 把 10 行包進 withContext 只改縮排:那 10 行不收(只剩 withContext 那兩行)", lines == [5, 16], str(lines))
++    # 不靠 ast-grep:假命中驗「一行一個壞法」
++    src = _choice_wrap("        if (count > limit && enabled) save(count)\n")
++    hits = [_choice_hit(src, "C-1", "count > limit", mv={"A": "count", "B": "limit"}),
++            _choice_hit(src, "C-9", "count > limit && enabled", mv={"A": "count > limit", "B": "enabled"}),
++            _choice_hit(src, "C-17", "enabled")]
++    got = m._choice_file_points(_CHOICE_MAIN, src, [5], {"choice": hits, "arid": [], "error": []}, tables)
++    check("S1 一行有 ROR、LCR、UOI 三類 → 只挑一個壞法(假命中)",
++          len(got) == 1 and got[0]["mutant"] is not None and got[0]["mutant"]["category"] in ("ROR", "LCR", "UOI"), str(got)[:300])
++    # 假 ast-grep 腳本走整條指令:輸出那一行、統計三個數
++    fake = _choice_fake_sg({src: hits})
++    root2 = _sit_repo({_CHOICE_MAIN: _choice_wrap("        save(count)\n")}, {_CHOICE_MAIN: src})
++    r = _choice_cli(root2, path=fake)
++    check("S1 假 ast-grep:choice-points rc 0、列出那一行、統計改到 1 行有壞法 1 行",
++          r.returncode == 0 and f"{_CHOICE_MAIN}:5" in r.stdout and "改到的行 1、有選擇點的行 1、有壞法的行 1" in r.stdout,
++          r.stdout[-500:] + r.stderr[-300:])
++    subprocess.run(["git", "checkout", "-q", "main"], cwd=root2, capture_output=True)
++    env = dict(_os_mod.environ, PATH=str(fake), LUMOS_KT_CATALOG=str(_choice_real_cat()))
++    r = subprocess.run([sys.executable, GRAPHCTL, "choice-points", "--repo", str(root2)], capture_output=True, text=True, env=env, cwd=str(root2))
++    check("S1 目前分支就是主線、沒給 --diff → rc 2(〈範圍〉1)", r.returncode == 2 and "主線" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++    sg = _ktpack_sg()
++    if not sg:
++        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑預期值表逐列)")
++        return
++    # 真 ast-grep:預期值表 S1 逐列
++    chain_old = "        val r = query\n            .debounce(300)\n            .flatMapConcat { repo.search(it) }\n"
++    chain_new = "        val r = query\n            .debounce(300)\n            .flatMapLatest { repo.search(it) }\n"
++    imp = "import kotlinx.coroutines.flow.flatMapLatest\n\n"
++    res, _r = _choice_real({_CHOICE_MAIN: _choice_wrap(chain_old, imp)}, {_CHOICE_MAIN: _choice_wrap(chain_new, imp)})
++    x = _choice_line(res, 9)
++    mut = (x or {}).get("mutant") or {}
++    also = mut.get("also") or [{}]
++    check("S1 鏈式只改第三行:第三行有 API 壞法 flatMapConcat", mut.get("row") == "C-28" and "flatMapConcat" in (mut.get("identity") or {}).get("new", ""),
++          str(res["lines"])[:400])
++    check("S1 檔頭逐一 import flatMapLatest → 自動補 import kotlinx.coroutines.flow.flatMapConcat",
++          "import kotlinx.coroutines.flow.flatMapConcat" in also[0].get("new", ""), str(also))
++    res, _r = _choice_real({_CHOICE_MAIN: _choice_wrap("        save(count)\n")},
++                           {_CHOICE_MAIN: _choice_wrap("        if (count > limit && enabled) save(count)\n")})
++    x = _choice_line(res, 5)
++    check("S1 `if (count > limit && enabled)` 只挑一個壞法、類別是 ROR/LCR/UOI 之一",
++          x is not None and x["mutant"] is not None and x["mutant"]["category"] in ("ROR", "LCR", "UOI")
++          and sum(1 for y in res["lines"] if y["line"] == 5) == 1, str(res["lines"])[:300])
++    for label, body in (("Timber.tag(TAG).d(\"q=${q.size > 0}\")", "        Timber.tag(TAG).d(\"q=${q.size > 0}\")\n"),
++                        ("require(x > 0)", "        require(x > 0)\n"),
++                        ("註解與字串", "        // flatMapLatest here\n        val s = \"a < b\"\n")):
++        res, _r = _choice_real({_CHOICE_MAIN: _choice_wrap("        go()\n        go()\n")}, {_CHOICE_MAIN: _choice_wrap("        go()\n" + body + "        go()\n")})
++        check(f"S1 {label} → 沒有壞法", all(y["mutant"] is None for y in res["lines"]), str(res["lines"])[:300])
++    res, _r = _choice_real({_CHOICE_MAIN: _choice_wrap("        go()\n")},
++                           {_CHOICE_MAIN: _choice_wrap("        go()\n"), "shared/src/commonTest/kotlin/x/Helper.kt": "fun h(a: Int, b: Int) = a > b\n",
++                            "app/src/testFixtures/java/x/Fake.kt": "fun f(a: Int, b: Int) = a > b\n", "app/build.gradle.kts": "val x = a > b\n"})
++    check("S1 測試輔助 source set 與 .kts 的 `a > b` → 沒有壞法", res["lines"] == [] and res["changed"] == 0, str(res)[:300])
++    res, _r = _choice_real({_CHOICE_MAIN: _choice_wrap("        if (a > 0\n            || b < 3) go()\n")},
++                           {_CHOICE_MAIN: _choice_wrap("        if (a > 0\n            && b < 3) go()\n")}, tables=_choice_only(tables, cats=("LCR",)))
++    x = _choice_line(res, 6)
++    check("S1 `if (a > 0` 換行 `&& b < 3)` 只改第二行 → 第二行可挑 LCR(錨點是 && 所在行)",
++          x is not None and (x["mutant"] or {}).get("category") == "LCR" and _choice_line(res, 5) is None, str(res["lines"])[:300])
++
++
++def t_choice_points_operands():
++    """[改動選擇點 S2] 運算元跨行或含括號與呼叫時,依語法樹的後設變數組候選、巢狀時加括號;字串串接的 + 與跟 null 比較不產生。
++    判準來源:計劃預期值表 S2 七列。翻紅釘:拿掉加括號 → `x + (a + b)` 那條紅;拿掉型別前提 → 字串串接那條紅;
++    運算元改用整行文字 → `if (true)` 那條紅。"""
++    m, tables = _choice_tables_ip()
++    # 不靠 ast-grep:加括號的兩個判斷
++    check("S2 單一記號(呼叫、屬性、!!、?.)不用括號", all(m._choice_atomic(s) for s in ("x", "a.b", "f(a + b)", "x!!", "a?.b", "true")))
++    check("S2 有頂層運算子就要括號", not any(m._choice_atomic(s) for s in ("a + b", "a > b", "a ?: b", "-1")))
++    b = b"val t = x + a * b\n"
++    s = b.index(b"a * b")
++    check("S2 節點前面是 + → 放回去要加括號", m._choice_ctx_safe(b, s, s + 5) is False)
++    check("S2 節點在 = 右邊、行尾 → 不用括號", m._choice_ctx_safe(b, b.index(b"x + a"), len(b) - 1) is True)
++    rows = {r["id"]: r for r in tables["choice"]}
++    check("S2 `===` 的候選只有 `!==`(論文附錄 A.1.23)", rows["C-7"]["candidates"] == ["$A !== $B"], str(rows["C-7"]))
++    check("S2 ROR 的候選含 true 與 false(論文表 1)", {"true", "false"} <= set(rows["C-1"]["candidates"]), str(rows["C-1"]))
++    src = "        val s = \"id=\" + n\n"
++    h = _choice_hit(src, "C-11", "\"id=\" + n", mv={"A": "\"id=\"", "B": "n"})
++    check("S2 字串串接的 + → 型別前提排除(論文 3.2.1)", m._choice_excluded(rows["C-11"], h) is True)
++    sg = _ktpack_sg()
++    if not sg:
++        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑預期值表逐列)")
++        return
++
++    def force(body_old, body_new, ln, rid, tpl):
++        """真掃描後對第 ln 行那一列的節點強制套某個候選 → 新那幾行(看組出來長怎樣)。"""
++        res, root = _choice_real({_CHOICE_MAIN: _choice_wrap(body_old)}, {_CHOICE_MAIN: _choice_wrap(body_new)})
++        text = _choice_wrap(body_new)
++        bb = text.encode("utf-8")
++        scan, _v = m._choice_scan(root, {_CHOICE_MAIN: text}, 60)
++        node = next(x for x in scan[_CHOICE_MAIN]["choice"] if x["rule"] == rid and bb.count(b"\n", 0, x["s"]) + 1 <= ln <= x["end_line"])
++        _anchor, op = m._choice_anchor(bb, node, rows[rid])
++        edits = m._choice_edits(bb, node, rows[rid], op, tpl)
++        import bisect as _bi
++        starts = m._choice_line_index(bb)
++        ident = m._choice_identity(_CHOICE_MAIN, text, "0" * 16, rows[rid], edits, lambda o: _bi.bisect_right(starts, o))
++        return ident["new"].strip(), res
++    new, _res = force("        go()\n", "        if (x.size + 1 > limit) go()\n", 5, "C-1", "true")
++    check("S2 `if (x.size + 1 > limit)` 抽到 ROR 的 true → 新行 `if (true)`", new == "if (true) go()", new)
++    new, _res = force("        go()\n", "        val t = x + a * b\n", 5, "C-13", "$A + $B")
++    check("S2 `x + a * b` 抽到 `a * b` 換 `$A + $B` → 新行 `x + (a + b)`", new == "val t = x + (a + b)", new)
++    new, _res = force("        go()\n", "        val t = x + a * b\n", 5, "C-11", "$A / $B")
++    check("S2 外層 + 換 / 時運算元 a * b 加括號(不變成 (x / a) * b)", new == "val t = x / (a * b)", new)
++    new, _res = force("        go()\n", "        val é = \"ü價格\"; if (é2 > limit) z()\n", 5, "C-1", "$A < $B")
++    check("S2 多位元組字元的行:照 UTF-8 位元組位移切,新行只換運算子", new == "val é = \"ü價格\"; if (é2 < limit) z()", new)
++    new, _res = force("        go()\n", "        if (a > 0\n            && b < 3) go()\n", 6, "C-9", "$A || $B")
++    check("S2 運算元跨行:只換運算子記號、原排版不動", new == "&& b < 3) go()".replace("&&", "||"), new)
++    res, _r = _choice_real({_CHOICE_MAIN: _choice_wrap("        go()\n")}, {_CHOICE_MAIN: _choice_wrap("        val s = \"id=\" + n\n")})
++    check("S2 `val s = \"id=\" + n` → AOR 不產生(那一行沒有壞法)", all(y["mutant"] is None for y in res["lines"]), str(res["lines"])[:300])
++    res, _r = _choice_real({_CHOICE_MAIN: _choice_wrap("        go()\n")}, {_CHOICE_MAIN: _choice_wrap("        if (user != null) show(user.name)\n")})
++    check("S2 `if (user != null)` → 那個 != 不產生(乾節點 null 比較)",
++          all(y["mutant"] is None or y["mutant"]["row"] != "C-6" for y in res["lines"]), str(res["lines"])[:300])
++    res, _r = _choice_real({_CHOICE_MAIN: _choice_wrap("        go()\n")}, {_CHOICE_MAIN: _choice_wrap("        val s = \"x ${a < b}\"\n")},
++                           tables=_choice_only(tables, ids=("C-2",)))
++    x = _choice_line(res, 5)
++    check("S2 字串樣板裡的 `<` 算選擇點", x is not None and (x["mutant"] or {}).get("row") == "C-2", str(res["lines"])[:300])
++    res, _r = _choice_real({_CHOICE_MAIN: _choice_wrap("        go()\n")}, {_CHOICE_MAIN: _choice_wrap("        val ok = a > b\n")},
++                           tables=_choice_only(tables, ids=("C-1",)))
++    x = _choice_line(res, 5)
++    check("S2 `val ok = a > b` 抽到 ROR(候選來自 C-1)", x is not None and (x["mutant"] or {}).get("row") == "C-1", str(res["lines"])[:300])
++
++
++def t_choice_points_stable():
++    """[改動選擇點 S3] 同一行內容與上下文不變而重跑(含 rebase 改了行號)挑同一個壞法;一個類別都被型別前提排除時換下一個類別;
++    不唯一時往外帶行,仍不唯一標不唯一。判準來源:計劃預期值表 S3 五列。翻紅釘:種子改用行號 → rebase 那條紅;
++    型別前提排除後不換類別 → 「改挑 ROR」那條紅;不往外帶行 → 「old 是兩行」那條紅。"""
++    import random as _rnd
++    m, tables = _choice_tables_ip()
++    # 不靠 ast-grep:型別前提排除整個類別 → 換下一個類別(用一個會讓 AOR 洗到第一的種子)
++    src = _choice_wrap("        val s = \"a\" + b; if (x > 0) go()\n")
++    hits = [_choice_hit(src, "C-11", "\"a\" + b", mv={"A": "\"a\"", "B": "b"}), _choice_hit(src, "C-1", "x > 0", mv={"A": "x", "B": "0"})]
++    cats = [c for c in tables["categories"] if c in ("AOR", "ROR")]
++    fp = next(f"{k:016x}" for k in range(1, 5000) if (lambda c: (_rnd.Random(k).shuffle(c), c)[1])(list(cats))[0] == "AOR")
++    rows = {r["id"]: r for r in tables["choice"]}
++    import bisect as _bi
++    bb = src.encode("utf-8")
++    starts = m._choice_line_index(bb)
++    for h in hits:
++        h["anchor"], h["op"] = m._choice_anchor(bb, h, rows[h["rule"]])
++    mut = m._choice_pick(_CHOICE_MAIN, src, bb, lambda o: _bi.bisect_right(starts, o), 5, hits, rows, tables["categories"], fp)
++    check("S3 洗牌後 AOR 排第一、被型別前提排除 → 改挑 ROR", (mut or {}).get("category") == "ROR", str(mut)[:300])
++    # 不靠 ast-grep:行指紋不含行號(rebase 上方多插 5 行)、上下文不同就不同
++    lines = ["a", "b", "if (x) return", "c", "d"]
++    check("S3 行指紋不含行號:上方多插 5 行指紋不變", m._choice_fp("F.kt", lines, 3) == m._choice_fp("F.kt", ["p"] * 5 + lines, 8))
++    check("S3 內容相同、上下文不同 → 指紋不同", m._choice_fp("F.kt", lines, 3) != m._choice_fp("F.kt", ["a", "z", "if (x) return", "c", "d"], 3))
++    sg = _ktpack_sg()
++    if not sg:
++        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑預期值表逐列)")
++        return
++    body = "        if (count > limit && enabled) save(count)\n"
++    r1, _a = _choice_real({_CHOICE_MAIN: _choice_wrap("        go()\n")}, {_CHOICE_MAIN: _choice_wrap(body)})
++    r2, _b = _choice_real({_CHOICE_MAIN: _choice_wrap("        go()\n")}, {_CHOICE_MAIN: _choice_wrap(body)})
++    k1 = [(x["fp"], (x["mutant"] or {}).get("identity", {}).get("new_sha")) for x in r1["lines"]]
++    k2 = [(x["fp"], (x["mutant"] or {}).get("identity", {}).get("new_sha")) for x in r2["lines"]]
++    check("S3 同一行跑兩次 → 挑同一個壞法", k1 == k2 and k1, str(k1))
++    r3, _c = _choice_real({_CHOICE_MAIN: _choice_wrap("        go()\n")}, {_CHOICE_MAIN: "\n\n\n\n\n" + _choice_wrap(body)})
++    x1, x3 = _choice_line(r1, 5), _choice_line(r3, 10)
++    check("S3 上方多插 5 行(rebase)、那一行與上下文不變 → 指紋與壞法相同",
++          x1 and x3 and x1["fp"] == x3["fp"] and x1["mutant"]["identity"]["new_sha"] == x3["mutant"]["identity"]["new_sha"], f"{x1} {x3}"[:400])
++    dup = "        go()\n        go()\n        save(count)\n        go()\n        go()\n"
++    r4, _d = _choice_real({_CHOICE_MAIN: _choice_wrap("        stop()\n")}, {_CHOICE_MAIN: _choice_wrap(dup + "        stop()\n" + dup)},
++                          tables=_choice_only(tables, cats=("SBR",)))
++    nu = [x["line"] for x in r4["lines"] if x["status"] == "not_unique"]
++    check("S3 兩行完全相同、前後各兩行也相同 → 標不唯一", 7 in nu and 13 in nu, str(nu))
++    nested = "        if (c) {\n            save(x)\n            y()\n        }\n        save(x)\n        z()\n"
++    r5, _e = _choice_real({_CHOICE_MAIN: _choice_wrap("        if (c) {\n            save(x)\n            y()\n        }\n        z()\n")},
++                          {_CHOICE_MAIN: _choice_wrap(nested)}, tables=_choice_only(tables, cats=("SBR",)))
++    x5 = _choice_line(r5, 9)
++    ident = ((x5 or {}).get("mutant") or {}).get("identity") or {}
++    check("S3 那一行是另一行的子字串、多帶上一行就唯一 → old 是兩行", ident.get("old") == "        }\n        save(x)", str(x5)[:400])
++
++
++def t_choice_points_arid():
++    """[改動選擇點 S4] 節點落在乾節點規則命中的範圍(跨行引數、樣板方法本體、整個 delay 呼叫、除錯旗標、size 跟 0 比較、提早回傳空容器、
++    依賴注入)→ 不在裡面產生壞法;除錯旗標只乾引用本身、提早回傳只限空容器。判準來源:計劃預期值表 S4 九列(論文 3.1、附錄 A)。
++    翻紅釘:乾節點改成只看節點開頭那一行 → 跨行 Timber 那條紅;拿掉乾節點扣除 → 每條「沒有壞法」都紅。"""
++    m, tables = _choice_tables_ip()
++    # 不靠 ast-grep:命中節點整個落在乾節點範圍裡才扣(含跨行),跟它重疊的 ERROR 節點也扣
++    src = _choice_wrap("        Timber.d(\n            \"n=${items.filter { it > 0 }.size}\",\n        )\n")
++    h = _choice_hit(src, "C-1", "it > 0", mv={"A": "it", "B": "0"})
++    arid = _choice_hit(src, "A-1", "Timber.d(\n            \"n=${items.filter { it > 0 }.size}\",\n        )")
++    got = m._choice_file_points(_CHOICE_MAIN, src, [5, 6, 7], {"choice": [h], "arid": [(arid["s"], arid["e"])], "error": []}, tables)
++    check("S4 跨行 log 呼叫的引數裡的 `>` 落在乾節點範圍 → 標乾節點、沒有壞法(假命中)",
++          [x["status"] for x in got] == ["arid"] and got[0]["mutant"] is None, str(got)[:300])
++    got = m._choice_file_points(_CHOICE_MAIN, src, [5, 6, 7], {"choice": [h], "arid": [], "error": [(h["s"] - 1, h["e"] + 1)]}, tables)
++    check("S4 跟 ERROR 節點重疊的節點略過(假命中)", got == [], str(got)[:300])
++    sg = _ktpack_sg()
++    if not sg:
++        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑預期值表逐列)")
++        return
++    base = {_CHOICE_MAIN: _choice_wrap("        go()\n")}
++    for label, body in (("跨行 Timber.d(…items.filter { it > 0 }…)", "        Timber.d(\n            \"n=${items.filter { it > 0 }.size}\",\n        )\n"),
++                        ("陳述 delay(retry * 1000L)", "        delay(retry * 1000L)\n"),
++                        ("if (BuildConfig.DEBUG) { Log.d(TAG, \"x\") }", "        if (BuildConfig.DEBUG) { Log.d(TAG, \"x\") }\n"),
++                        ("if (items.size == 0)", "        if (items.size == 0) go()\n"),
++                        ("if (xs.isEmpty()) return emptyList()", "        if (xs.isEmpty()) return emptyList()\n")):
++        res, _r = _choice_real(base, {_CHOICE_MAIN: _choice_wrap(body)})
++        check(f"S4 {label} → 沒有壞法", all(y["mutant"] is None for y in res["lines"]), str(res["lines"])[:300])
++    tostr = "package x\n\nclass P(val b: Int) {\n    override fun toString() = \"a\" + b\n}\n"
++    res, _r = _choice_real({_CHOICE_MAIN: "package x\n\nclass P(val b: Int)\n"}, {_CHOICE_MAIN: tostr})
++    check("S4 `override fun toString() = \"a\" + b` → 沒有壞法", all(y["mutant"] is None for y in res["lines"]), str(res["lines"])[:300])
++    res, _r = _choice_real({_CHOICE_MAIN: "package x\n\nclass P(val b: Int)\n"},
++                           {_CHOICE_MAIN: "package x\n\nclass P(val b: Int) {\n    override fun hashCode() = b * 31\n}\n"})
++    check("S4 樣板方法本體裡不是字串的運算(hashCode 的 b * 31)也沒有壞法", all(y["mutant"] is None for y in res["lines"]), str(res["lines"])[:300])
++    prov2 = "package x\n\nclass M {\n    @Provides\n    fun repo(api: Api) = RepoImpl(api, api.size > 1)\n}\n"
++    res, _r = _choice_real({_CHOICE_MAIN: "package x\n\nclass M\n"}, {_CHOICE_MAIN: prov2})
++    check("S4 `@Provides` 在上一行、下一行 `fun repo(api: Api) = …` → 函式本體沒有壞法",
++          all(y["mutant"] is None for y in res["lines"]), str(res["lines"])[:300])
++    res, _r = _choice_real(base, {_CHOICE_MAIN: _choice_wrap("        if (BuildConfig.DEBUG && x > 1) go()\n")}, tables=_choice_only(tables, cats=("ROR",)))
++    x = _choice_line(res, 5)
++    check("S4 `if (BuildConfig.DEBUG && x > 1)` → `x > 1` 照常可挑", x is not None and (x["mutant"] or {}).get("row") == "C-1", str(res["lines"])[:300])
++    res, _r = _choice_real(base, {_CHOICE_MAIN: _choice_wrap("        if (é2 > 上限) z()\n")})
++    check("S4 文法不認得的中文識別字:同一行有 ERROR 節點 → 那一行不產生壞法(不出 `!é2 > 上限`)",
++          all(y["mutant"] is None for y in res["lines"]), str(res["lines"])[:300])
++    res, _r = _choice_real(base, {_CHOICE_MAIN: _choice_wrap("        if (token.isEmpty()) return AuthError.Missing\n")})
++    x = _choice_line(res, 5)
++    check("S4 `if (token.isEmpty()) return AuthError.Missing` → 照常可挑(提早回傳只限空容器)", x is not None and x["mutant"] is not None,
++          str(res["lines"])[:300])
++
++
++def t_choice_points_sbr():
++    """[改動選擇點 S5] SBR 的候選陳述是 lambda 最後一個陳述、當值用的區塊最後一個陳述、或函式本體唯一陳述 → 不產生刪除壞法;
++    函式本體 statements 的直接子節點照產生。判準來源:計劃預期值表 S5 三列(論文附錄 A.1.12)。
++    翻紅釘:規則拿掉 lambda 最後陳述那條排除 → transform 那條紅;數陳述時把註解算進去 → 行尾有註解的那條紅。"""
++    m, tables = _choice_tables_ip()
++    rows = {r["id"]: r for r in tables["choice"]}
++    check("S5 SBR 列的候選是(刪掉)、錨點是陳述起始", rows["C-18"]["special"] == "delete" and rows["C-18"]["anchor"] == "陳述起始", str(rows["C-18"]))
++    src = _choice_wrap("        save(x)\n        notify()\n")
++    h = _choice_hit(src, "C-18", "save(x)")
++    got = m._choice_file_points(_CHOICE_MAIN, src, [5], {"choice": [h], "arid": [], "error": []}, tables)
++    ident = ((got[0] if got else {}).get("mutant") or {}).get("identity") or {}
++    check("S5 刪掉呼叫陳述:new 是那一行刪掉呼叫(假命中)", ident.get("new") == "        ", str(got)[:300])
++    sg = _ktpack_sg()
++    if not sg:
++        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑預期值表逐列)")
++        return
++    sbr = _choice_only(tables, cats=("SBR",))
++    base = {_CHOICE_MAIN: _choice_wrap("        go()\n        go()\n")}
++    res, _r = _choice_real(base, {_CHOICE_MAIN: _choice_wrap("        go()\n        list.map { x ->\n            transform(x)\n        }\n        go()\n")}, tables=sbr)
++    check("S5 `list.map { x ->` 換行 `transform(x)` → transform(x) 不是 SBR 候選", _choice_line(res, 7) is None, str(res["lines"])[:300])
++    res, _r = _choice_real(base, {_CHOICE_MAIN: _choice_wrap("        go()\n        val v = if (c) {\n            compute()\n        } else 0\n        go()\n")}, tables=sbr)
++    check("S5 `val v = if (c) {` 換行 `compute()` → compute() 不是 SBR 候選", _choice_line(res, 7) is None, str(res["lines"])[:300])
++    res, _r = _choice_real(base, {_CHOICE_MAIN: _choice_wrap("        go()\n        list.map { x ->\n            transform(x) // 註解\n        }\n        go()\n")}, tables=sbr)
++    check("S5 lambda 最後一個陳述行尾有註解也照排除(註解不算陳述)", _choice_line(res, 7) is None, str(res["lines"])[:300])
++    fn = "package x\n\nclass Vm {\n    fun load(x: Int) { save(x)\n      notify() }\n}\n"
++    res, _r = _choice_real({_CHOICE_MAIN: "package x\n\nclass Vm\n"}, {_CHOICE_MAIN: fn}, tables=sbr)
++    x = _choice_line(res, 4)
++    check("S5 函式本體 `{ save(x)` 換行 `notify() }` 的 save(x) 是 SBR 候選", x is not None and (x["mutant"] or {}).get("row") == "C-18",
++          str(res["lines"])[:300])
++    one = "package x\n\nclass Vm {\n    fun load(x: Int) {\n        save(x)\n    }\n}\n"
++    res, _r = _choice_real({_CHOICE_MAIN: "package x\n\nclass Vm\n"}, {_CHOICE_MAIN: one}, tables=sbr)
++    check("S5 只有一個陳述的函式本體 → 不刪", _choice_line(res, 5) is None, str(res["lines"])[:300])
++
++
++def t_choice_no_ast_grep():
++    """[改動選擇點 S6] ast-grep 不在 PATH:choice-points 回 3「沒檢查到」並印安裝指令;ast-grep 回不是 0 或 1 的退出碼也算沒檢查到
++    choice-kill 回 2(第二段);推送前那一道只提醒、記 unverified、印安裝指令(第三段,_ckp_no_ast_grep_push)。判準來源:計劃預期值表 S6 列、〈用詞〉ast-grep 不在 PATH。
++    翻紅釘:找不到工具時當成沒有選擇點回 0 → rc 3 那條紅;choice-kill 沒工具當沒有選擇點 → rc 2 那條紅。"""
++    root = _sit_repo({_CHOICE_MAIN: _choice_wrap("        go()\n")}, {_CHOICE_MAIN: _choice_wrap("        if (a > b) go()\n")})
++    r = _choice_cli(root, path=_lwt_nogit_path(tempfile.mkdtemp(prefix="gctl-nosg-")))
++    check("S6 PATH 沒有 ast-grep、改了 .kt 正式碼 → choice-points rc 3", r.returncode == 3, f"rc={r.returncode} {r.stdout[-200:]} {r.stderr[-300:]}")
++    check("S6 印沒檢查到與安裝指令", "沒檢查到" in r.stderr and "ast-grep" in r.stderr and "install" in r.stderr, r.stderr[-300:])
++    fake = _choice_fake_sg({}, rc=5)
++    r = _choice_cli(root, path=fake)
++    check("S6 ast-grep 回 5(不是 0 或 1)→ 沒檢查到、rc 3", r.returncode == 3 and "沒檢查到" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++    root2 = _sit_repo({"README2.md": "x\n"}, {"README2.md": "y\n"})
++    r = _choice_cli(root2, path=_lwt_nogit_path(tempfile.mkdtemp(prefix="gctl-nosg-")))
++    check("S6 沒有改到 .kt 正式碼 → 不需要 ast-grep、rc 0", r.returncode == 0 and "改到的行 0" in r.stdout, f"rc={r.returncode} {r.stderr[-300:]}")
++    # choice-kill 那半(第二段):PATH 沒有 ast-grep、改了 .kt 正式碼、其他條件都符合 → rc 2(不跑、不記帳)
++    ck, fk = _ck_repo(1, {"alphaCase": {"kill": [1]}})
++    try:
++        nob = _lwt_nogit_path(tempfile.mkdtemp(prefix="gctl-nosg-"))
++        r = _ck_run(ck, fk, PATH=nob)
++        check("S6 PATH 沒有 ast-grep → choice-kill rc 2、講 ast-grep 與安裝指令、治理帳沒有判定",
++              r.returncode == 2 and "ast-grep" in r.stderr and "install" in r.stderr and not _ck_gov(ck), f"rc={r.returncode} {r.stderr[-300:]}")
++    finally:
++        _ck_cleanup(ck, fk)
++    _ckp_no_ast_grep_push()   # 推送前那一道那半(第三段)
++
++
++def t_choice_table_missing():
++    """[改動選擇點 S23] 型錄缺檔只提醒不擋(choice-points rc 0);型錄在但缺〈選擇點表〉或〈乾節點規則〉、表壞、或規則檔與列號對不上 → rc 2
++    並指出哪一列;規則包自檢(check.py)同一套讀表、樣本命中該命中的,沒裝 ast-grep 報「沒檢查到」;推送前那一道缺檔只提醒、缺節擋(第三段,_ckp_table_missing_push)。
++    判準來源:計劃預期值表 S23 三列。翻紅釘:缺檔當表壞 → rc 0 那條紅;不核規則檔 → C-3 那條紅;樣本不核 MISS → 改壞樣本那條紅。"""
++    import shutil as _sh
++    real = (Path(GRAPHCTL).resolve().parents[1] / _KTCAT_REL).read_text(encoding="utf-8")
++    root = _sit_repo({_CHOICE_MAIN: _choice_wrap("        go()\n")}, {_CHOICE_MAIN: _choice_wrap("        if (a > b) go()\n")})
++    nowhere = Path(tempfile.mkdtemp(prefix="gctl-choicecat-")) / "missing.md"
++    r = _choice_cli(root, cat=nowhere)
++    check("S23 型錄檔不在 → choice-points 提醒、rc 0", r.returncode == 0 and "提醒" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++    i = real.index("\n## 乾節點規則")
++    j = real.find("\n## ", i + 1)
++    no_arid = _sit_catalog(real[:i] + (real[j:] if j >= 0 else "\n"))
++    r = _choice_cli(root, cat=no_arid)
++    check("S23 型錄在但沒有〈乾節點規則〉節 → rc 2、說缺哪一節", r.returncode == 2 and "乾節點規則" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++    bad_c3 = _sit_catalog(real.replace("| C-3 | ROR | `ror.yml`", "| C-3 | ROR | `lcr.yml`", 1))
++    r = _choice_cli(root, cat=bad_c3)
++    check("S23 〈選擇點表〉列 C-3 在規則檔裡沒有對應規則 → rc 2、指出 C-3", r.returncode == 2 and "C-3" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++    blank = _sit_catalog(real.replace("| `$A != $B` | 運算元有 null 字面值", "|  | 運算元有 null 字面值", 1))
++    r = _choice_cli(root, cat=blank)
++    check("S23 候選空白 → rc 2、指出那一列(C-5)", r.returncode == 2 and "C-5" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++    # 規則包自檢:同一支 choice_tables;規則目錄複本拿掉 C-3 → 指出 C-3;列號重複、統計數字不對都報
++    kp = _ktpack()
++    tables, probs = kp.choice_tables(real)
++    check("S23 真型錄兩節讀得懂、規則對得上", not probs and len(tables["choice"]) >= 31 and len(tables["arid"]) >= 14, str(probs)[:300])
++    d = Path(tempfile.mkdtemp(prefix="gctl-choicerules-")) / "kotlin-choice"
++    _sh.copytree(kp.CHOICE, d)
++    ror = d / "rules-choice" / "ror.yml"
++    ror.write_text(ror.read_text(encoding="utf-8").replace("id: C-3\n", "id: C-3x\n"), encoding="utf-8")
++    _t, probs = kp.choice_tables(real, rules_dir=d)
++    check("S23 規則檔裡沒有 C-3 → 規則包自檢指出 C-3(另報多出來的 C-3x)",
++          any(a == "C-3" and "沒有對應規則" in b for a, b in probs) and any(a == "C-3x" for a, _b in probs), str(probs)[:300])
++    _t, probs = kp.choice_tables(real.replace("| C-4 | ROR |", "| C-3 | ROR |", 1))
++    check("S23 列號重複 → 報列號重複", any(a == "C-3" and "重複" in b for a, b in probs), str(probs)[:300])
++    st = [b for _a, b in kp.stats_problems(real.replace("- 選擇點表:31 列", "- 選擇點表:30 列"), kp.main_rows(real)) if "選擇點表" in b]
++    check("S23 〈統計〉選擇點表列數寫錯 → 報重數不對", st != [], str(st))
++    check("S23 沒裝 ast-grep 時樣本那一項報「沒檢查到」", kp.choice_sample_problems(None, tables) == [("<choice-samples>", "選擇點規則樣本沒檢查到(沒裝 ast-grep)")])
++    _ckp_table_missing_push(real)   # 推送前那一道那半(第三段)
++    sg = _ktpack_sg()
++    if not sg:
++        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑樣本)")
++        return
++    check("S23 真規則對樣本:每個 HIT 都中、每個 MISS 都沒中", kp.choice_sample_problems(sg, tables) == [], str(kp.choice_sample_problems(sg, tables))[:300])
++    smp = d / "samples" / "choice.kt"
++    smp.write_text(smp.read_text(encoding="utf-8").replace("if (a < b) save(a) // HIT C-2", "if (a < b) save(a) // MISS C-2"), encoding="utf-8")
++    got = kp.choice_sample_problems(sg, tables, rules_dir=d)
++    check("★改壞★ 樣本標 MISS 卻命中 → 報出來", any(a == "C-2" and "MISS" in b for a, b in got), str(got)[:300])
++
++
++def t_choice_points_interview():
++    """[改動選擇點 S25] 面試題那一行(`.flatMapLatest { repo.search(it) }`,單行與鏈式另起一行)是改動行 → choice-points 在那一行列出 API 類
++    選擇點、壞法是 flatMapConcat。判準來源:計劃預期值表 S25 列(使用者 2026-11-13 面試題)。翻紅釘:API 規則只認同一行的接收者 → 鏈式那條紅。"""
++    _m, tables = _choice_tables_ip()
++    rows = {r["id"]: r for r in tables["choice"]}
++    check("S25 flatMapLatest 那一列是 API、候選 flatMapConcat、對應決策表 D-4",
++          rows["C-28"]["category"] == "API" and rows["C-28"]["candidates"] == ["flatMapConcat"] and rows["C-28"]["dt"] == "D-4", str(rows["C-28"]))
++    sg = _ktpack_sg()
++    if not sg:
++        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑兩種寫法)")
++        return
++    for label, old, new, ln in (("單行", "        val r = flow.flatMapConcat { repo.search(it) }\n", "        val r = flow.flatMapLatest { repo.search(it) }\n", 5),
++                                ("鏈式另起一行", "        val r = flow\n            .flatMapConcat { repo.search(it) }\n",
++                                 "        val r = flow\n            .flatMapLatest { repo.search(it) }\n", 6)):
++        res, _r = _choice_real({_CHOICE_MAIN: _choice_wrap(old)}, {_CHOICE_MAIN: _choice_wrap(new)})
++        x = _choice_line(res, ln)
++        ident = ((x or {}).get("mutant") or {}).get("identity") or {}
++        check(f"S25 {label}:那一行列出 API 選擇點、壞法 flatMapConcat",
++              ((x or {}).get("mutant") or {}).get("category") == "API" and "flatMapConcat" in ident.get("new", "") and "flatMapLatest" in ident.get("old", ""),
++              str(res["lines"])[:400])
++
++
++
++# ── 改動選擇點第二段:choice-kill、lint-waive choice:、situation-rule --point(計劃〈範圍〉2、3;論文 https://arxiv.org/pdf/2102.11378)──
++# 判準來源:計劃〈預期值表〉S6(choice-kill 那半)、S7 到 S14 各列,S21、S24 不涉推送閘的那半(輸入照抄、預期照抄,規模縮小的列註明)。
++# 假平台:kotlin-junit 平台的 run_cmd 換成 {python} tests/run.py {method};測試檔 app/src/test/…/VmTest.kt 宣告 @Test fun(綁定判 bound 要它)。
++# 假 ast-grep(_choice_fake_sg)吐 C-7(=== 換 !==)的命中:每一行 `val k<i> = a<i> === b<i>` 的壞法固定,runner 看原文有沒有 `a<i> !== b<i>`
++# 判第 i 個壞法;行為照 tests/beh.json(每支測試:kill 殺掉、weak 紅但不印測試名(弱證據)、compile 印編譯錯誤、hang 掛住、slow 每次睡幾秒、
++# base_red 基準就紅、mark 跑到第幾個壞法時寫標記檔並多睡兩秒)。每次執行把「測試名、狀態、工作目錄」記到 CK_RUNLOG。
++
++_os_mod.environ.setdefault("LUMOS_CHOICE_SINCE", "9999-12-31")   # 改動選擇點:推送前那一道停在生效前;新測試自己改
++
++_CK_RUNNER = r'''import json, os, re, sys, time
++m = sys.argv[1] if len(sys.argv) > 1 else ""
++top = os.getcwd()
++while not os.path.exists(os.path.join(top, "tests", "beh.json")):
++    top = os.path.dirname(top)
++src = open(os.path.join(top, "app/src/main/java/x/Vm.kt"), encoding="utf-8").read()
++beh = json.load(open(os.path.join(top, "tests", "beh.json"), encoding="utf-8")).get(m, {})
++muts = [int(x) for x in re.findall(r"a(\d+) !== b\1", src)]
++log = os.environ.get("CK_RUNLOG")
++if log:
++    with open(log, "a", encoding="utf-8") as fh:
++        fh.write(f"{m}\t{'base' if not muts else ','.join(map(str, muts))}\t{os.getcwd()}\n")
++if beh.get("base_red"):
++    print(m + " FAILED: baseline red")
++    sys.exit(1)
++if muts:
++    i = muts[0]
++    if i == beh.get("mark") and os.environ.get("CK_MARK"):
++        open(os.environ["CK_MARK"], "w").close()
++        time.sleep(2)
++    time.sleep(beh.get("slow", 0))
++    if i in beh.get("hang", []):
++        time.sleep(60)
++    if i in beh.get("compile", []):
++        print("e: file:///w/app/src/main/java/x/Vm.kt:5:20 Unresolved reference: !==")
++        sys.exit(1)
++    if i in beh.get("kill", []):
++        print(m + " FAILED: 結果不對")
++        sys.exit(1)
++    if i in beh.get("weak", []):
++        print("AssertionError: 有東西壞了")
++        sys.exit(1)
++print(m + " ok")
++'''
++_CK_PLAN = """---
++type: project
++status: {status}
++lands_in:
++  - "[[Systems/選擇]]"
++---
++# 選擇_計劃
++
++## 驗收條款
++
++{clauses}
++"""
++_CK_CLAUSES = ("- [S1] 當使用者開啟頁面,系統 應 顯示輸入框 [test:alphaCase]\n"
++               "- [S2] 當沒有結果,系統 應 顯示空狀態 [test:bravoCase]\n")
++_CK_KT_TEST = ("package x\n\nimport org.junit.Test\n\nclass VmTest {\n" + "".join(f"    @Test fun {n}() {{}}\n" for n in ("alphaCase", "bravoCase"))
++               + "@@EXTRA@@}\n")
++_CK_CFG = {"test_profile": "kotlin-junit", "test": {"run_cmd": "{python} tests/run.py {method}"}}
++
++
++def _ck_body(n):
++    return "".join(f"        val k{i} = a{i} === b{i}\n" for i in range(1, n + 1))
++
++
++def _ck_hits(n):
++    src = _choice_wrap(_ck_body(n))
++    return src, [_choice_hit(src, "C-7", f"a{i} === b{i}", mv={"A": f"a{i}", "B": f"b{i}"}) for i in range(1, n + 1)]
++
++
++def _ck_loc(i):
++    return f"{_CHOICE_MAIN}:{4 + i}"
++
++
++def _ck_repo(n, beh, config=None, status="doing", clauses=_CK_CLAUSES, extra=None):
++    """臨時 repo(main 上:圖譜計劃與家節點、假 runner、beh.json、Kotlin 測試檔;feat/sit 上:Vm.kt 加 n 行 `val k<i> = a<i> === b<i>`)
++    → (root, 假 ast-grep 目錄)。"""
++    import json as _j
++    v = _KSP_V
++    base = {f"{v}/Projects/選擇_計劃.md": _CK_PLAN.format(status=status, clauses=clauses),
++            f"{v}/Systems/選擇.md": _KSP_HOME.format(code=_CHOICE_MAIN),
++            "tests/run.py": _CK_RUNNER, "tests/beh.json": _j.dumps(beh),
++            "app/src/test/java/x/VmTest.kt": _CK_KT_TEST.replace("@@EXTRA@@", ""),
++            _CHOICE_MAIN: _choice_wrap("        go()\n"), **(extra or {})}
++    src, hits = _ck_hits(n)
++    root = _sit_repo(base, {_CHOICE_MAIN: src}, config=config or _CK_CFG)
++    return root, _choice_fake_sg({src: hits})
++
++
++def _ck_env(fake, runlog=None, floor="3", **kw):
++    e = dict(_os_mod.environ)
++    e.update({"PATH": str(fake) + _os_mod.pathsep + e.get("PATH", ""), "LUMOS_KT_CATALOG": str(_choice_real_cat()),
++              "LUMOS_KILL_TIMEOUT_FLOOR": floor, "LUMOS_TTY": "/nonexistent-tty"})
++    if runlog:
++        e["CK_RUNLOG"] = str(runlog)
++    e.update(kw)
++    return e
++
++
++def _ck_run(root, fake, *args, runlog=None, floor="3", diff="main..HEAD", **kw):
++    a = ["--diff", diff] if diff else []
++    return subprocess.run([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "choice-kill", *a, *args], cwd=root,
++                          capture_output=True, text=True, env=_ck_env(fake, runlog, floor, **kw), stdin=subprocess.DEVNULL, timeout=300)
++
++
++def _ck_gov(root, gate="choice-kill", kind=None):
++    import json as _j
++    p = Path(root) / "docs" / ".governance-log.jsonl"
++    rows = [_j.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip().startswith("{")] if p.is_file() else []
++    return [d for d in rows if d.get("gate") == gate and (kind is None or d.get("kind") == kind)]
++
++
++def _ck_log(path):
++    p = Path(path)
++    return [ln.split("\t") for ln in p.read_text(encoding="utf-8").splitlines()] if p.is_file() else []
++
++
++def _ck_by_file(evs):
++    return {e["fp"]: e for e in evs}
++
++
++def _ck_cleanup(*paths):
++    for x in paths:
++        if x:
++            _ksp_sh.rmtree(x, ignore_errors=True)
++
++
++def _ck_fp(i, n):
++    m = _load_lumos_inproc()
++    return m._choice_fp(_CHOICE_MAIN, _choice_wrap(_ck_body(n)).split("\n"), 4 + i)
++
++
++def t_choice_kill_batch():
++    """[改動選擇點 S7] 同一平台多個壞法:choice-kill 只呼叫一次殺傷力(一棵隔離工作樹)、每條測試指令基準只跑一次、同一壞法強 killed 或編不過就略過
++    其餘測試,並依 recipe_id 把結果對回;非預設平台的測試在它的平台根跑。判準來源:計劃預期值表 S7 三列(〈用詞〉殺掉判定 stop_group_on、platform 欄)。
++    翻紅釘:拿掉 stop_group_on → 第一個壞法也跑 bravo 那條紅;編不過不算停止鍵 → 編不過那條紅;平台欄不帶 → kilo 跑在根目錄那條紅。"""
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ck-"))
++    root = fake = None
++    try:
++        log = tmp / "run.log"
++        root, fake = _ck_repo(3, {"alphaCase": {"kill": [1]}, "bravoCase": {}})
++        r = _ck_run(root, fake, runlog=log)
++        rows = _ck_log(log)
++        base = [x[0] for x in rows if x[1] == "base"]
++        check("S7 3 個壞法、守的測試 alpha 與 bravo:基準各跑一次", sorted(base) == ["alphaCase", "bravoCase"], f"{rows}\n{r.stdout[-600:]}{r.stderr[-600:]}")
++        check("S7 一次殺傷力呼叫:全部執行都在同一棵隔離工作樹", len({x[2] for x in rows}) == 1 and "lumos-kill-" in rows[0][2], str({x[2] for x in rows}))
++        check("S7 alpha 殺掉的壞法 1 不跑 bravo", ["bravoCase", "1"] not in [x[:2] for x in rows] and ["alphaCase", "1"] in [x[:2] for x in rows], str(rows))
++        check("S7 壞法 2、3 兩支都跑(alpha 沒殺掉)", all([t, str(i)] in [x[:2] for x in rows] for t in ("alphaCase", "bravoCase") for i in (2, 3)), str(rows))
++        evs = _ck_by_file(_ck_gov(root, kind="choice-kill"))
++        check("S7 依 recipe_id 對回:壞法 1 killed by alphaCase、壞法 2 與 3 survived", evs.get(_ck_fp(1, 3), {}).get("verdict") == "killed"
++              and evs[_ck_fp(1, 3)].get("killing_test") == "kotlin-junit:alphaCase"
++              and [evs.get(_ck_fp(i, 3), {}).get("verdict") for i in (2, 3)] == ["survived", "survived"], str(evs)[:600])
++        _ck_cleanup(root, fake)
++        log.unlink(missing_ok=True)
++        root, fake = _ck_repo(1, {"alphaCase": {"compile": [1]}, "bravoCase": {"kill": [1]}})
++        r = _ck_run(root, fake, runlog=log)
++        rows = _ck_log(log)
++        ev = (_ck_gov(root, kind="choice-kill") or [{}])[0]
++        check("S7 壞法在 alpha 編不過:不再跑 bravo", ["bravoCase", "1"] not in [x[:2] for x in rows], str(rows))
++        check("S7 編不過 → no_result、reason 壞法編不過、rc 2", ev.get("verdict") == "no_result" and str(ev.get("reason", "")).startswith("壞法編不過")
++              and r.returncode == 2, f"rc={r.returncode} {ev}")
++        _ck_cleanup(root, fake)
++        log.unlink(missing_ok=True)
++        cfg = {"platforms": {"app": {"profile": "kotlin-junit", "root": ".", "run_cmd": "{python} tests/run.py {method}"},
++                             "lib": {"profile": "kotlin-junit", "root": "lib", "run_cmd": "{python} ../tests/run.py {method}"}},
++               "default_platform": "app"}
++        lib_test = "package x\n\nimport org.junit.Test\n\nclass KTest {\n    @Test fun kiloCase() {}\n}\n"
++        root, fake = _ck_repo(1, {"alphaCase": {}, "bravoCase": {}, "kiloCase": {"kill": [1]}}, config=cfg,
++                              clauses=_CK_CLAUSES + "- [S3] 當清空輸入,系統 應 清掉結果清單 [test:lib:kiloCase]\n",
++                              extra={"lib/src/test/java/x/KTest.kt": lib_test})
++        r = _ck_run(root, fake, runlog=log)
++        rows = _ck_log(log)
++        kilo = [x for x in rows if x[0] == "kiloCase"]
++        check("S7 非預設平台的 kiloCase:配方在它的平台根(lib)跑", kilo and all(x[2].endswith("/lib") for x in kilo), f"{rows}\n{r.stderr[-400:]}")
++        ev = (_ck_gov(root, kind="choice-kill") or [{}])[0]
++        check("S7 kiloCase 殺掉 → killed by lib:kiloCase(帶平台)", ev.get("verdict") == "killed" and ev.get("killing_test") == "lib:kiloCase", str(ev))
++        _ck_cleanup(root, fake)
++        # guard kill 本身(行程內):同一組第一條是停止鍵、第二條記 skipped,skipped 不算進 guard kill 的 rc(〈範圍〉2 不改 rc 優先序)
++        root, fake = _ck_repo(1, {"alphaCase": {"weak": [1]}, "bravoCase": {}})
++        import contextlib, io
++        m = _load_lumos_inproc()
++        o_env, o_cwd = dict(_os_mod.environ), _os_mod.getcwd()
++        _os_mod.environ.update(_ck_env(fake))
++        _os_mod.chdir(root)
++        out, rows = {}, []
++        old = "        val k1 = a1 === b1"
++        rec = [{"invariant": f"g|{t}", "test": t, "file": _CHOICE_MAIN, "old": old, "new": old.replace("===", "!=="), "group": "g"}
++               for t in ("alphaCase", "bravoCase")]
++        try:
++            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++                rc = m.cmd_guard_kill(m.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=rec, result_out=out, source="choice-kill",
++                                      stop_group_on=frozenset({"killed_unattributed"}), on_row=rows.append)
++        finally:
++            _os_mod.chdir(o_cwd)
++            _os_mod.environ.clear()
++            _os_mod.environ.update(o_env)
++        check("S7 guard kill:同組第一條弱證據(停止鍵)→ 第二條 skipped、on_row 逐列交出;skipped 不算進 rc(全部弱證據仍回 1)",
++              [r["verdict"] for r in out.get("rows", [])] == ["killed_unattributed", "skipped"] and rc == 1
++              and [r["verdict"] for r in rows] == ["killed_unattributed", "skipped"], f"rc={rc} {out.get('rows')} {rows}")
++    finally:
++        _ck_cleanup(root, fake, tmp)
++
++
++def t_choice_kill_verdicts():
++    """[改動選擇點 S8] 某壞法有一支守的測試強 killed → 記 killed、帶排序第一支殺掉它的測試與條款;t_a 弱證據、t_b killed → killed by t_b;
++    每支都有列而且都 survived → survived、rc 1;帳上欄位齊。判準來源:計劃預期值表 S8 三列、〈範圍〉2 記的欄位。
++    翻紅釘:弱證據也算殺掉 → 壞法 2 記成 alpha 那條紅;rc 不分存活 → rc 1 那條紅。"""
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ck-"))
++    root = fake = None
++    try:
++        root, fake = _ck_repo(3, {"alphaCase": {"kill": [1], "weak": [2]}, "bravoCase": {"kill": [1, 2]}})
++        r = _ck_run(root, fake)
++        evs = _ck_by_file(_ck_gov(root, kind="choice-kill"))
++        e1, e2, e3 = (evs.get(_ck_fp(i, 3), {}) for i in (1, 2, 3))
++        check("S8 t_a 紅 → killed、killing_test alphaCase、clauses 是綁它的條款 S1",
++              e1.get("verdict") == "killed" and e1.get("killing_test") == "kotlin-junit:alphaCase" and e1.get("clauses") == ["Projects/選擇_計劃#S1"], str(e1))
++        check("S8 t_a 弱證據、t_b killed → killed、killing_test bravoCase、條款 S2",
++              e2.get("verdict") == "killed" and e2.get("killing_test") == "kotlin-junit:bravoCase" and e2.get("clauses") == ["Projects/選擇_計劃#S2"], str(e2))
++        check("S8 t_a、t_b 都綠 → survived、rc 1", e3.get("verdict") == "survived" and r.returncode == 1, f"rc={r.returncode} {e3}\n{r.stderr[-400:]}")
++        want = {"file", "fp", "row", "new_sha", "verdict", "killing_test", "clauses", "plans", "tests_sha", "reason", "via", "attempt", "run_id",
++                "catalog", "token"}
++        check("S8 帳上那筆欄位齊、via run、attempt 1、列號 C-7、plans 是碰到的計劃", want <= set(e1) and e1["via"] == "run" and e1["attempt"] == 1
++              and e1["row"] == "C-7" and e1["plans"] == ["Projects/選擇_計劃"] and e1["file"] == _CHOICE_MAIN, str(e1))
++        check("S8 存活時印處置的三條路(situation-rule --point、補測試、lint-waive choice:)",
++              "situation-rule --point" in r.stdout and "lint-waive choice:" in r.stdout, r.stdout[-600:])
++        check("S8 不寫殺傷力帳本(判定在治理帳)", not (Path(root) / "docs" / ".kill-log.jsonl").exists())
++        # 背書讀者(_backing_kill_rows):source 非空的臨時配方一律略過(不只 situation-rule;〈範圍〉5)
++        import json as _json
++        m = _load_lumos_inproc()
++        kroot, v = _mk_kill_env()
++        A = _kr_recipe("prod.py")
++        (v / "Systems" / "Limit.md").write_text(_kr_note([A]), encoding="utf-8")
++        _kr_commit(kroot, "recipes")
++        head = _kr_git(kroot, "rev-parse", "HEAD").stdout.strip()
++        rid = m._kill_recipe_key("Systems/Limit.md", A["invariant"], A["file"], A["old"])
++        base = {"node": "Systems/Limit.md", "commit": head[:8], "invariant": A["invariant"], "test": A["test"], "platform": "", "verdict": "killed",
++                "note": "", "flaky_risk": False, "tail": "", "covers": [], "recipe_id": rid, "head_sha": head, "weak": False}
++        (v.parent / ".kill-log.jsonl").write_text(_json.dumps(dict(base, ts="2026-11-14T10:00:00", source="choice-kill"), ensure_ascii=False) + "\n"
++                                                  + _json.dumps(dict(base, ts="2026-11-14T11:00:00"), ensure_ascii=False) + "\n", encoding="utf-8")
++        got = m._backing_kill_rows(str(kroot))
++        _ck_cleanup(kroot)
++        check("S8 背書讀者:source choice-kill 那筆略過、一般那筆留著", len(got) == 1 and got[0].get("ts") == "2026-11-14T11:00:00", str(got))
++    finally:
++        _ck_cleanup(root, fake, tmp)
++
++
++def t_choice_kill_no_result():
++    """[改動選擇點 S9] 沒有強 killed 而有弱證據、drifted、error、編不過、掛住或缺結果 → no_result 帶原因、rc 2;某支測試基準 abort → 拿掉那支、其餘照判。
++    判準來源:計劃預期值表 S9 三列與〈用詞〉殺掉判定。翻紅釘:逾時算 killed → 掛住那條紅;abort 不拿掉 → 基準紅那條紅;缺結果當 survived → 缺結果那條紅。"""
++    m = _load_lumos_inproc()
++    root = fake = None
++    try:
++        root, fake = _ck_repo(1, {"alphaCase": {"hang": [1]}, "bravoCase": {"kill": [1]}})
++        r = _ck_run(root, fake)
++        ev = (_ck_gov(root, kind="choice-kill") or [{}])[0]
++        check("S9 壞法逾時 → no_result、reason 測試掛住、rc 2", ev.get("verdict") == "no_result" and str(ev.get("reason", "")).startswith("測試掛住")
++              and r.returncode == 2, f"rc={r.returncode} {ev}\n{r.stderr[-300:]}")
++        _ck_cleanup(root, fake)
++        root, fake = _ck_repo(1, {"alphaCase": {"base_red": True}, "bravoCase": {"kill": [1]}})
++        r = _ck_run(root, fake)
++        ev = (_ck_gov(root, kind="choice-kill") or [{}])[0]
++        check("S9 t_a 基準就紅、t_b 殺掉壞法 → killed by bravoCase", ev.get("verdict") == "killed" and ev.get("killing_test") == "kotlin-junit:bravoCase", str(ev))
++        check("S9 t_a 記基準不綠沒跑(帳上 aborted、輸出也講)", ev.get("aborted") == ["alphaCase"] and "基準不綠沒跑" in r.stdout, f"{ev}\n{r.stdout[-300:]}")
++    finally:
++        _ck_cleanup(root, fake)
++    # 判定本身(不靠子行程):逐種原因
++    def row(v, **k):
++        return dict({"verdict": v, "weak": False, "compile_error": False, "weak_why": [], "detail": "", "fail_excerpt": ""}, **k)
++    a, b = ("app", "alphaCase"), ("app", "bravoCase")
++    cases = [("revert 失敗讓後面配方沒列 → 缺結果", {a: row("survived")}, ("no_result", "缺結果")),
++             ("弱證據的 killed、另一支 survived → no_result", {a: row("killed", weak=True, weak_why=["平台標了 flaky"]), b: row("survived")}, ("no_result", "killed")),
++             ("drifted → no_result", {a: row("drifted"), b: row("survived")}, ("no_result", "drifted")),
++             ("全部基準 abort → no_result 基準不綠沒跑", {a: row("abort"), b: row("abort")}, ("no_result", "基準不綠沒跑")),
++             ("編不過的 killed 不算殺掉", {a: row("killed", compile_error=True), b: row("skipped")}, ("no_result", "壞法編不過"))]
++    for label, rows, (v, why) in cases:
++        got = m._choice_kill_judge([a, b], rows)
++        check(f"S9 判定:{label}", got[0] == v and got[2].startswith(why), str(got))
++    # 行程內:殺傷力呼叫正常結束卻少列(還原失敗作廢同組)→ 那個壞法照記 no_result 缺結果
++    root, fake = _ck_repo(1, {"alphaCase": {}, "bravoCase": {}})
++    try:
++        import contextlib, io
++
++        def fake_gk(env, node, recipes_override=None, on_row=None, **kw):
++            r0 = recipes_override[0]
++            on_row({"recipe_id": m._kill_recipe_id(str(env.find(node)), r0), "group": r0["group"], "verdict": "survived", "weak": False,
++                    "weak_why": [], "detail": "", "compile_error": False, "fail_excerpt": ""})
++            return 2
++        saved, o_env, o_cwd = m.cmd_guard_kill, dict(_os_mod.environ), _os_mod.getcwd()
++        m.cmd_guard_kill = fake_gk
++        _os_mod.environ.update(_ck_env(fake))
++        _os_mod.chdir(root)
++        try:
++            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++                rc = m.cmd_choice_kill(m.Env(Path(root) / _KSP_V), diff="main..HEAD")
++        finally:
++            m.cmd_guard_kill = saved
++            _os_mod.chdir(o_cwd)
++            _os_mod.environ.clear()
++            _os_mod.environ.update(o_env)
++        ev = (_ck_gov(root, kind="choice-kill") or [{}])[0]
++        check("S9 revert 失敗讓後面配方沒列 → 沒列的壞法 no_result、reason 缺結果、rc 2",
++              rc == 2 and ev.get("verdict") == "no_result" and str(ev.get("reason", "")).startswith("缺結果"), f"rc={rc} {ev}")
++    finally:
++        _ck_cleanup(root, fake)
++
++
++def t_choice_kill_rejects():
++    """[改動選擇點 S10] 工作目錄不乾淨、範圍沒碰到進行中計劃、計劃沒有可守的測試、或 run_cmd 沒有 {method} → choice-kill rc 2 不跑(沒有執行紀錄、
++    治理帳沒有判定)。判準來源:計劃預期值表 S10 三列與〈範圍〉2 跑之前的檢查。翻紅釘:拿掉任一檢查 → 那一條的「沒跑」紅。"""
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ck-"))
++    roots = []
++    try:
++        log = tmp / "run.log"
++        root, fake = _ck_repo(1, {"alphaCase": {"kill": [1]}})
++        roots += [root, fake]
++        plan = Path(root) / _KSP_V / "Projects" / "選擇_計劃.md"
++        plan.write_text(plan.read_text(encoding="utf-8") + "\n補一句\n", encoding="utf-8")
++        cases = [("計劃檔有未提交改動", root, fake, "未提交")]
++        r2, f2 = _ck_repo(1, {"alphaCase": {"kill": [1]}}, status="done")
++        cases.append(("範圍碰不到進行中計劃 → 說沒規格判不了", r2, f2, "沒規格"))
++        r3, f3 = _ck_repo(1, {"alphaCase": {"kill": [1]}}, config={"test_profile": "kotlin-junit", "test": {"run_cmd": "{python} tests/run.py"}})
++        cases.append(("run_cmd `{python} tests/run.py`(沒有 {method})", r3, f3, "{method}"))
++        r4, f4 = _ck_repo(1, {"alphaCase": {"kill": [1]}}, clauses="- [S1] 當使用者開啟頁面,系統 應 顯示輸入框 [manual:打開頁面看有沒有輸入框]\n")
++        cases.append(("計劃條款全是 [manual:] → 沒有可守的測試", r4, f4, "可守的測試"))
++        roots += [r2, f2, r3, f3, r4, f4]
++        for label, rt, fk, word in cases:
++            log.unlink(missing_ok=True)
++            r = _ck_run(rt, fk, runlog=log)
++            check(f"S10 {label} → rc 2、沒跑", r.returncode == 2 and word in r.stderr and not _ck_log(log) and not _ck_gov(rt),
++                  f"rc={r.returncode} {r.stderr[-400:]} {_ck_log(log)}")
++    finally:
++        _ck_cleanup(*roots, tmp)
++
++
++def t_choice_kill_incremental():
++    """[改動選擇點 S11] 已有有效處置的行跳過;已 survived 而守的測試沒變的行不重跑;--max-mutants、--max-seconds 停在配方之間並說還剩幾個;
++    每次呼叫記一筆 run。判準來源:計劃預期值表 S11 四列(40 個壞法跑 30 個縮成 5 個跑 3 個;60 秒每個 30 秒縮成 13 秒每個 8 秒,總時限含開跑前約 3 秒的準備)。
++    翻紅釘:不看 tests_sha 一律重跑 → 「不重跑那 3 個」紅;tests_sha 變了也不重跑 → 補測試那條紅;時限不在配方之間判 → 只跑 2 個那條紅。"""
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ck-"))
++    root = fake = None
++    try:
++        log = tmp / "run.log"
++        root, fake = _ck_repo(3, {"alphaCase": {"kill": [1, 2, 3]}})
++        _ck_run(root, fake)
++        r = _ck_run(root, fake, runlog=log)
++        runs = _ck_gov(root, kind="run")
++        check("S11 第一次 3 行全 killed,再跑一次 → 3 行都跳過、rc 0、壞法沒跑", r.returncode == 0 and not [x for x in _ck_log(log) if x[1] != "base"]
++              and len(_ck_gov(root, kind="choice-kill")) == 3, f"rc={r.returncode} {_ck_log(log)} {r.stderr[-300:]}")
++        check("S11 每次呼叫記一筆 run(第二筆跑的壞法數 0)", len(runs) == 2 and runs[1].get("ran") == 0 and runs[0].get("ran") == 3, str(runs)[:500])
++        _ck_cleanup(root, fake)
++        root, fake = _ck_repo(5, {"alphaCase": {}, "bravoCase": {}})
++        r = _ck_run(root, fake, "--max-mutants", "3")
++        check("S11 5 個壞法 --max-mutants 3 → 跑 3 個、說還剩 2 個、rc 2", r.returncode == 2 and "還有 2 個沒跑" in r.stdout
++              and len(_ck_gov(root, kind="choice-kill")) == 3, f"rc={r.returncode} {r.stdout[-400:]}")
++        log.unlink(missing_ok=True)
++        r = _ck_run(root, fake, runlog=log)
++        ran = sorted({x[1] for x in _ck_log(log) if x[1] != "base"})
++        check("S11 守的測試沒變再跑一次 → 只跑沒跑過的 2 個(4、5),不重跑那 3 個存活", ran == ["4", "5"] and r.returncode == 1, f"{ran} rc={r.returncode}")
++        # 補一支綁條款的測試(守的測試集合變了)→ 存活的行重跑
++        vt = Path(root) / "app/src/test/java/x/VmTest.kt"
++        vt.write_text(_CK_KT_TEST.replace("@@EXTRA@@", "    @Test fun charlieCase() {}\n"), encoding="utf-8")
++        plan = Path(root) / _KSP_V / "Projects" / "選擇_計劃.md"
++        plan.write_text(plan.read_text(encoding="utf-8").replace("[test:bravoCase]\n", "[test:bravoCase]\n- [S3] 當重新整理,系統 應 保留輸入 [test:charlieCase]\n"),
++                        encoding="utf-8")
++        subprocess.run(["git", "add", str(vt), str(plan)], cwd=root, capture_output=True)
++        subprocess.run(["git", "commit", "-qm", "補測試"], cwd=root, capture_output=True)
++        log.unlink(missing_ok=True)
++        r = _ck_run(root, fake, runlog=log)
++        ran = sorted({x[1] for x in _ck_log(log) if x[1] != "base"})
++        check("S11 補了一支綁條款的測試再跑 → 5 行都重跑", ran == ["1", "2", "3", "4", "5"], f"{ran} {r.stderr[-400:]}")
++        _ck_cleanup(root, fake)
++        root, fake = _ck_repo(4, {"alphaCase": {"slow": 8, "kill": [1, 2, 3, 4]}})
++        r = _ck_run(root, fake, "--max-seconds", "13", floor="60")
++        n = len(_ck_gov(root, kind="choice-kill"))
++        check("S11 --max-seconds 13、每個壞法 8 秒(開跑前的準備約 3 秒)→ 跑 2 個後停、說還剩幾個、rc 2", n == 2 and "還有 2 個沒跑" in r.stdout and r.returncode == 2,
++              f"記了 {n} 個 rc={r.returncode} {r.stdout[-400:]}")
++    finally:
++        _ck_cleanup(root, fake, tmp)
++
++
++def t_choice_kill_interrupt():
++    """[改動選擇點 S12] 跑到一半收到第一個中斷訊號:讓正在跑的配方跑完後停、記下判定完整的壞法與一筆 interrupted 的 run、rc 2。
++    判準來源:計劃預期值表 S12 列(〈範圍〉2 中斷;人裁兩段式訊號的 defer 模式)。翻紅釘:第一個訊號直接中斷 → 第 3 個沒記那條紅;
++    停止旗標不看 → 第 4、5 個跑了那條紅。"""
++    import signal as _sig
++    import time as _time
++    if not hasattr(_sig, "SIGINT") or _os_mod.name == "nt":
++        raise _SrcOnly("非 POSIX,這段沒驗到")
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ck-"))
++    root = fake = None
++    try:
++        log, mark = tmp / "run.log", tmp / "mark"
++        root, fake = _ck_repo(5, {"alphaCase": {"kill": [1, 2, 3, 4, 5], "mark": 3}})
++        p = subprocess.Popen([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "choice-kill", "--diff", "main..HEAD"], cwd=root,
++                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_ck_env(fake, log, CK_MARK=str(mark)),
++                             stdin=subprocess.DEVNULL)
++        t0 = _time.time()
++        while not mark.exists() and p.poll() is None and _time.time() - t0 < 120:
++            _time.sleep(0.05)
++        p.send_signal(_sig.SIGINT)
++        _out, err = p.communicate(timeout=120)
++        evs = _ck_gov(root, kind="choice-kill")
++        runs = _ck_gov(root, kind="run")
++        ran = sorted({x[1] for x in _ck_log(log) if x[1] != "base"})
++        check("S12 第 3 條跑完才停:記了壞法 1 到 3、沒跑 4、5", len(evs) == 3 and ran == ["1", "2", "3"]
++              and all(e.get("verdict") == "killed" for e in evs), f"{ran} {[e.get('verdict') for e in evs]}\n{err[-400:]}")
++        check("S12 一筆 run 帶 interrupted、rc 2", len(runs) == 1 and runs[0].get("interrupted") is True and p.returncode == 2,
++              f"rc={p.returncode} {runs}")
++        m = _load_lumos_inproc()
++        with m._isolated_worktree(root, "", "lumos-kill-") as wt:
++            inside = m._KILL_WT_LIVE.get(wt.path)
++        check("S12 活著的隔離工作樹登記在模組層清單(強制結束時印路徑)、收掉就拿掉", inside == str(root) and wt.path not in m._KILL_WT_LIVE,
++              f"{inside} {list(m._KILL_WT_LIVE)}")
++    finally:
++        _ck_cleanup(root, fake, tmp)
++
++
++def t_choice_waive():
++    """[改動選擇點 S13] lint-waive choice:<定位> 帶理由 → 放行檔記那一行的行指紋(choice:<檔>:<行指紋>),choice-kill 視那一行已處置;
++    理由不到 10 實字、不是 <等價|不是需求|不適用>: 開頭、或定位是乾節點、不是改到的行、行號不合 → rc 2;定位從右切(檔名可含冒號)。
++    判準來源:計劃預期值表 S13 四列(推送前那一道那半在第三段)。翻紅釘:鍵存行號不存指紋 → 指紋那條紅;乾節點照收 → 乾節點那條紅。"""
++    import json as _j
++    m = _load_lumos_inproc()
++    check("S13 定位 `a:b.kt:12` → 檔 a:b.kt、行 12", m._choice_loc_parse("a:b.kt:12") == ("a:b.kt", 12))
++    check("S13 行號不是正整數 → 不收", all(m._choice_loc_parse(x) is None for x in ("a.kt:0", "a.kt:x", "a.kt", ":5", "a.kt:-1")))
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ck-"))
++    root = fake = None
++    try:
++        src, hits = _ck_hits(2)
++        arid = _choice_hit(src, "A-1", "val k2 = a2 === b2")
++        hits.append({**arid, "mv": {}})
++        root, _f = _ck_repo(2, {"alphaCase": {}})
++        _ck_cleanup(_f)
++        fake = _choice_fake_sg({src: hits})
++
++        def waive(loc, note):
++            e = _ck_env(fake)
++            return subprocess.run([sys.executable, GRAPHCTL, "lint-waive", f"choice:{loc}", "--note", note, "--repo", str(root)], cwd=root,
++                                  capture_output=True, text=True, env=e, stdin=subprocess.DEVNULL)
++        r = waive(_ck_loc(1), "等價:短")
++        check("S13 --note \"等價:短\" → rc 2", r.returncode == 2 and "10" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++        r = waive(_ck_loc(1), "型別不合換了編不過不是需求的寫法")
++        check("S13 理由沒寫 <等價|不是需求|不適用>: 開頭 → rc 2", r.returncode == 2, f"rc={r.returncode} {r.stderr[-300:]}")
++        r = waive(_ck_loc(2), "不適用:型別不合換了編不過不是需求")
++        check("S13 定位指到乾節點那一行 → rc 2", r.returncode == 2 and "乾節點" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++        r = waive(f"{_CHOICE_MAIN}:2", "不適用:型別不合換了編不過不是需求")
++        check("S13 定位不是改到的選擇點行 → rc 2", r.returncode == 2, f"rc={r.returncode} {r.stderr[-300:]}")
++        r = waive(_ck_loc(1), "不適用:型別不合換了編不過不是需求")
++        wv = _j.loads((Path(root) / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8"))["waivers"] if r.returncode == 0 else []
++        fp = m._choice_fp(_CHOICE_MAIN, src.split("\n"), 5)
++        check("S13 放行檔多一筆 choice:<file>:<fp>(行指紋,不是行號)", r.returncode == 0 and [w["key"] for w in wv] == [f"choice:{_CHOICE_MAIN}:{fp}"]
++              and wv[0].get("origin") == "ai", f"rc={r.returncode} {r.stderr[-300:]} {wv}")
++        wev = _ck_gov(root, gate="lint-new", kind="waived")
++        check("S13 放行事件帶列號與外層宣告(gov --stats 依 (列號, 外層宣告) 數乾節點候選,論文 3.1)", len(wev) == 1 and wev[0].get("scope") == "choice-kill"
++              and wev[0].get("row") == "C-7" and str(wev[0].get("decl", "")).startswith("fun load()") and wev[0].get("label") == "不適用", str(wev)[:400])
++        subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
++        subprocess.run(["git", "commit", "-qm", "放行"], cwd=root, capture_output=True)
++        log = tmp / "run.log"
++        r = _ck_run(root, fake, runlog=log)
++        check("S13 choice-kill 視放行的那一行已處置(不跑、不記)、rc 0", r.returncode == 0 and not [x for x in _ck_log(log) if x[1] != "base"]
++              and not _ck_gov(root, kind="choice-kill"), f"rc={r.returncode} {_ck_log(log)} {r.stdout[-300:]} {r.stderr[-300:]}")
++    finally:
++        _ck_cleanup(root, fake, tmp)
++
++
++_CK_POINT_CLAUSE = "當使用者連續輸入,搜尋結果 應 只顯示最後一次查詢的結果"
++
++
++def t_situation_rule_point():
++    """[改動選擇點 S14] situation-rule --point 寫回成功:用那個壞法跑殺傷力、記人裁事件帶 point(不帶 seg/row)、另記 choice-kill killed(via situation-rule);
++    條款文字與測試已存在時把既有條款記給這個壞法(不插第二條);重跑同一個 --point 冪等;--point 與 --seg 一起給 rc 2;帶 point 的事件不免預期值表列。
++    判準來源:計劃預期值表 S14 五列。翻紅釘:帶 point 的事件照免 → 預期值表那條紅;不認既有條款 → 「一條條款」那條紅。"""
++    m = _load_lumos_inproc()
++    root = fake = None
++    try:
++        root, fake = _ck_repo(2, {"alphaCase": {"kill": [1, 2]}})
++        plan = Path(root) / _KSP_V / "Projects" / "選擇_計劃.md"
++
++        def sr(*args):
++            return subprocess.run([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "situation-rule", *args], cwd=root,
++                                  capture_output=True, text=True, env=_ck_env(fake, floor="5"), stdin=subprocess.DEVNULL)
++
++        def point(i):
++            return sr("--point", _ck_loc(i), "--plan", "Projects/選擇_計劃", "--clause", _CK_POINT_CLAUSE, "--test", "alphaCase",
++                      "--consent", "好,照這條寫回", "--diff", "main..HEAD")
++        r = sr("--point", _ck_loc(1), "--seg", "abc", "--plan", "Projects/選擇_計劃", "--clause", _CK_POINT_CLAUSE, "--test", "alphaCase")
++        check("S14 --point 與 --seg 一起給 → rc 2", r.returncode == 2 and "互斥" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++        r = point(1)
++        text = plan.read_text(encoding="utf-8")
++        ruled = [e for e in _ck_gov(root, gate="situation-rule")]
++        ck = _ck_gov(root, kind="choice-kill")
++        fp1 = _ck_fp(1, 2)
++        check("S14 survived 那一行跑 --point、新條款綁的測試在壞法下紅 → 條款寫回 S3", r.returncode == 0
++              and f"- [S3] {_CK_POINT_CLAUSE} [test:alphaCase]" in text, f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-500:]}")
++        e = ruled[0] if len(ruled) == 1 else {}
++        check("S14 人裁事件帶 point 與壞法身分(file、fp、new_sha),不帶 seg/row", e.get("point") == _ck_loc(1) and e.get("fp") == fp1
++              and e.get("file") == _CHOICE_MAIN and len(str(e.get("new_sha"))) == 16 and "seg" not in e and "row" not in e, str(ruled)[:500])
++        check("S14 另記 choice-kill killed(via situation-rule、killing_test kotlin-junit:alphaCase、條款 S3)", len(ck) == 1 and ck[0].get("verdict") == "killed"
++              and ck[0].get("via") == "situation-rule" and ck[0].get("killing_test") == "kotlin-junit:alphaCase" and ck[0].get("clauses") == ["Projects/選擇_計劃#S3"],
++              str(ck)[:500])
++        subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
++        subprocess.run(["git", "commit", "-qm", "寫回"], cwd=root, capture_output=True)
++        gl = Path(root) / "docs" / ".governance-log.jsonl"
++        before = (plan.read_bytes(), gl.read_bytes())
++        r = point(1)
++        check("S14 同一個 --point 跑兩次(第一次帳已記)→ rc 0、計劃與帳都不動", r.returncode == 0 and (plan.read_bytes(), gl.read_bytes()) == before,
++              f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-300:]}")
++        r = point(2)
++        text2 = plan.read_text(encoding="utf-8")
++        ck = _ck_by_file(_ck_gov(root, kind="choice-kill"))
++        check("S14 同一段條款文字與同一支測試給第二個 --point → 計劃只有一條、兩行各記 killed", r.returncode == 0 and text2 == text
++              and text2.count(_CK_POINT_CLAUSE) == 1 and ck.get(_ck_fp(2, 2), {}).get("verdict") == "killed"
++              and ck.get(_ck_fp(2, 2), {}).get("clauses") == ["Projects/選擇_計劃#S3"] and ck.get(fp1, {}).get("verdict") == "killed",
++              f"rc={r.returncode} {r.stderr[-400:]}")
++        evs, _gerr = m._gov_vc_gate_events(root, "situation-rule")
++        prel = "Projects/選擇_計劃.md"
++        check("S14 帶 point 的人裁事件不免預期值表列(_spec_gate_ruled_ids 不認 S3)", "S3" not in m._spec_gate_ruled_ids(root, prel, text2, events=(evs, None)),
++              str(evs)[:300])
++        nopoint = [{k: v for k, v in x.items() if k not in ("point", "file", "fp", "new_sha")} for x in evs[:1]]
++        check("S14 ★對照★ 同一筆拿掉 point 就會被認(證明是 point 讓它不免)", "S3" in m._spec_gate_ruled_ids(root, prel, text2, events=(nopoint, None)),
++              str(nopoint)[:300])
++        rows = [{"gate": "situation-rule", "kind": "situation-rule", "origin": "ai", "consent": "好", "point": _ck_loc(1)}]
++        check("S14 帶 point 的人裁事件不算進情境題人裁次數", m._gov_situation_spec_counts(rows, [])[3] == {"human": 0, "ai": 0})
++    finally:
++        _ck_cleanup(root, fake)
++
++
++def t_choice_exemptions():
++    """[改動選擇點 S21 不涉推送閘的那半] 計劃日期早於生效日、專案沒有 kotlin-junit 平台 → 不要求,而且不需要 ast-grep 就判得出來;
++    改到的行只有乾節點(log)→ 沒有要處置的行。推送前那一道那半在 _ckp_exemptions_push(第三段)。判準來源:計劃預期值表 S21 三列。
++    翻紅釘:先掃描再判 → 掃描被呼叫那條紅;生效日不看 → 早於生效日那條紅。"""
++    m = _load_lumos_inproc()
++    roots = []
++    saved_scan, saved_env = m._choice_scan, dict(_os_mod.environ)
++
++    def boom(*_a, **_k):
++        raise AssertionError("不該掃描(不需要 ast-grep 就判得出來)")
++    m._choice_scan = boom
++    try:
++        root, fake = _ck_repo(1, {"alphaCase": {}})
++        roots += [root, fake]
++        rng, sha = f"{_lens_sha(root, 'main')}..{_lens_sha(root, 'HEAD')}", _lens_sha(root, "HEAD")
++        _os_mod.environ["LUMOS_CHOICE_SINCE"] = "9999-12-31"
++        need, why = m._choice_requirement(Path(root), rng, sha)
++        check("S21 計劃日期早於生效日、PATH 沒有 ast-grep → 不要求、沒掃描", need is False and "生效日" in why, why)
++        _os_mod.environ["LUMOS_CHOICE_SINCE"] = "2000-01-01"
++        need, why = m._choice_requirement(Path(root), rng, sha)
++        check("S21 ★對照★ 生效日在計劃日期之前 → 要求(之後才掃描)", need is True, why)
++        r2, f2 = _ck_repo(1, {"alphaCase": {}}, config={"test_profile": "python", "test": {"run_cmd": "true"}})
++        roots += [r2, f2]
++        need, why = m._choice_requirement(Path(r2), f"{_lens_sha(r2, 'main')}..{_lens_sha(r2, 'HEAD')}", _lens_sha(r2, "HEAD"))
++        check("S21 專案只有 python 平台 → 不要求", need is False and "kotlin-junit" in why, why)
++    finally:
++        m._choice_scan = saved_scan
++        _os_mod.environ.clear()
++        _os_mod.environ.update(saved_env)
++        _ck_cleanup(*roots)
++    _m, tables = _choice_tables_ip()
++    src = _choice_wrap("        Timber.d(\"n=\" + (a > b))\n")
++    h = _choice_hit(src, "C-1", "a > b", mv={"A": "a", "B": "b"})
++    arid = _choice_hit(src, "A-1", "Timber.d(\"n=\" + (a > b))")
++    got = m._choice_file_points(_CHOICE_MAIN, src, [5], {"choice": [h], "arid": [(arid["s"], arid["e"])], "error": []}, tables)
++    check("S21 改動只有 log(import 行本來就不算改到的行)→ 沒有要處置的行", not m._choice_needs_disposition(got) and got and got[0]["status"] == "arid",
++          str(got)[:300])
++    _ckp_exemptions_push()   # 推送前那一道那半(第三段)
++
++
++def _lens_sha(root, rev):
++    return subprocess.run(["git", "rev-parse", rev], cwd=root, capture_output=True, text=True).stdout.strip()
++
++
++def t_spec_gate_push_choice_catalog_change():
++    """[改動選擇點 S24 不涉推送閘的那半] 有效處置以 (檔, 行指紋) 為鍵:型錄改了讓同一行挑到另一個壞法,原本的 killed 照算;計劃改成 done 而殺掉它的
++    測試仍被條款綁著 → 不算過期;條款拿掉那支測試才過期。推送前那一道那半在 _ckp_catalog_change_push(第三段)。判準來源:計劃預期值表 S24 兩列。
++    翻紅釘:鍵帶列號或 new_sha → 型錄改了那條紅;過期只看進行中計劃 → done 那條紅。"""
++    m = _load_lumos_inproc()
++    ev = {"gate": "choice-kill", "kind": "choice-kill", "file": _CHOICE_MAIN, "fp": "0123456789abcdef", "row": "C-1", "new_sha": "a" * 16,
++          "verdict": "killed", "killing_test": "alphaCase"}
++    idx = m._choice_ledger_index([ev])
++    line = {"file": _CHOICE_MAIN, "line": 5, "fp": "0123456789abcdef", "status": "mutant",
++            "mutant": {"row": "C-28", "identity": {"new_sha": "b" * 16}}}
++    todo, carried, done, _nu = m._choice_kill_pick({"lines": [line]}, idx, set(), {"alphaCase"}, "x", None)
++    check("S24 那一行原本 killed(挑到 ROR),型錄改了讓它挑到 API → 照舊算有效處置", (todo, carried, done) == ([], {}, 1), f"{todo} {carried} {done}")
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ck24-"))
++    try:
++        v = tmp / "v"
++        (v / "Projects").mkdir(parents=True)
++        (v / "Projects" / "選擇_計劃.md").write_text(_CK_PLAN.format(status="done", clauses=_CK_CLAUSES), encoding="utf-8")
++        bound = m._choice_bound_names(m.Env(v), {}, None)
++        check("S24 計劃改成 done、killing_test 仍被那份計劃的條款綁著 → 不算過期", m._choice_disposition(idx[(_CHOICE_MAIN, ev["fp"])], False, bound) == "killed",
++              str(bound))
++        (v / "Projects" / "選擇_計劃.md").write_text(_CK_PLAN.format(status="done", clauses="- [S2] 當沒有結果,系統 應 顯示空狀態 [test:bravoCase]\n"),
++                                                    encoding="utf-8")
++        bound = m._choice_bound_names(m.Env(v), {}, None)
++        check("S24 ★對照★ 條款不再綁 alphaCase → 過期", m._choice_disposition(idx[(_CHOICE_MAIN, ev["fp"])], False, bound) == "stale", str(bound))
++    finally:
++        _ck_cleanup(tmp)
++    _ckp_catalog_change_push()   # 推送前那一道那半(第三段)
++
++
++# ── 改動選擇點第三段:推送前那一道、gov --stats(Projects/改動選擇點都要有需求守住_計劃 範圍 4、5;論文 https://arxiv.org/pdf/2102.11378 2.3)──
++# 判準來源:計劃〈預期值表〉S15 到 S22、S24 各列(輸入照抄、預期照抄;假 ast-grep 吐固定命中,真殺傷力不跑——推送前只讀帳)。
++_CKP_KT = "kotlin-junit"
++
++
++def _ckp_ev(fp, verdict, kt="", rel=_CHOICE_MAIN, via="run", tests_sha="t" * 16, attempt=1, reason=""):
++    """一筆 choice-kill 事件(形狀同 _choice_event_extra 寫的那筆)。"""
++    return {"ts": "2026-11-14T10:00:00+08:00", "commit": "", "gate": "choice-kill", "kind": "choice-kill", "hard": False, "nodes": [],
++            "note": f"選擇點 {rel} C-7 {verdict}", "file": rel, "fp": fp, "row": "C-7", "new_sha": "a" * 16, "verdict": verdict,
++            "killing_test": kt, "clauses": ["Projects/選擇_計劃#S1"] if kt else [], "plans": ["Projects/選擇_計劃"], "tests_sha": tests_sha,
++            "reason": reason, "via": via, "attempt": attempt, "run_id": "r1", "catalog": "", "token": _os_mod.urandom(8).hex()}
++
++
++def _ckp_commit(root, evs=None, waivers=None, msg="帳"):
++    """把事件追加進版控治理帳、放行寫進放行檔(都給了才寫),提交成新的 HEAD。"""
++    import json as _j
++    if evs is not None:
++        p = Path(root) / "docs" / ".governance-log.jsonl"
++        with open(p, "a", encoding="utf-8") as fh:
++            for e in evs:
++                fh.write(_j.dumps(e, ensure_ascii=False) + "\n")
++    if waivers is not None:
++        p = Path(root) / ".lumos" / "lint-waivers.json"
++        p.write_text(_j.dumps({"waivers": [{"key": k, "rule": "choice-kill", "file": "", "reason": "不適用:型別不合換了編不過不是需求",
++                                            "by": "t", "ts": "", "origin": "human", "acked": True} for k in waivers]}), encoding="utf-8")
++    subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
++    subprocess.run(["git", "commit", "-qm", msg, "--allow-empty"], cwd=root, capture_output=True)
++
++
++def _ckp_push(root, fake, rng="main..HEAD", push=None, since="2000-01-01", path=None, **kw):
++    """lumos spec-gate --push-check(子行程);生效日預設 2000-01-01(打開這一道),PATH 前面接假 ast-grep。"""
++    a = ["--push-remote", push[0], "--pushed-ref", push[1]] if push else []
++    e = _ck_env(fake, LUMOS_CHOICE_SINCE=since, **kw)
++    if path is not None:
++        e["PATH"] = str(path)
++    return subprocess.run([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "spec-gate", "--push-check", rng, "--repo", str(root), *a],
++                          cwd=root, capture_output=True, text=True, env=e, stdin=subprocess.DEVNULL, timeout=300)
++
++
++def _ckp_inproc(root, fake, fn, since="2000-01-01", **patch):
++    """行程內跑 fn(m)(推送前那一道的單元情境:換掉某一支函式或常數);環境與 cwd 收尾還原。→ (fn 的回傳, stdout)。"""
++    import contextlib
++    import io
++    m = _load_lumos_inproc()
++    saved = {k: getattr(m, k) for k in patch}
++    o_env, o_cwd = dict(_os_mod.environ), _os_mod.getcwd()
++    _os_mod.environ.update(_ck_env(fake, LUMOS_CHOICE_SINCE=since))
++    _os_mod.chdir(root)
++    out = io.StringIO()
++    try:
++        for k, v in patch.items():
++            setattr(m, k, v)
++        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
++            got = fn(m)
++    finally:
++        for k, v in saved.items():
++            setattr(m, k, v)
++        _os_mod.chdir(o_cwd)
++        _os_mod.environ.clear()
++        _os_mod.environ.update(o_env)
++    return got, out.getvalue()
++
++
++def _ckp_repo_src(src, hits, n_extra_files=None, **kw):
++    """同 _ck_repo,但 Vm.kt 的改動內容與假命中自己給(另可多帶別支改動檔 {路徑: (內容, 命中)})。→ (root, 假 ast-grep 目錄)。"""
++    import json as _j
++    v = _KSP_V
++    base = {f"{v}/Projects/選擇_計劃.md": _CK_PLAN.format(status=kw.get("status", "doing"), clauses=kw.get("clauses", _CK_CLAUSES)),
++            f"{v}/Systems/選擇.md": _KSP_HOME.format(code=_CHOICE_MAIN), "tests/run.py": _CK_RUNNER, "tests/beh.json": _j.dumps({}),
++            "app/src/test/java/x/VmTest.kt": _CK_KT_TEST.replace("@@EXTRA@@", ""), _CHOICE_MAIN: _choice_wrap("        go()\n"),
++            "docs/.governance-log.jsonl": ""}
++    change = {_CHOICE_MAIN: src, **{p: c for p, (c, _h) in (n_extra_files or {}).items()}}
++    root = _sit_repo(base, change, config=kw.get("config") or _CK_CFG)
++    return root, _choice_fake_sg({src: hits, **{c: h for _p, (c, h) in (n_extra_files or {}).items()}})
++
++
++def _ckp_block_lines(out, reason):
++    """推送輸出裡某種原因那一條的「N 行」數(沒有那條回 0)。"""
++    import re as _re
++    m = _re.search(r"\[選擇點\] " + reason + r" (\d+) 行", out)
++    return int(m.group(1)) if m else 0
++
++
++def t_spec_gate_push_choice():
++    """[改動選擇點 S15] 推送範圍有行沒有有效處置(缺紀錄、過期、不唯一、跑不出結果、抽中的存活)→ 推送前那一道擋下、列出那一行與 lumos choice-kill、
++    記 blocked(同一個 B 同一組原因不重記);同一檔內容相同但上下文不同的兩行各自要處置;300 行缺紀錄只列 20 行示例與總數;同時有別的原因時兩個
++    標題分開、不印 light 分級、只因選擇點被擋時不印「規格閘要紅」那段。判準來源:計劃預期值表 S15 五列。
++    翻紅釘:有效處置不看 killing_test 綁定 → 過期那條紅;鍵不含上下文 → 第二行那條紅;不列示例上限 → 300 行那條紅。"""
++    roots = []
++    try:
++        root, fake = _ck_repo(3, {})
++        roots += [root, fake]
++        _ckp_commit(root, [_ckp_ev(_ck_fp(1, 3), "killed", f"{_CKP_KT}:alphaCase"), _ckp_ev(_ck_fp(3, 3), "killed", f"{_CKP_KT}:t_strong")])
++        r = _ckp_push(root, fake)
++        out = r.stdout
++        check("S15 一行沒紀錄 → 擋、列出那一行與 lumos choice-kill", r.returncode == 1 and _ckp_block_lines(out, "缺紀錄") == 1
++              and f"{_ck_loc(2)}" in out and "lumos choice-kill" in out, f"rc={r.returncode}\n{out[-1500:]}\n{r.stderr[-500:]}")
++        check("S15 一行 killed by t_strong、t_strong 已沒有條款綁 → 擋、reason 過期", _ckp_block_lines(out, "過期") == 1 and _ck_loc(3) in out, out[-1200:])
++        check("S15 killed by 仍被條款綁的 alphaCase 那一行不擋(有效處置)", f"{_ck_loc(1)} " not in out, out[-1200:])
++        check("S15 只因選擇點被擋:標題講選擇點行數、不印「規格閘要紅、推送閘要綠」", "選擇點 2 行沒有有效處置" in out and "規格閘要紅" not in out, out[-1500:])
++        bl = _ck_gov(root, kind="blocked")
++        check("S15 記一筆 blocked(reasons 帶行數、hard、token)", len(bl) == 1 and bl[0].get("hard") is True
++              and sorted((x["reason"], x["lines"]) for x in bl[0]["reasons"]) == [("缺紀錄", 1), ("過期", 1)] and bl[0].get("token"), str(bl)[:500])
++        cp = subprocess.run([sys.executable, GRAPHCTL, "choice-points", "--diff", "main..HEAD", "--repo", str(root)], cwd=root, capture_output=True,
++                            text=True, env=_ck_env(fake), stdin=subprocess.DEVNULL)
++        st = {ln.split()[0]: ln for ln in cp.stdout.splitlines() if ln.startswith("  " + _CHOICE_MAIN)}
++        check("S15 choice-points 印帳上狀態:殺掉 by 平台:測試(條款)、沒跑、過期", "殺掉 by kotlin-junit:alphaCase(Projects/選擇_計劃#S1)" in st.get(_ck_loc(1), "")
++              and st.get(_ck_loc(2), "").endswith("沒跑") and "過期" in st.get(_ck_loc(3), ""), cp.stdout[-800:] + cp.stderr[-300:])
++        _ckp_push(root, fake)
++        check("S15 同一個 B 同一組原因再推一次 → 不重記 blocked", len(_ck_gov(root, kind="blocked")) == 1, str(_ck_gov(root, kind="blocked"))[:300])
++        # 同檔兩行都是 `if (state.isLoading) return`、上下文不同,第一行 killed → 第二行仍要處置(行指紋含上下文)
++        body = ("        val a = 1\n        if (state.isLoading) return\n        go(a)\n        val b = 2\n        val c = 3\n"
++                "        if (state.isLoading) return\n        stop(c)\n")
++        src = _choice_wrap(body)
++        hits = [_choice_hit(src, "C-17", "state.isLoading", occ=k, mv={"X": "state.isLoading"}) for k in (0, 1)]
++        r2, f2 = _ckp_repo_src(src, hits)
++        roots += [r2, f2]
++        m = _load_lumos_inproc()
++        lines = src.split("\n")
++        fp6, fp10 = m._choice_fp(_CHOICE_MAIN, lines, 6), m._choice_fp(_CHOICE_MAIN, lines, 10)
++        _ckp_commit(r2, [_ckp_ev(fp6, "killed", f"{_CKP_KT}:alphaCase")])
++        r = _ckp_push(r2, f2)
++        check("S15 同檔兩行內容相同、上下文不同:第一行 killed、第二行仍要處置", fp6 != fp10 and r.returncode == 1
++              and _ckp_block_lines(r.stdout, "缺紀錄") == 1 and f"{_CHOICE_MAIN}:10" in r.stdout and f"{_CHOICE_MAIN}:6 " not in r.stdout,
++              f"rc={r.returncode}\n{r.stdout[-1200:]}")
++        # 300 行缺紀錄 → 列 20 行示例與總數
++        src, hits = _ck_hits(300)
++        r3, f3 = _ckp_repo_src(src, hits)
++        roots += [r3, f3]
++        r = _ckp_push(r3, f3)
++        shown = [ln for ln in r.stdout.splitlines() if ln.startswith("        " + _CHOICE_MAIN + ":")]
++        check("S15 300 行缺紀錄 → 列 20 行示例與總數、指 lumos choice-points", r.returncode == 1 and _ckp_block_lines(r.stdout, "缺紀錄") == 300
++              and len(shown) == 20 and "另有 280 行" in r.stdout and "lumos choice-points" in r.stdout, f"{len(shown)}\n{r.stdout[-800:]}")
++        # 同時有別的原因(預期值表那種)→ 同一次輸出、兩個標題分開;bad 在 light 之前併入
++        m = _load_lumos_inproc()
++        other = m._EXPECTED_PUSH_TAG + "Projects/X_計劃.md:預期值表還沒簽"
++        ch = m._choice_bad("缺紀錄 3 行:", 3)
++        head = m._spec_gate_push_bad_head([other, ch])
++        check("S15 同時預期值表缺簽:標題兩段分開(計劃那段在前、另有選擇點 3 行)", head.startswith("1 份計劃沒過") and "另有選擇點 3 行" in head, head)
++        check("S15 ★對照★ 只有預期值表時標題照舊", m._spec_gate_push_bad_head([other]) == "1 份計劃沒過(風險低計劃的留痕與測試、風險高計劃的預期值表簽核):",
++              m._spec_gate_push_bad_head([other]))
++        import inspect
++        src_fn = inspect.getsource(m._spec_gate_push_check)
++        check("S15 選擇點的原因在印 light 分級之前併入 bad(不然掛鉤會誤降測試範圍)",
++              src_fn.index("_choice_push_round(") < src_fn.index("改動風險分級:light"), "")
++    finally:
++        _ck_cleanup(*roots)
++
++
++def t_spec_gate_push_choice_cap():
++    """[改動選擇點 S16] 存活行超過「有增行的檔數 × 7」:只擋用「曾經存活的行」指紋集合當種子抽中的那些;提交帳本或 rebase 改行號不改變抽中的那批。
++    判準來源:計劃預期值表 S16 兩列(論文 2.3)。翻紅釘:種子帶行號 → rebase 那條紅;不設上限 → 抽 14 那條紅;帳本算進檔數 → 提交帳本那條紅。"""
++    roots = []
++    try:
++        m = _load_lumos_inproc()
++        rel2 = "app/src/main/java/x/Other.kt"
++        src1, hits1 = _ck_hits(10)
++        body2 = "".join(f"        val k{i} = a{i} === b{i}\n" for i in range(11, 21))
++        src2 = _choice_wrap(body2)
++        hits2 = [_choice_hit(src2, "C-7", f"a{i} === b{i}", mv={"A": f"a{i}", "B": f"b{i}"}) for i in range(11, 21)]
++        root, fake = _ckp_repo_src(src1, hits1, n_extra_files={rel2: (src2, hits2)})
++        roots += [root, fake]
++        keys = [(_CHOICE_MAIN, m._choice_fp(_CHOICE_MAIN, src1.split("\n"), 4 + i)) for i in range(1, 11)] \
++            + [(rel2, m._choice_fp(rel2, src2.split("\n"), 4 + i - 10)) for i in range(11, 21)]
++        _ckp_commit(root, [_ckp_ev(fp, "survived", rel=f) for f, fp in keys])
++        r = _ckp_push(root, fake)
++        want = m._choice_cap_pick(set(keys), 14)
++        check("S16 改 2 支檔、曾經存活 20 行 → 抽 14 行擋、6 行列在沒抽到", r.returncode == 1 and _ckp_block_lines(r.stdout, "存活") == 14
++              and "另有 6 行存活沒抽中" in r.stdout and len(want) == 14, f"rc={r.returncode}\n{r.stdout[-1500:]}")
++        # 處置抽中的 14 行、提交帳本、rebase(上方多插 5 行改行號)再推 → 沒抽到的 6 行仍不要求
++        _ckp_commit(root, [_ckp_ev(fp, "killed", f"{_CKP_KT}:alphaCase", rel=f, attempt=2) for f, fp in sorted(want)])
++        r = _ckp_push(root, fake)
++        check("S16 處置抽中的 14 行、提交帳本 → 不擋、沒抽到的 6 行列在最後一段", r.returncode == 0 and "另有 6 行存活沒抽中" in r.stdout,
++              f"rc={r.returncode}\n{r.stdout[-1200:]}")
++        pad = "// a\n// b\n// c\n// d\n// e\n"
++        n1, n2 = src1.replace("package x\n", "package x\n" + pad, 1), src2.replace("package x\n", "package x\n" + pad, 1)
++        def sh(hs):
++            return [dict(h, line=h["line"] + 5, end_line=h["end_line"] + 5, s=h["s"] + len(pad), e=h["e"] + len(pad),
++                         mv={k: (v[0] + len(pad), v[1] + len(pad), v[2]) for k, v in h["mv"].items()}) for h in hs]
++        (Path(root) / _CHOICE_MAIN).write_text(n1, encoding="utf-8")
++        (Path(root) / rel2).write_text(n2, encoding="utf-8")
++        _ckp_commit(root, msg="rebase 上方多 5 行")
++        fake2 = _choice_fake_sg({n1: sh(hits1), n2: sh(hits2)})
++        roots.append(fake2)
++        r = _ckp_push(root, fake2)
++        check("S16 rebase 改了行號(內容與上下文不變)→ 抽中的那批不變、沒抽到的 6 行仍不要求", r.returncode == 0 and "另有 6 行存活沒抽中" in r.stdout,
++              f"rc={r.returncode}\n{r.stdout[-1200:]}")
++        nested = all(m._choice_cap_pick(set(keys), c) <= m._choice_cap_pick(set(keys), c + 1) for c in range(1, 20))
++        check("S16 抽法:上限變大時抽中的是原本那批的超集(洗牌取前段;上限 1 到 20 逐一比)", nested and m._choice_cap_pick(set(keys), 14) == want, "")
++    finally:
++        _ck_cleanup(*roots)
++
++
++def t_spec_gate_push_choice_no_plan():
++    """[改動選擇點 S17] 推送範圍有選擇點但沒碰到任何進行中計劃 → 擋 reason 無規格(提醒補 lands_in 或連結);碰到的計劃條款全是 [manual:] → 只提醒不擋。
++    判準來源:計劃預期值表 S17 兩列(使用者 2026-11-13 裁:沒規格就照擋;規格閘 manual 小改動裁定)。翻紅釘:無規格不擋 → 第一條紅;沒有可守的測試照擋 → 第二條紅。"""
++    roots = []
++    try:
++        root, fake = _ck_repo(1, {}, status="done")
++        roots += [root, fake]
++        _ckp_commit(root, [])
++        r = _ckp_push(root, fake)
++        check("S17 改了 Kotlin 選擇點、範圍沒碰任何進行中計劃 → 擋、reason 無規格、提醒補 lands_in", r.returncode == 1
++              and _ckp_block_lines(r.stdout, "無規格") == 1 and "lands_in" in r.stdout, f"rc={r.returncode}\n{r.stdout[-800:]}\n{r.stderr[-300:]}")
++        check("S17 無規格記 blocked", [x.get("reason") for e in _ck_gov(root, kind="blocked") for x in e.get("reasons", [])] == ["無規格"],
++              str(_ck_gov(root, kind="blocked"))[:300])
++        r2, f2 = _ck_repo(1, {}, clauses="- [S1] 當使用者開啟頁面,系統 應 顯示輸入框 [manual:打開頁面看有沒有輸入框]\n")
++        roots += [r2, f2]
++        _ckp_commit(r2, [])
++        r = _ckp_push(r2, f2)
++        check("S17 碰到的計劃條款全是 [manual:] → 不擋、印只能人驗", r.returncode == 0 and "只能人驗" in r.stdout and not _ck_gov(r2, kind="blocked"),
++              f"rc={r.returncode}\n{r.stdout[-800:]}")
++    finally:
++        _ck_cleanup(*roots)
++
++
++def t_spec_gate_push_choice_range():
++    """[改動選擇點 S18] 推功能分支:改到的行用 _push_range_start 的起點(分岔點 F)..B;推 main 本身用推送範圍 A..B;掛鉤遇到不認得新參數的舊 lumos
++    不帶參數(規格閘其他圈照跑);--push-remote 與 --pushed-ref 要一起給。判準來源:計劃預期值表 S18 三列。
++    翻紅釘:不走 _push_range_start → F..B 那條紅;探針不看 dest → 舊 lumos 那條紅。"""
++    import re as _re
++    m = _load_lumos_inproc()
++    root, fake = _ck_repo(1, {})
++    try:
++        def g(*a):
++            return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True).stdout.strip()
++        main_sha, b = g("rev-parse", "main"), g("rev-parse", "HEAD")
++        g("update-ref", "refs/remotes/origin/main", main_sha)
++        zero = "0" * 40   # 遠端舊值全零(新分支首推);_push_range_start 照主線分岔點給起點 F
++        rng, at, _how = m._choice_push_range(Path(root), f"{zero}..{b}", ("origin", "refs/heads/feat/sit"))
++        check("S18 推功能分支,_push_range_start 給起點 F(跟 origin/main 的分岔點)→ 改到的行用 F..B", rng == f"{main_sha}..{b}" and at == b, f"{rng}")
++        rng0, _a, _h = m._choice_push_range(Path(root), f"{zero}..{b}", None)
++        check("S18 ★對照★ 沒帶 --push-remote/--pushed-ref → 推送範圍本身(不問 _push_range_start)", rng0 == f"{zero}..{b}", rng0)
++        g("checkout", "-q", "main")
++        g("merge", "-q", "--ff-only", "feat/sit")
++        rng2, _a, _h = m._choice_push_range(Path(root), f"{main_sha}..{b}", ("origin", "refs/heads/main"))
++        check("S18 推 main 本身 → 改到的行用推送範圍 A..B", rng2 == f"{main_sha}..{b}", rng2)
++        g("checkout", "-q", "feat/sit")
++        r = _ckp_push(root, fake, rng=f"{main_sha}..{b}", push=("origin", "refs/heads/feat/sit"), since="9999-12-31")
++        r1 = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "spec-gate", "--push-check", f"{main_sha}..{b}",
++                             "--repo", str(root), "--push-remote", "origin"], cwd=root, capture_output=True, text=True, env=_ck_env(fake))
++        check("S18 lumos 認得 --push-remote/--pushed-ref(rc 0);只給一個 → rc 2", r.returncode == 0 and r1.returncode == 2 and "一起給" in r1.stderr,
++              f"{r.returncode} {r.stderr[-300:]} / {r1.returncode} {r1.stderr[-300:]}")
++    finally:
++        _ck_cleanup(root, fake)
++    hook = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
++    probe = "\n".join(ln for ln in hook.splitlines() if "_SG_PR=" in ln or ("_SG_PR" in ln and "grep" in ln))
++    check("S18 掛鉤的 spec-gate 那行帶 _sg_extra(探到才帶)", _re.search(r'spec-gate --push-check "\$_brange" --repo "\$REPO_ROOT" \$\{_sg_extra\+"\$\{_sg_extra\[@\]\}"\}', hook)
++          is not None and '[[ "$_SG_PR" -eq 1 ]] && _sg_extra=(--push-remote "$_PP_REMOTE" --pushed-ref "$_rref")' in hook, probe)
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckp18-"))
++    try:
++        old = tmp / "lumos-old"
++        src = Path(GRAPHCTL).read_text(encoding="utf-8")
++        old.write_text(src.replace('dest="sg_push_remote"', 'dest="x_old"').replace('dest="sg_pushed_ref"', 'dest="y_old"'), encoding="utf-8")
++        for gp, want in ((old, "0"), (Path(GRAPHCTL), "1")):
++            out = subprocess.run(["bash", "-c", f'GRAPHCTL={gp!s}\n{probe}\necho "$_SG_PR"'], capture_output=True, text=True).stdout.strip()
++            check(f"S18 掛鉤探針:{'舊 lumos(沒有那兩個 dest)→ 不帶參數' if want == '0' else '新 lumos → 帶參數'}", out == want, out)
++    finally:
++        _ck_cleanup(tmp)
++
++
++def t_spec_gate_push_choice_pushed_version():
++    """[改動選擇點 S19] 推送範圍是 A..B 而工作目錄的檔、計劃狀態、條款或放行檔跟 B 不同 → 只看 B:工作目錄多一個沒紀錄的選擇點不擋;
++    工作目錄的計劃改成 done、B 是 doing → 照 B 當進行中;工作目錄放行檔多一筆、B 沒有 → 那一行仍要處置。判準來源:計劃預期值表 S19 三列。
++    翻紅釘:讀工作目錄的放行檔 → 放行那條紅;計劃狀態讀工作目錄 → reason 變成無規格那條紅。"""
++    root, fake = _ck_repo(2, {})
++    try:
++        _ckp_commit(root, [_ckp_ev(_ck_fp(1, 2), "killed", f"{_CKP_KT}:alphaCase")])
++        vm = Path(root) / _CHOICE_MAIN
++        vm.write_text(_choice_wrap(_ck_body(2) + "        val k9 = a9 === b9\n"), encoding="utf-8")
++        plan = Path(root) / _KSP_V / "Projects" / "選擇_計劃.md"
++        plan.write_text(plan.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
++        import json as _j
++        (Path(root) / ".lumos" / "lint-waivers.json").write_text(_j.dumps({"waivers": [{"key": f"choice:{_CHOICE_MAIN}:{_ck_fp(2, 2)}",
++                                                                                         "rule": "choice-kill", "reason": "不適用:x"}]}), encoding="utf-8")
++        r = _ckp_push(root, fake)
++        check("S19 只看 B:工作目錄多的選擇點不算、工作目錄的放行不算(那一行仍要處置)、計劃照 B 當進行中(不是無規格)",
++              r.returncode == 1 and _ckp_block_lines(r.stdout, "缺紀錄") == 1 and _ck_loc(2) in r.stdout and "無規格" not in r.stdout
++              and f"{_CHOICE_MAIN}:7" not in r.stdout, f"rc={r.returncode}\n{r.stdout[-1200:]}\n{r.stderr[-300:]}")
++        subprocess.run(["git", "checkout", "--", _CHOICE_MAIN], cwd=root, capture_output=True)
++        _ckp_commit(root, msg="放行與狀態一起提交")
++        r = _ckp_push(root, fake)
++        check("S19 ★對照★ 放行提交進 B → 那一行不擋", "缺紀錄" not in r.stdout, r.stdout[-800:])
++        got, _o = _ckp_inproc(root, fake, lambda mm: mm._choice_push_waivers(Path(root), _lens_sha(root, "HEAD~1")))
++        check("S19 放行檔讀被推版本:B 之前的版本沒有放行檔 → 沒放行", got == (set(), None), str(got))
++    finally:
++        _ck_cleanup(root, fake)
++
++
++def t_spec_gate_push_choice_unverifiable():
++    """[改動選擇點 S20] 掃描逾時、檔讀不了、讀帳時限用完 → 只提醒並記 unverified;B 版治理帳不在或 git 讀帳回錯 → 擋;守的測試 30 支與 100 支時
++    choice-kill 與 run 事件不超過 4096 位元組。判準來源:計劃預期值表 S20 四列。翻紅釘:算不出來照擋 → 前三條紅;帳不在放行 → 帳不在那條紅。"""
++    import json as _j
++    from collections import Counter
++    root, fake = _ck_repo(1, {})
++    try:
++        m = _load_lumos_inproc()
++        rng = "main..HEAD"
++
++        def push(mm):
++            return mm._spec_gate_push_check(mm.Env(Path(root) / _KSP_V), rng, repo=str(root))
++        rc, out = _ckp_inproc(root, fake, push)
++        check("S20 B 版沒有治理帳檔 → 擋、reason 帳不在", rc == 1 and "帳不在" in out, out[-600:])
++
++        def boom(*_a, **_k):
++            raise m._ChoiceUnverifiable("ast-grep 掃描超過 30 秒")
++        _ckp_commit(root, [])
++        n0 = len(_ck_gov(root, kind="unverified"))
++        rc, out = _ckp_inproc(root, fake, push, _choice_scan=boom)
++        check("S20 掃描超過 _KT_SIT_BUDGET → 不擋、提醒、記 unverified", rc == 0 and "算不出來" in out and len(_ck_gov(root, kind="unverified")) == n0 + 1,
++              out[-600:])
++
++        def unread(*_a, **_k):
++            raise m._KtSitUnverifiable("git 讀不到被推版本的檔")
++        rc, out = _ckp_inproc(root, fake, push, _kt_sit_read_many=unread)
++        check("S20 檔讀不了 → 不擋、提醒、記 unverified", rc == 0 and "算不出來" in out and len(_ck_gov(root, kind="unverified")) == n0 + 2, out[-600:])
++        rc, out = _ckp_inproc(root, fake, push, _CHOICE_GOV_BUDGET=0.0)
++        check("S20 讀帳時限用完 → 不擋、提醒、記 unverified", rc == 0 and "超過" in out and len(_ck_gov(root, kind="unverified")) == n0 + 3, out[-600:])
++        rc, out = _ckp_inproc(root, fake, push, _gov_rows_at=lambda *_a, **_k: ("unreadable", Counter()))
++        check("S20 git 讀帳回錯(時限內)→ 擋、reason 帳讀不了", rc == 1 and "帳讀不了" in out, out[-600:])
++        rc, out = _ckp_inproc(root, fake, push)
++        check("S20 ★對照★ 帳在、沒紀錄 → 照常判(缺紀錄)", rc == 1 and _ckp_block_lines(out, "缺紀錄") == 1, out[-600:])
++        ident = {"file": _CHOICE_MAIN, "fp": "0" * 16, "row": "C-28", "new_sha": "b" * 16}
++        for n in (30, 100):
++            ex = m._choice_event_extra(ident, "no_result", "", [f"Projects/選擇_計劃#S{i}" for i in range(1, 4)],
++                                       [f"Projects/很長的計劃名稱第{i}份_計劃" for i in range(5)], "c" * 16, "測試掛住:" + "摘" * 300, "run", 1, "r" * 12)
++            ev = m._gate_event_build(root, "choice-kill", "choice-kill", f"選擇點 {_CHOICE_MAIN} C-28 no_result", head_sha="d" * 40, nodes=[], extra=ex)
++            size1 = len((_j.dumps(ev, ensure_ascii=False) + "\n").encode("utf-8"))
++            rx = {"run_id": "r" * 12, "changed": 20, "points": 5, "mutant_lines": 5, "ran": 5, "counts": {"killed": 1, "survived": 2, "no_result": 2},
++                  "secs": 60, "ast_grep": "0.51.2", "tests": [[f"someFairlyLongTestMethodName{i}", "e" * 40] for i in range(n)],
++                  "interrupted": False, "tests_sha": "c" * 16, "token": "f" * 16}
++            note = "choice-kill 跑了 5 個壞法(殺掉 1、存活 2、跑不出結果 2)"
++            nodes = m._gate_event_fit(root, "choice-kill", "run", note, rx, "tests", head_sha="d" * 40)
++            ev2 = m._gate_event_build(root, "choice-kill", "run", note, head_sha="d" * 40, nodes=nodes, extra=rx)
++            size2 = len((_j.dumps(ev2, ensure_ascii=False) + "\n").encode("utf-8"))
++            check(f"S20 守的測試 {n} 支、5 份計劃名、reason 300 字摘錄:choice-kill 事件 ≤ 4096({size1})、run 經 _gate_event_fit 後 ≤ 4096({size2})",
++                  size1 <= 4096 and size2 <= 4096, f"{size1} {size2}")
++    finally:
++        _ck_cleanup(root, fake)
++
++
++def t_gov_stats_choice_kill():
++    """[改動選擇點 S22] 治理帳有 choice-kill 事件 → gov --stats 印被回報的存活總數、每次呼叫的改動行數、有壞法行數與耗時中位數、第一次跑殺掉率、
++    存活處置分布、no_result 原因前 5、乾節點候選前 5、被擋筆數與過期占比。判準來源:計劃預期值表 S22 列(數字照抄)。
++    翻紅釘:殺掉率不限 attempt 1 → 3/5 那條紅;中位數改平均 → 120 秒仍對(兩筆)所以另驗三筆時的中位數。"""
++    import json as _j
++    import shutil
++    def ev(kind, **kw):
++        return _j.dumps({"ts": "2026-11-14T10:00:00", "commit": "c", "gate": "choice-kill", "kind": kind, "hard": kind == "blocked", "nodes": [],
++                         "note": "x", "token": _os_mod.urandom(8).hex(), **kw}, ensure_ascii=False) + "\n"
++    def ck(fp, verdict, attempt=1, via="run", kt="", reason="", f=_CHOICE_MAIN):
++        return ev("choice-kill", file=f, fp=fp, row="C-7", verdict=verdict, attempt=attempt, via=via, killing_test=kt, reason=reason, tests_sha="t")
++    rows = [ev("run", changed=10, mutant_lines=4, secs=60), ev("run", changed=30, mutant_lines=8, secs=180)]
++    rows += [ck(f"k{i}", "killed", kt="kotlin-junit:alphaCase") for i in range(3)]
++    rows += [ck("s1", "survived"), ck("n1", "no_result", reason="測試掛住:逾時 30 秒"), ck("s1", "killed", attempt=2, via="situation-rule", kt="kotlin-junit:alphaCase")]
++    rows.append(_j.dumps({"ts": "2026-11-14T10:00:00", "commit": "c", "gate": "lint-new", "kind": "waived", "hard": False, "nodes": [], "note": "放行",
++                          "origin": "human", "scope": "choice-kill", "label": "不適用", "file": _CHOICE_MAIN, "fp": "n1", "row": "C-7", "decl": "fun load() {"},
++                         ensure_ascii=False) + "\n")
++    rows += [ev("blocked", reasons=[{"reason": "過期", "lines": 1}])] + [ev("blocked", reasons=[{"reason": "缺紀錄", "lines": 2}]) for _ in range(3)]
++    root, vault = _stats_fixture("gctl-ckst-", rows)
++    try:
++        out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
++        seg = out[out.find("改動選擇點"):]
++        check("S22 被回報的存活 1", "被回報的存活 1 行" in seg, seg[:900])
++        check("S22 改動行中位數 20、耗時中位數 120 秒", "改動行中位數 20" in seg and "耗時中位數 120 秒" in seg and "有壞法的行中位數 6" in seg, seg[:900])
++        check("S22 第一次跑殺掉率 3/5", "第一次跑殺掉率 3/5" in seg, seg[:900])
++        check("S22 存活處置寫回規格 1、放行 1(不適用)", "寫回規格 1" in seg and "放行 1(不適用 1)" in seg, seg[:900])
++        check("S22 no_result 原因前 5 列出測試掛住", "跑不出結果原因前 5:測試掛住 1" in seg, seg[:900])
++        check("S22 被擋 4(過期 1/4)", "推送被擋 4 筆(過期 1/4)" in seg, seg[:900])
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++    rows2 = [_j.dumps({"ts": "2026-11-14T10:00:00", "commit": "c", "gate": "lint-new", "kind": "waived", "hard": False, "nodes": [], "note": f"放行{i}",
++                       "origin": "human", "scope": "choice-kill", "label": "不是需求", "file": _CHOICE_MAIN, "fp": f"w{i}", "row": "C-18",
++                       "decl": "fun load() {", "token": str(i)}, ensure_ascii=False) + "\n" for i in range(3)]
++    rows2 += [ev("run", changed=c, mutant_lines=1, secs=s) for c, s in ((5, 10), (7, 20), (100, 900))]
++    rows2 += [ck(f"m{i}", "killed", kt="kotlin-junit:wide", f=f"app/src/main/java/x/F{i}.kt") for i in range(3)]
++    root, vault = _stats_fixture("gctl-ckst2-", rows2)
++    try:
++        seg = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
++        seg = seg[seg.find("改動選擇點"):]
++        check("S22 乾節點候選:同形狀(C-18、fun load)放行 3 次 → 列出", "乾節點候選前 5" in seg and "C-18 fun load() { ×3" in seg, seg[:900])
++        check("S22 三筆 run 取中位數(不是平均)", "改動行中位數 7" in seg and "耗時中位數 20 秒" in seg, seg[:900])
++        check("S22 單一測試殺掉 3 支以上不同檔的壞法 → 列出那支測試", "kotlin-junit:wide 3 檔" in seg, seg[:900])
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++
++
++def t_choice_kill_platform_key():
++    """[改動選擇點 第二段 concerns 4 裁決] killing_test 存「平台:測試名」(單平台也帶);過期判定比對帶平台的名字:兩個平台各有一支同名測試、
++    只有 app 那支被條款綁著時,lib 那支殺掉的紀錄算過期;舊紀錄沒有前綴時當成預設平台。翻紅釘:綁定集合只收名字 → 同名那條紅。"""
++    m = _load_lumos_inproc()
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckpk-"))
++    try:
++        v = tmp / "v"
++        (v / "Projects").mkdir(parents=True)
++        (v / "Projects" / "選擇_計劃.md").write_text(_CK_PLAN.format(status="done", clauses="- [S1] 當開頁,系統 應 顯示 [test:app:sameName]\n"), encoding="utf-8")
++        split = {"app": {}, "lib": {}}
++        bound = m._choice_bound_names(m.Env(v), split, "app")
++        def disp(kt):
++            return m._choice_disposition([{"verdict": "killed", "killing_test": kt}], False, bound)
++        check("平台:兩平台同名、只有 app 那支被綁 → app:sameName 有效、lib:sameName 過期", disp("app:sameName") == "killed" and disp("lib:sameName") == "stale",
++              str(bound))
++        check("平台:舊紀錄沒有前綴 → 當成預設平台(app)", disp("sameName") == "killed", str(bound))
++        bound2 = m._choice_bound_names(m.Env(v), split, "lib")
++        check("平台:★對照★ 預設平台換成 lib → 沒前綴的舊紀錄算 lib、過期", m._choice_disposition([{"verdict": "killed", "killing_test": "sameName"}], False, bound2)
++              == "stale", str(bound2))
++    finally:
++        _ck_cleanup(tmp)
++
++
++def t_choice_push_tests_sha_remind():
++    """[改動選擇點 第二段 concerns 5 裁決] 推送前「紀錄的 tests_sha 跟 B 不同只提醒」:via situation-rule 的紀錄、tests_sha 是空字串的紀錄跳過不提醒。
++    翻紅釘:不看 via → situation-rule 那條紅;不看空字串 → 空字串那條紅。"""
++    m = _load_lumos_inproc()
++    x = {"file": _CHOICE_MAIN, "fp": "f" * 16, "line": 5}
++    def n(**kw):
++        e = dict({"verdict": "killed", "tests_sha": "old", "via": "run"}, **kw)
++        return m._choice_push_stale_tests([x], {(x["file"], x["fp"]): [e]}, set(), "new")
++    check("tests_sha 不同(via run)→ 提醒 1 行", n() == 1)
++    check("via situation-rule 的紀錄 → 不提醒", n(via="situation-rule") == 0)
++    check("tests_sha 是空字串 → 不提醒", n(tests_sha="") == 0)
++    check("★對照★ tests_sha 相同 → 不提醒", n(tests_sha="new") == 0)
++
++
++def _ckp_no_ast_grep_push():
++    """t_choice_no_ast_grep 的推送前那一道那半(S6):PATH 沒有 ast-grep、改了 .kt 正式碼、其他條件都符合 → 不擋、記 unverified、印安裝指令。"""
++    ck, fk = _ck_repo(1, {})
++    try:
++        _ckp_commit(ck, [])
++        nob = _lwt_nogit_path(tempfile.mkdtemp(prefix="gctl-nosg-"))
++        r = _ckp_push(ck, fk, path=nob)
++        uv = _ck_gov(ck, kind="unverified")
++        check("S6 推送前那一道:PATH 沒有 ast-grep → 不擋(rc 0)、提醒、印安裝指令、記 unverified",
++              r.returncode == 0 and "ast-grep" in r.stdout and "install" in r.stdout and len(uv) == 1 and uv[0].get("hard") is False,
++              f"rc={r.returncode}\n{r.stdout[-600:]}\n{r.stderr[-300:]}")
++    finally:
++        _ck_cleanup(ck, fk)
++
++
++def _ckp_exemptions_push():
++    """t_choice_exemptions 的推送前那一道那半(S21):計劃日期早於生效日而 PATH 沒有 ast-grep、專案只有 python 平台、改動只有 log → 不要求、不提 ast-grep。"""
++    import time as _time
++    roots = []
++    saved = dict(_os_mod.environ)
++    try:
++        _os_mod.environ.update({"GIT_AUTHOR_DATE": "2020-01-01T00:00:00", "GIT_COMMITTER_DATE": "2020-01-01T00:00:00"})
++        root, fake = _ck_repo(1, {})
++        _ckp_commit(root, [])
++        roots += [root, fake]
++    finally:
++        _os_mod.environ.clear()
++        _os_mod.environ.update(saved)
++    nob = _lwt_nogit_path(tempfile.mkdtemp(prefix="gctl-nosg-"))
++    today = _time.strftime("%Y-%m-%d")   # 跟 lumos 的生效日比法同一種(本地日期)
++    try:
++        r = _ckp_push(root, fake, path=nob, since=today)
++        check("S21 推送前:計劃日期(2020)早於生效日(今天)、PATH 沒有 ast-grep → 不要求、不提 ast-grep、rc 0",
++              r.returncode == 0 and "ast-grep" not in r.stdout + r.stderr and not _ck_gov(root, kind="unverified"), f"rc={r.returncode}\n{r.stdout[-500:]}")
++        r = _ckp_push(root, fake, path=nob, since="9999-12-31")
++        check("S21 推送前:生效日被環境變數設成比今天晚 → 印一行「被環境變數關掉」", r.returncode == 0 and "被環境變數關掉" in r.stdout, r.stdout[-400:])
++        r2, f2 = _ck_repo(1, {}, config={"test_profile": "python", "test": {"run_cmd": "true"}})
++        roots += [r2, f2]
++        _ckp_commit(r2, [])
++        r = _ckp_push(r2, f2, path=nob)
++        check("S21 推送前:專案只有 python 平台 → 不要求、不提 ast-grep", r.returncode == 0 and "ast-grep" not in r.stdout + r.stderr
++              and not _ck_gov(r2, kind="unverified"), f"rc={r.returncode}\n{r.stdout[-400:]}")
++        src = _choice_wrap("        Timber.d(\"n=\" + (a > b))\n")
++        hits = [_choice_hit(src, "C-1", "a > b", mv={"A": "a", "B": "b"}), {**_choice_hit(src, "A-1", "Timber.d(\"n=\" + (a > b))"), "mv": {}}]
++        r3, f3 = _ckp_repo_src(src, hits)
++        roots += [r3, f3]
++        r = _ckp_push(r3, f3)
++        check("S21 推送前:改動只有 log(乾節點)→ 不要求、不擋", r.returncode == 0 and "[選擇點]" not in r.stdout and not _ck_gov(r3, kind="blocked"),
++              f"rc={r.returncode}\n{r.stdout[-400:]}")
++    finally:
++        _ck_cleanup(*roots)
++
++
++def _ckp_table_missing_push(real):
++    """t_choice_table_missing 的推送前那一道那半(S23):型錄缺檔 → 不擋、印提醒;型錄在但缺〈乾節點規則〉→ 擋、說缺哪一節。"""
++    root, fake = _ck_repo(1, {})
++    try:
++        _ckp_commit(root, [])
++        nowhere = Path(tempfile.mkdtemp(prefix="gctl-choicecat-")) / "missing.md"
++        r = _ckp_push(root, fake, LUMOS_KT_CATALOG=str(nowhere))
++        check("S23 推送前:型錄檔不在 → 不擋、印提醒", r.returncode == 0 and "提醒" in r.stdout and "[選擇點]" not in r.stdout, f"rc={r.returncode}\n{r.stdout[-400:]}")
++        i = real.index("\n## 乾節點規則")
++        j = real.find("\n## ", i + 1)
++        no_arid = _sit_catalog(real[:i] + (real[j:] if j >= 0 else "\n"))
++        r = _ckp_push(root, fake, LUMOS_KT_CATALOG=str(no_arid))
++        check("S23 推送前:型錄在但沒有〈乾節點規則〉節 → 擋、說缺哪一節", r.returncode == 1 and "[選擇點]" in r.stdout and "乾節點規則" in r.stdout,
++              f"rc={r.returncode}\n{r.stdout[-500:]}")
++    finally:
++        _ck_cleanup(root, fake)
++
++
++def _ckp_catalog_change_push():
++    """t_spec_gate_push_choice_catalog_change 的推送前那一道那半(S24):那一行原本 killed(挑到 ROR),型錄改了讓它挑到別列 → 推送不擋;
++    計劃在範圍裡改成 done、之後只改程式再推,killing_test 仍被那份計劃的條款綁著 → 不擋(不算過期)。"""
++    root, fake = _ck_repo(1, {})
++    try:
++        ev = dict(_ckp_ev(_ck_fp(1, 1), "killed", f"{_CKP_KT}:alphaCase"), row="C-1")
++        _ckp_commit(root, [ev])
++        r = _ckp_push(root, fake)
++        check("S24 推送前:那一行原本 killed(帳上記 C-1),型錄改了讓它挑到 C-7 → 不擋", r.returncode == 0 and "[選擇點]" not in r.stdout,
++              f"rc={r.returncode}\n{r.stdout[-500:]}")
++        plan = Path(root) / _KSP_V / "Projects" / "選擇_計劃.md"
++        plan.write_text(plan.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
++        _ckp_commit(root, msg="計劃改 done")
++        vm = Path(root) / _CHOICE_MAIN
++        vm.write_text(vm.read_text(encoding="utf-8").replace("package x\n", "package x\n// 只改程式\n", 1), encoding="utf-8")
++        src = vm.read_text(encoding="utf-8")
++        fake2 = _choice_fake_sg({src: [_choice_hit(src, "C-7", "a1 === b1", mv={"A": "a1", "B": "b1"})]})
++        _ckp_commit(root, msg="只改程式")
++        r = _ckp_push(root, fake2)
++        _ck_cleanup(fake2)
++        check("S24 推送前:計劃改成 done、之後只改程式再推、killing_test 仍被條款綁著 → 不擋(不算過期)", r.returncode == 0 and "過期" not in r.stdout,
++              f"rc={r.returncode}\n{r.stdout[-500:]}")
++    finally:
++        _ck_cleanup(root, fake)
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

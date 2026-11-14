@@ -502,6 +502,11 @@ grep -q -- '"--keep-going"' "$GRAPHCTL" 2>/dev/null && _CL_KG=1
 # 免得 argparse 拒絕、整份 pf_json 變空,連高風險提醒等一起不見
 _PF_PR=0
 grep -q -- 'dest="pf_pushed_ref"' "$GRAPHCTL" 2>/dev/null && _PF_PR=1
+# spec-gate --push-check 認不認得 --push-remote/--pushed-ref(同一種探法;找 spec-gate 專屬的 dest 字樣):認得才帶,選擇點那一道用
+# _push_range_start 算改到的行的起點;舊版不帶(argparse 會拒絕不認得的參數,整道規格閘就沒跑),只用推送範圍本身
+# (Projects/改動選擇點都要有需求守住_計劃 範圍 4 接線)
+_SG_PR=0
+grep -q -- 'dest="sg_push_remote"' "$GRAPHCTL" 2>/dev/null && grep -q -- 'dest="sg_pushed_ref"' "$GRAPHCTL" 2>/dev/null && _SG_PR=1
 for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   read -r _lref _lsha _rref _rsha <<< "$_ppl"
   # 刪除遠端 ref(local_sha 全零)→ 無代碼推送,跳過
@@ -589,7 +594,9 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   _sg_out="$_PP_TMP/sg-$RANDOM.log"
   # tee:一邊即時印到 stderr(r1 併發席:先存檔跑完才印,人會以為卡住去 Ctrl-C)、一邊留一份給下面認 light 用;rc 取管線第一段
   # tee 寫不進留底檔(暫存目錄被刪)時只丟它自己的錯誤訊息,輸出照樣印(跟 pp_record_block 同一族:暫存檔寫不進去不印雜訊)
-  "$PY" "$GRAPHCTL" spec-gate --push-check "$_brange" --repo "$REPO_ROOT" 2>&1 | tee "$_sg_out" >&2 2>/dev/null
+  _sg_extra=()
+  [[ "$_SG_PR" -eq 1 ]] && _sg_extra=(--push-remote "$_PP_REMOTE" --pushed-ref "$_rref")
+  "$PY" "$GRAPHCTL" spec-gate --push-check "$_brange" --repo "$REPO_ROOT" ${_sg_extra+"${_sg_extra[@]}"} 2>&1 | tee "$_sg_out" >&2 2>/dev/null
   sg_rc="${PIPESTATUS[0]}"
   pp_stop_if_signaled "$sg_rc" "雙向門放行檢查(spec-gate)"
   # push-check 判成 light(它才有圖譜、才知道計劃風險低與小改動閘過):改到程式檔也不跑全套,
