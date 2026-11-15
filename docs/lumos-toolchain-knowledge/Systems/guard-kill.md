@@ -82,6 +82,7 @@ verified_by:
   - "[[Verification/2026-08-22_guard-kill首次真跑]]"
   - "[[Verification/2026-09-22_預告合約首個真專案]]"
   - "[[Verification/2026-10-07_合併前最新主線整合]]"
+  - "[[Verification/2026-11-15_改動選擇點真實Android端到端驗收]]"
 about_code:
   - scripts/lumos
 ---
