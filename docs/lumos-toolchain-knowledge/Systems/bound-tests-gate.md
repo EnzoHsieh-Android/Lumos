@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-08-22
-updated: 2026-11-14
+updated: 2026-11-16
 about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
 self_audit: sonnet/2026-08-30
 responsibility: 負責推送前與 CI 跑哪些測試:合約測試閘(綁了 [test:] 的測試當場跑)、推送前掛鉤的閘順序與一次列出全部擋下原因、CI 的範圍判定與測試要的外部工具安裝;不負責各道閘自己的判定(歸各閘的家)
@@ -56,10 +56,12 @@ summary: |-
   WHY:CI 裝 detekt 之後多下載 compose-rules detekt 外掛 0.4.28、比對寫死的 sha256,路徑放進 LUMOS_DETEKT_COMPOSE_JAR,CI 上找不到時外掛那支測試判紅 [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃 範圍 2] [因:本機沒外掛時測試只能略過,CI 不真跑就等於沒驗] [test:t_detekt_compose_rules_shared_config]
   WHY:pre-push 呼叫 spec-gate --push-check 回 1 時印通用的「推送前規格閘擋下,原因見上面列的每一條」(擋下記錄的理由同樣改通用),不再只講風險低計劃的條款測試 [出處:[[Projects/計劃依據來源必填_計劃]] 範圍 2] [因:push-check 擋的原因有條款測試、預期值表簽核、新計劃的〈依據來源〉、改動選擇點沒有有效處置幾種,固定文案會把缺〈依據來源〉講成測試沒綠] [test:t_psrc_hook_generic_message]
   PITFALL:純文件推送時 CI 只跑 prep 工作的文件子集,原本只裝 ruff;文件子集裡有要外部工具的測試(t_detekt_compose_rules_shared_config 等,CI 上找不到 ast-grep、detekt、compose-rules 外掛會判紅),#178 合併後主線紅 3 支,而且只印每片尾巴、查不出名字 [出處:2026-11-08 #178 主線 CI] [根因:三支工具只在全套的 shards 工作裝,prep 跑文件子集前沒裝] [修法:prep 在文件子集前照 shards 抄那三步、只多一行 if suite == docs(照專案每個工作各自抄的做法,不另立複合動作;代碼審 r1 架構對齊),兩處除了 if 逐字相同由 t_ci_yml_test_tools_in_sync 守;文件子集紅時照全套那步先撈 ✗ 行] [repro:CI=1 不給 LUMOS_AST_GREP 跑 python3.14 scripts/test_lumos.py --shard 4/4 --suite docs --graph,t_detekt_compose_rules_shared_config 紅]
+  PITFALL:純文件推送的 CI 在 prep 同一台同時跑四份文件子集時,t_slim_gate 逾時 180 秒、t_dispatch_lens_spec_mode_core 在鏡頭預算內算不完 scripts/lumos 的牽連而把它放進略過清單,同一輪重跑照紅;同內容在分支走全套分片是綠的 [出處:2026-11-15 #208 主線 CI] [根因:一台跑四份搶資源,超過 shards 那段量出來「一台同時兩份不變慢」的上限] [修法:文件子集改成同時兩份(--shard i/2)] [防回歸:下一次純文件推上主線看 prep 那一步綠不綠]
   PITFALL:CI 用 curl 未驗證身分下載 detekt 與 compose-rules 外掛的發布檔,GitHub 有「未驗證使用者逾時增加」事件時 504 或連線中斷,#182 合併後主線同一類下載連紅四次(curl --retry 3 預設只等約 7 秒) [出處:2026-11-08 githubstatus 事件 Increase in timeouts for some unauthenticated users] [根因:發布檔下載沒帶 token、重試時間短過下載站故障] [修法:改 gh release download 帶 github.token,包 5 次逐次拉長的重試(共等 150 秒),sha256 校驗照留] [test:t_ci_yml_release_downloads_authenticated]
   PITFALL:CI 全套第 1、2 份同機跑合計接近 30 分鐘上限,shards 工作會被 GitHub 取消而不是紅 [出處:2026-11-13 主線 CI 兩次 cancelled(#201、#203 合併後)] [根因:分片按測試順序切,重的測試集中在前兩份(1570、1693 秒,最輕 876 秒)] [防回歸:ci.yml shards timeout-minutes 45] [修法:分片依實測耗時重新平衡]
   REVISIT:2026-12-15 依各份實測耗時重新平衡全套分片(目前第 2 份約 28 分、第 15 份約 15 分),平衡後把 shards 的 timeout-minutes 調回 30
   WHY:推送前掛鉤先 grep lumos 裡 spec-gate 專屬的 sg_push_remote、sg_pushed_ref 兩個 dest 字樣,認得才給 spec-gate --push-check 帶 --push-remote/--pushed-ref(同 pitfalls 那行的 pf_pushed_ref 探針);舊版 lumos 不帶,免得 argparse 拒絕讓整道規格閘沒跑。選擇點那一道擋下的原因在 push-check 印 light 分級之前併入,有選擇點沒處置就不會印 light、掛鉤不會誤降測試範圍 [出處:[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 4 接線;論文〈Practical Mutation Testing at Scale〉2.3 https://arxiv.org/pdf/2102.11378] [因:掛鉤與 scripts/lumos 分開複製,版本會錯開] [test:t_spec_gate_push_choice_range]
+  REVISIT:2026-12-15 文件子集現在挑進 t_slim_gate 這類重測試(上面 KEY 寫「不含 t_ci_wait/t_slim_gate」,2026-11-15 主線 CI 實際跑到),查子集挑法是不是放寬了、要不要收回
 verified_by:
   - "[[Verification/2026-09-09_接入靜默失效七項落地]]"
   - "[[Verification/2026-09-11_多平台缺指令逐平台處理]]"
