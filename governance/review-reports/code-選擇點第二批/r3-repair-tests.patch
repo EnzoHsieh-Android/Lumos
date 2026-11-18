@@ -1,0 +1,87 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 01e078499..4a5686cc9 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -146001,43 +146001,48 @@ def t_choice_table_batch2():
+     m = _load_lumos_inproc()
+     _tb, why, _miss = m._choice_tables(_sit_catalog(bad))
+     check("S5 lumos 讀表印同一句(列號與類別訊息)", why is not None and mrow.group(1) in why and bool(hit) and hit[0] in why, str(why)[:300])
+     row40 = "| C-40 | API | `api.yml` x | 方法名 | `y` | (無) | (無) | — | 不同 | 測試 |\n"
+     _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=row40), rules_dir=False)
+     check("S5 `已撤列號:C-40`、表裡又有 C-40 → 擋並指出 C-40", any(a == "C-40" and "已撤" in b for a, b in probs), str(probs)[:300])
+     _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40 abc", extra=""), rules_dir=False)
+     check("S5 `已撤列號:` 那一行寫了列號以外的字 → 報看不懂", any("已撤列號" in b for _a, b in probs), str(probs)[:300])
+     _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=row40).replace("已撤列號:C-40", "已撤列號\uff1aC-40"), rules_dir=False)
+     check("S5 全形冒號 `已撤列號：C-40` 照認、表裡又有 C-40 → 擋(代碼審 r1 g1)", any(a == "C-40" and "已撤" in b for a, b in probs), str(probs)[:300])
+-    for label, swap in (("前面帶清單符號", "- 已撤列號:C-40"), ("多寫一行", "已撤列號:(無)\n\n已撤列號:C-40"), ("粗體", "**已撤列號:**C-40")):
++    for label, swap in (("前面帶清單符號", "- 已撤列號:C-40"), ("多寫一行", "已撤列號:(無)\n\n已撤列號:C-40"), ("粗體", "**已撤列號:**C-40"),
++                        ("前面縮排(代碼審 r2)", "  已撤列號:C-40")):
+         _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=row40).replace("已撤列號:C-40", swap), rules_dir=False)
+-        check(f"S5 已撤列號那行{label} → 報看不懂、不當成沒有(代碼審 r1 b2)", any("已撤列號" in b for _a, b in probs), str(probs)[:300])
++        check(f"S5 已撤列號那行{label} → 報看不懂、不當成沒有(代碼審 r1 b2)", any("恰好一行" in b for _a, b in probs), str(probs)[:300])
+     d = Path(tempfile.mkdtemp(prefix="gctl-cb2rules-")) / "kotlin-choice"
+     _sh.copytree(kp.CHOICE, d)
+     (d / "rules-choice" / "zz.yml").write_text("id: C-40\nlanguage: kotlin\nrule:\n  kind: navigation_suffix\n", encoding="utf-8")
+     _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=""), rules_dir=d)
+     check("S5 `已撤列號:C-40`、規則檔裡還有 id C-40 → 擋並指出", any(a == "C-40" and "已撤" in b for a, b in probs), str(probs)[:300])
+     (d / "samples" / "zz.kt").write_text("fun z() {\n    go() // MISS C-99\n}\n", encoding="utf-8")
+     t_real, _p = kp.choice_tables(real)
+     got = kp.choice_sample_mark_problems(t_real, rules_dir=d)
+     check("S5 樣本有 `// MISS C-99`、表裡沒有 C-99 → 報那個標記(不用 ast-grep)", any(a == "C-99" and "zz.kt" in b for a, b in got), str(got)[:300])
+     check("S5 真樣本的標記都指向表裡有的列號", kp.choice_sample_mark_problems(t_real) == [], str(kp.choice_sample_mark_problems(t_real))[:300])
+ 
+ 
+ # S6 的不命中清單(計劃預期值表 S6):(列號, 樣本裡要有的片段)。只核表裡還在的列(撤列時樣本標記一起拿掉,這裡跳過)。
+ _CB2_S6_MISS = (("C-33", "// 取使用者"), ("C-33", "/* 註 */ ?.name"), ("C-34", "x?.let { show(it) }"), ("C-35", "= combine(a, b)"),
+                 ("C-35", "kotlinx.coroutines.flow.combine(a, b)"), ("C-36", "LaunchedEffect(Unit)"), ("C-36", "LaunchedEffect(\"init\")"),
+                 ("C-36", "LaunchedEffect(key1 = Unit)"), ("C-36", "LaunchedEffect()"), ("C-36", "block = {"), ("C-37", "remember()"),
+                 ("C-37", "remember(Unit)"), ("C-37", "val r5 = remember(k)"),
+                 # 代碼審 r1:沒大括號的 if/for/while/else/when 分支裡的 .let 值沒人用(c1);負數與字元常數 key(g2 c4)
+                 ("C-34", "if (c) x.let"), ("C-34", "for (i in list) x.let"), ("C-34", "while (c) x.let"), ("C-34", "else x.let"),
+-                ("C-34", "true -> x.let"), ("C-36", "LaunchedEffect(-1)"), ("C-36", "LaunchedEffect('c')"), ("C-37", "remember(-1)"))
++                ("C-34", "true -> x.let"), ("C-36", "LaunchedEffect(-1)"), ("C-36", "LaunchedEffect('c')"), ("C-37", "remember(-1)"),
++                # 代碼審 r2:外層 if/when/try 自己掛在另一個分支底下(else if 鏈、巢狀 if、if 裡的 when 或 try)(g1 c1);帶正號的小數(b1 c2)
++                ("C-34", "else if (d) { x.let"), ("C-34", "else if (d) x.let"), ("C-34", "if (c) if (d) x.let"),
++                ("C-34", "for (i in list) if (c) x.let"), ("C-34", "if (c) when (d)"), ("C-34", "if (c) try { x.let"),
++                ("C-34", "val q = if (c) 1 else if (d) x.let"), ("C-36", "LaunchedEffect(+2.5)"))
+ 
+ 
+ def _cb2_util_block(text, rid, name):
+     """規則檔裡 id 是 rid 那一份文件的 utils 底下 name 那一段(到下一個同層鍵為止)的原文;找不到回 None。"""
+     import re as _re
+     for doc in _re.split(r"^---\s*$", text, flags=_re.M):
+         if _re.search(rf"^id:\s*{_re.escape(rid)}\s*$", doc, _re.M):
+             m = _re.search(rf"^  {_re.escape(name)}:\n(?:(?:    .*|)\n)*", doc, _re.M)
+             return m.group(0).rstrip() if m else None
+     return None
+@@ -146210,20 +146215,30 @@ def t_gov_stats_choice_by_row():
+     odd = [{"gate": m._CHOICE_KILL_GATE, "kind": m._CHOICE_KILL_GATE, "row": "C-\u00b2", "verdict": "killed", "ck": {"file": "a.kt", "fp": "f"},
+             "attempt": 1, "via": "run", "ts": "t"}]
+     out = io.StringIO()
+     try:
+         with contextlib.redirect_stdout(out):
+             m._render_gov_choice(odd)
+         ok = "C-\u00b2:壞法 1" in out.getvalue()
+     except ValueError as e:
+         ok = f"ValueError {e}"
+     check("S8 帳上列號是 `C-²`(上標數字)→ 照印、排最後,不讓整段當掉(代碼審 r1 b3)", ok is True, str(ok) + out.getvalue()[-200:])
++    huge = [dict(odd[0], row="C-" + "9" * 5000), dict(odd[0], row="C-7")]
++    out = io.StringIO()
++    try:
++        with contextlib.redirect_stdout(out):
++            m._render_gov_choice(huge)
++        seg = out.getvalue()
++        ok = 0 <= seg.find("C-7:") < seg.find("C-999")
++    except ValueError as e:
++        ok = f"ValueError {str(e)[:80]}"
++    check("S8 帳上列號是 C- 加 5000 位數字 → 照印、排在 C-7 後面,不讓整段當掉(代碼審 r2 b2)", ok is True, str(ok))
+ 
+ 
+ def _ckp_no_ast_grep_push():
+     """t_choice_no_ast_grep 的推送前那一道那半(S6):PATH 沒有 ast-grep、改了 .kt 正式碼、其他條件都符合 → 不擋、記 unverified、印安裝指令。"""
+     ck, fk = _ck_repo(1, {})
+     try:
+         _ckp_commit(ck, [])
+         nob = _lwt_nogit_path(tempfile.mkdtemp(prefix="gctl-nosg-"))
+         r = _ckp_push(ck, fk, path=nob)
+         uv = _ck_gov(ck, kind="unverified")

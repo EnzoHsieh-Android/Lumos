@@ -1,0 +1,220 @@
+diff --git a/configs/ast-grep/kotlin-choice/rules-choice/api.yml b/configs/ast-grep/kotlin-choice/rules-choice/api.yml
+index 990add349..7089bb0f7 100644
+--- a/configs/ast-grep/kotlin-choice/rules-choice/api.yml
++++ b/configs/ast-grep/kotlin-choice/rules-choice/api.yml
+@@ -138,58 +138,59 @@ message: API 兄弟寫法 distinctUntilChanged(MutApi 形狀)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*distinctUntilChanged$'
+   inside:
+     kind: navigation_expression
+     inside: {kind: call_expression}
+ ---
+ # 第二批([[Projects/選擇點表第二批常見誤用寫法_計劃]]):.let 換 .also(回傳值從區塊結果變成接收者本身)。只收回傳值有被用到的 .let:
+ # 回傳值沒人用時換成 also 必然等價(Trivial Compiler Equivalence)。value-pos 照抄 sbr.yml(ast-grep 的 utils 只在同一份規則文件裡有效;
+ # 兩份要一字不差,t_choice_samples_batch2 比對)。sbr.yml 用它保守地「不確定是不是值就不刪」,這裡方向相反(不確定就不收),
+-# 所以 value-used 另外排除沒大括號的 if/for/while/when 分支(control_structure_body 的直接子節點,只有 if/when 本身當值用時才算;
+-# 代碼審 code-選擇點第二批 r1 c1)。
++# 所以 value-used 另外排除沒大括號的 if/for/while/when 分支(control_structure_body 的直接子節點,只有 if/when 本身在確定是值的
++# 位置時才算,見 value-direct;代碼審 code-選擇點第二批 r1 c1、r2 g1 c1)。
+ id: C-34
+ language: kotlin
+ severity: hint
+ message: API 兄弟寫法 let(換成 also,回傳值不同)
+ utils:
+   code:
+     not:
+       any:
+         - kind: line_comment
+         - kind: multiline_comment
+   value-pos:
+     # 值被拿去用的運算式:父節點不是陳述清單,或它是 lambda 的最後一個陳述
+     any:
+       - not: {inside: {kind: statements}}
+       - all:
+           - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
+           - inside: {kind: statements, inside: {kind: lambda_literal}}
++  value-direct:
++    # 確定是值的位置:value-pos 而且父節點不是控制結構的分支。外層 if/when/try 自己掛在另一個控制結構的分支底下
++    # (else if 鏈、巢狀 if、if 裡的 when)時,它是不是值要看再外一層,語法上判不完,一律當不確定(代碼審 code-選擇點第二批 r2 g1 c1)
++    all:
++      - matches: value-pos
++      - not: {inside: {kind: control_structure_body}}
+   value-used:
+     any:
+-      - all:
+-          - not: {inside: {kind: statements}}
+-          - not: {inside: {kind: control_structure_body}}
+-      - all:
+-          - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
+-          - inside: {kind: statements, inside: {kind: lambda_literal}}
+-      - inside: {kind: control_structure_body, inside: {kind: if_expression, matches: value-pos}}
+-      - inside: {kind: control_structure_body, inside: {kind: when_entry, inside: {kind: when_expression, matches: value-pos}}}
++      - matches: value-direct
++      - inside: {kind: control_structure_body, inside: {kind: if_expression, matches: value-direct}}
++      - inside: {kind: control_structure_body, inside: {kind: when_entry, inside: {kind: when_expression, matches: value-direct}}}
+       - all:
+           - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
+           - inside:
+               kind: statements
+               any:
+-                - inside: {kind: control_structure_body, inside: {kind: if_expression, matches: value-pos}}
+-                - inside: {kind: control_structure_body, inside: {kind: when_entry, inside: {kind: when_expression, matches: value-pos}}}
+-                - inside: {kind: try_expression, matches: value-pos}
+-                - inside: {kind: catch_block, inside: {kind: try_expression, matches: value-pos}}
++                - inside: {kind: control_structure_body, inside: {kind: if_expression, matches: value-direct}}
++                - inside: {kind: control_structure_body, inside: {kind: when_entry, inside: {kind: when_expression, matches: value-direct}}}
++                - inside: {kind: try_expression, matches: value-direct}
++                - inside: {kind: catch_block, inside: {kind: try_expression, matches: value-direct}}
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*let$'
+   # 父節點是 navigation_expression、它的父節點是值被用到的呼叫;寫成雙重否定(同 C-18,避免外層整段被塞進每個命中)
+   not:
+     inside:
+       not:
+         kind: navigation_expression
+         inside: {kind: call_expression, matches: value-used}
+ ---
+@@ -226,21 +227,24 @@ utils:
+         - {kind: simple_identifier, regex: '^Unit$'}
+         - kind: boolean_literal
+         - kind: null_literal
+         - kind: integer_literal
+         - kind: real_literal
+         - kind: long_literal
+         - kind: hex_literal
+         - kind: bin_literal
+         - kind: unsigned_literal
+         - kind: character_literal
+-        - {kind: prefix_expression, regex: '^[-+]\s*[0-9]'}
++        - all:
++            # 帶正負號的數字:看結構不看文字開頭,運算元本身要是數字常數(-1.coerceAtLeast(k) 的運算元是呼叫,不算;代碼審 r2 b1 c2)
++            - {kind: prefix_expression, regex: '^[-+]'}
++            - has: {nthChild: {position: 1, reverse: true}, any: [{kind: integer_literal}, {kind: real_literal}, {kind: long_literal}, {kind: hex_literal}, {kind: bin_literal}, {kind: unsigned_literal}]}
+         - all:
+             - kind: string_literal
+             - not: {has: {any: [{kind: interpolated_identifier}, {kind: interpolated_expression}], stopBy: end}}
+ rule:
+   kind: value_arguments
+   has: {kind: value_argument, not: {matches: literal-arg}}
+   # 父節點是帶尾隨 lambda 的 call_suffix、祖父是呼叫 LaunchedEffect 的 call_expression。寫成雙重否定:正面寫 inside 時外層呼叫連同整個
+   # 尾隨 lambda 被當次要標記塞進每個命中,巢狀 LaunchedEffect 的輸出平方成長(代碼審 code-選擇點第二批 r1 r2:巢狀 150 層 57MB → 0.1MB)
+   not:
+     inside:
+@@ -268,21 +272,24 @@ utils:
+         - {kind: simple_identifier, regex: '^Unit$'}
+         - kind: boolean_literal
+         - kind: null_literal
+         - kind: integer_literal
+         - kind: real_literal
+         - kind: long_literal
+         - kind: hex_literal
+         - kind: bin_literal
+         - kind: unsigned_literal
+         - kind: character_literal
+-        - {kind: prefix_expression, regex: '^[-+]\s*[0-9]'}
++        - all:
++            # 帶正負號的數字:看結構不看文字開頭,運算元本身要是數字常數(-1.coerceAtLeast(k) 的運算元是呼叫,不算;代碼審 r2 b1 c2)
++            - {kind: prefix_expression, regex: '^[-+]'}
++            - has: {nthChild: {position: 1, reverse: true}, any: [{kind: integer_literal}, {kind: real_literal}, {kind: long_literal}, {kind: hex_literal}, {kind: bin_literal}, {kind: unsigned_literal}]}
+         - all:
+             - kind: string_literal
+             - not: {has: {any: [{kind: interpolated_identifier}, {kind: interpolated_expression}], stopBy: end}}
+ rule:
+   kind: value_arguments
+   has: {kind: value_argument, not: {matches: literal-arg}}
+   # 父節點是帶尾隨 lambda 的 call_suffix、祖父是呼叫 remember 的 call_expression。寫成雙重否定:正面寫 inside 時外層呼叫連同整個
+   # 尾隨 lambda 被當次要標記塞進每個命中,巢狀 remember 的輸出平方成長(代碼審 code-選擇點第二批 r1 r2:巢狀 150 層 57MB → 0.1MB)
+   not:
+     inside:
+diff --git a/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt b/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
+index 26c70d4e2..3137d20bb 100644
+--- a/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
++++ b/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
+@@ -19,41 +19,53 @@ fun nul(name: String?, a: String?, b: String?, c: String) {
+ fun scope(x: Int?, list: List<Int?>, c: Boolean) {
+     val y = x.let { it + 1 } // HIT C-34
+     val xs = list.map { it?.let { g(it) } } // HIT C-34 C-33
+     x?.let { show(it) } // MISS C-34
+     if (c) x.let { show(it) } // MISS C-34
+     for (i in list) x.let { show(it) } // MISS C-34
+     while (c) x.let { show(it) } // MISS C-34
+     if (c) go() else x.let { show(it) } // MISS C-34
+     when (c) { true -> x.let { show(it) }; else -> go() } // MISS C-34
+     val z = if (c) x.let { it + 1 } else 0 // HIT C-34
++    if (c) { go() } else if (d) { x.let { show(it) } } // MISS C-34
++    if (c) go() else if (d) x.let { show(it) } // MISS C-34
++    if (c) if (d) x.let { show(it) } // MISS C-34
++    for (i in list) if (c) x.let { show(it) } // MISS C-34
++    if (c) when (d) { true -> x.let { show(it) }; else -> go() } // MISS C-34
++    if (c) try { x.let { show(it) } } catch (e: Exception) { go() } // MISS C-34
++    val q = if (c) 1 else if (d) x.let { it + 1 } else 0 // MISS C-34(巢狀在分支裡的 if 當值用,語法判不完,不收)
++    fun h() = if (c) x.let { it + 1 } else 2 // HIT C-34
+     done()
+ }
+ 
+ fun flows(a: Flow<Int>, b: Flow<Int>) {
+     val f = a.combine(b) { x, y -> x + y } // HIT C-35
+     val g = combine(a, b) { x, y -> x + y } // MISS C-35
+     val h = kotlinx.coroutines.flow.combine(a, b) { x, y -> x + y } // MISS C-35
+ }
+ 
+ @Composable
+ fun effects(userId: String, id: Int, k: Int, items: List<Int>) {
+     LaunchedEffect(userId, id) { load(userId, id) } // HIT C-36
+     LaunchedEffect("user_$id") { load() } // HIT C-36
+     LaunchedEffect(Unit) { load() } // MISS C-36
+     LaunchedEffect("init") { load() } // MISS C-36
+     LaunchedEffect(key1 = Unit) { load() } // MISS C-36
+     LaunchedEffect() { load() } // MISS C-36
+     LaunchedEffect(k, block = { load() }) // MISS C-36
+     LaunchedEffect(-1) { load() } // MISS C-36
+     LaunchedEffect('c') { load() } // MISS C-36
++    LaunchedEffect(+2.5) { load() } // MISS C-36
++    LaunchedEffect(-1.coerceAtLeast(k)) { load() } // HIT C-36
++    LaunchedEffect(-k) { load() } // HIT C-36
+     val r1 = remember(k) { items.sorted() } // HIT C-37
+     val r2 = remember<Int>(k) { 3 } // HIT C-37
+     val r3 = remember() { 3 } // MISS C-37
+     val r4 = remember(Unit) { 3 } // MISS C-37
+     val r7 = remember(-1) { 3 } // MISS C-37
++    val r8 = remember(-1.0.coerceAtLeast(k)) { 3 } // HIT C-37
+     val r5 = remember(k) // MISS C-37
+     val r6 = remember( // HIT C-37
+         items,
+         k,
+     ) { items.size + k }
+ }
+diff --git a/scripts/lumos b/scripts/lumos
+index 1746c91bf..3700129f8 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -17998,21 +17998,26 @@ def _render_gov_choice(rows):
+         print("    乾節點候選前 5(同形狀放行 3 次以上,人決定要不要寫成〈乾節點規則〉新列,論文 3.1):"
+               + "、".join(f"{row} {_kill_esc(decl)[:40]} ×{v}" for (row, decl), v in cand))
+     many = sorted((t, len(fs)) for t, fs in c["test_files"].items() if len(fs) >= 3)
+     if many:
+         print("    單一測試殺掉 3 支以上不同檔的壞法(看是不是太粗的測試在撐):" + "、".join(f"{_kill_esc(t)} {n} 檔" for t, n in many))
+     print(f"    推送被擋 {c['blocked']} 筆(過期 {c['stale_blocked']}/{c['blocked']});算不出來(unverified){c['unverified']} 筆")
+     by_row, norow = _gov_choice_by_row(c)
+     if by_row or norow:
+         print("    依列號(Projects/選擇點表第二批常見誤用寫法_計劃 範圍 5;壞法以 (檔, 行指紋, 列號) 計,曾殺掉算殺掉、否則曾存活算存活、"
+               "否則跑不出結果,基準不綠沒跑的不算;放行每行只算最後一筆):")
+-        for row in sorted(by_row, key=lambda x: (int(x[2:]) if x[:2] == "C-" and x[2:].isascii() and x[2:].isdecimal() else 10 ** 9, x)):
++        # 排序鍵只認 C-<1 到 9 位 ASCII 數字>:int() 對超過 4300 位的字串會丟例外(代碼審 code-選擇點第二批 r2 b2)
++        def _row_key(x):
++            n = x[2:]
++            ok = x[:2] == "C-" and n.isascii() and n.isdecimal() and len(n) <= 9
++            return (int(n) if ok else 10 ** 9, x)
++        for row in sorted(by_row, key=_row_key):
+             d = by_row[row]
+             w = "、".join(f"{k} {v}" for k, v in sorted(d["waive"].items())) or "0"
+             print(f"      {_kill_esc(row)[:20]}:壞法 {d['mut']}、殺掉 {d['killed']}、存活 {d['survived']}、跑不出結果 {d['no_result']};放行 {_kill_esc(w)}")
+         if norow:
+             print(f"      沒有列號的放行 {norow}")
+ 
+ 
+ def _render_gov_situation(rows):
+     """gov --stats 的情境題段(計劃範圍 7):每列作者判適用數、正一致率、相符率、二元 Cohen's kappa(樣本 ≥20 且兩方各有兩種答案才印);
+     仲裁採作者/採盲判、段放行(分 ai 與 human)、重判次數、證據樣式提醒經盲判終局確認的真陽性/誤報/待確認;

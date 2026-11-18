@@ -1,0 +1,119 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index 6f85b09f7..87d42f4dd 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -1482,33 +1482,37 @@ def _choice_rules_match(rows, rules_dir, sub, tag):
+             out.append((r["id"], f"規則檔 {sub}/{r['rule_file']} 不在"))
+         elif ids.get(r["id"]) != r["rule_file"]:
+             out.append((r["id"], f"{r['id']} 在規則檔 {sub}/{r['rule_file']} 裡沒有對應規則(規則 id 要等於列號)"))
+     have = {r["id"] for r in rows}
+     out += [(i, f"規則 {i}({sub}/{f})在型錄沒有對應的列") for i, f in sorted(ids.items()) if i not in have]
+     return out
+ 
+ 
+ def choice_tables(text, rules_dir=None):
+     """型錄全文 → ({"choice": [選擇點列], "arid": [乾節點列]}, 問題 [(列號或 <選擇點表>/<乾節點規則>, 原因)])。
+-    兩節都依節名讀(section_table);列號重複、欄位壞、類別/錨點/型別前提不在固定詞表、候選空白都報;給了 rules_dir
++    兩節都依節名讀(section_table);列號不是半形數字不帶前導零(C-<n>、A-<n>)、列號重複、欄位壞、類別/錨點/型別前提不在固定詞表、候選空白都報;給了 rules_dir
+     (預設 CHOICE)再核列號跟規則檔對得上。scripts/lumos 讀到任何問題就整張表不用(表壞要擋並指出哪一列,S23)。"""
+     rules_dir = CHOICE if rules_dir is None else rules_dir
+     out, probs = {"choice": [], "arid": [], "categories": list(CHOICE_CATEGORIES)}, []
+     for key, title, id_re, need, mk, sub in (("choice", CHOICE_TITLE, _CHOICE_ROW_RE, _CHOICE_HEADER, _choice_row, "rules-choice"),
+                                              ("arid", ARID_TITLE, _ARID_ROW_RE, _ARID_HEADER, _arid_row, "rules-arid")):
+         tag = f"<{title}>"
+         hdr, cells, p = section_table(text, title, id_re, need, title, tag)
+         probs += p
+         if hdr is None:
+             continue
+         seen = set()
+         for rid, c in cells:
++            # 列號只認半形數字、不帶前導零,同撤號那一行(列號比對靠字串相等,C-040、全形數字跟 C-40 比不上,規則 id 跟著寫就繞過撤號;代碼審 r4 g1)
++            if not re.fullmatch(r"[CA]-[1-9][0-9]*", rid):
++                probs.append((rid, f"列號要寫成 {rid[:2]}<n>(半形數字、不帶前導零),這裡是「{rid}」"))
++                continue
+             if rid in seen:
+                 probs.append((rid, "列號重複"))
+                 continue
+             seen.add(rid)
+             row, rp = mk(rid, lambda name, c=c, hdr=hdr: c[hdr[name]])
+             probs += [(rid, x) for x in rp]
+             if row:
+                 out[key].append(row)
+         if not cells:
+             probs.append((tag, f"〈{title}〉一列都沒有"))
+diff --git a/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt b/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
+index d04b20c46..f604fb47c 100644
+--- a/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
++++ b/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
+@@ -34,27 +34,41 @@ fun scope(x: Int?, list: List<Int?>, c: Boolean) {
+     if (c) try { x.let { show(it) } } catch (e: Exception) { go() } // MISS C-34
+     val q = if (c) 1 else if (d) x.let { it + 1 } else 0 // MISS C-34(巢狀在分支裡的 if 當值用,語法判不完,不收)
+     fun h() = if (c) x.let { it + 1 } else 2 // HIT C-34
+     // 值位置的每一種外層各一行 HIT、catch 區塊當陳述一行 MISS:規則每個子句拿掉都要有一行翻紅(代碼審 r3 c1 g1)
+     val u = when (c) { true -> x.let { it + 1 }; else -> 0 } // HIT C-34
+     val v = if (c) { go(); x.let { it + 1 } } else 0 // HIT C-34
+     val w = when (c) { true -> { go(); x.let { it + 1 } }; else -> 0 } // HIT C-34
+     val t = try { go(); x.let { it + 1 } } catch (e: Exception) { 0 } // HIT C-34
+     val t2 = try { go() } catch (e: Exception) { x.let { it + 1 } } // HIT C-34
+     if (c) try { go() } catch (e: Exception) { x.let { show(it) } } // MISS C-34
++    // 第四輪補齊:規則每一行、行內每個選項拿掉都要有一行翻紅(註解排除、最後一個陳述、when 掛在 if 底下、方法名比對;代碼審 r4 c1)
++    val lc = list.map {
++        x.let { it + 1 } // HIT C-34
++    }
++    val mc = list.map {
++        x.let { it + 1 } /* 註 */ // HIT C-34
++    }
++    val ys = list.map { x.let { go(it) }; 1 } // MISS C-34
++    val v2 = if (c) { x.let { go(it) }; 5 } else 0 // MISS C-34
++    if (c) when (d) { true -> { go(); x.let { show(it) } }; else -> go() } // MISS C-34
++    val al = x.also { it + 1 } // MISS C-34
+     done()
+ }
+ 
+ fun flows(a: Flow<Int>, b: Flow<Int>) {
+     val f = a.combine(b) { x, y -> x + y } // HIT C-35
+     val g = combine(a, b) { x, y -> x + y } // MISS C-35
+     val h = kotlinx.coroutines.flow.combine(a, b) { x, y -> x + y } // MISS C-35
++    val z = a.zip(b) { x, y -> x + y } // MISS C-35
++    // 沒有呼叫的屬性存取不收(代碼審 r4)
++    val p = a.combine // MISS C-35
+ }
+ 
+ @Composable
+ fun effects(userId: String, id: Int, k: Int, items: List<Int>) {
+     LaunchedEffect(userId, id) { load(userId, id) } // HIT C-36
+     LaunchedEffect("user_$id") { load() } // HIT C-36
+     LaunchedEffect(Unit) { load() } // MISS C-36
+     LaunchedEffect("init") { load() } // MISS C-36
+     LaunchedEffect(key1 = Unit) { load() } // MISS C-36
+     LaunchedEffect() { load() } // MISS C-36
+@@ -70,22 +84,29 @@ fun effects(userId: String, id: Int, k: Int, items: List<Int>) {
+     LaunchedEffect(1) { load() } // MISS C-36
+     LaunchedEffect(1.5) { load() } // MISS C-36
+     LaunchedEffect(1L) { load() } // MISS C-36
+     LaunchedEffect(0x1F) { load() } // MISS C-36
+     LaunchedEffect(0b1) { load() } // MISS C-36
+     LaunchedEffect(1u) { load() } // MISS C-36
+     LaunchedEffect(-1L) { load() } // MISS C-36
+     LaunchedEffect(-0x1F) { load() } // MISS C-36
+     LaunchedEffect(-0b1) { load() } // MISS C-36
+     LaunchedEffect(-1u) { load() } // MISS C-36
++    // 字串插值兩種寫法與方法名比對各一行(代碼審 r4 c2)
++    LaunchedEffect("k${id}") { load() } // HIT C-36
++    LaunchedEffectCompat(k) { load() } // MISS C-36
++    LaunchedEffect(k + 1) { load() } // HIT C-36
++    run(k) { load() } // MISS C-36 C-37
+     val r1 = remember(k) { items.sorted() } // HIT C-37
+     val r2 = remember<Int>(k) { 3 } // HIT C-37
+     val r3 = remember() { 3 } // MISS C-37
+     val r4 = remember(Unit) { 3 } // MISS C-37
+     val r7 = remember(-1) { 3 } // MISS C-37
+     val r8 = remember(-1.0.coerceAtLeast(k)) { 3 } // HIT C-37
+     val r5 = remember(k) // MISS C-37
++    val r9 = remember("k${id}") { 3 } // HIT C-37
++    val r10 = rememberSaveable(k) { 3 } // MISS C-37
+     val r6 = remember( // HIT C-37
+         items,
+         k,
+     ) { items.size + k }
+ }

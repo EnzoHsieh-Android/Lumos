@@ -1,0 +1,401 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/改動選擇點都要有需求守住_計劃.md b/docs/lumos-toolchain-knowledge/Projects/改動選擇點都要有需求守住_計劃.md
+index fe63e03a8..640a78bee 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/改動選擇點都要有需求守住_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/改動選擇點都要有需求守住_計劃.md
+@@ -29,21 +29,21 @@ decisions:
+ 改動裡「換一種寫法照樣編得過、行為卻不同」的地方(選擇點),是寫的人做了一個決定,背後應該有一條需求。這份計劃照 Google 的差異式變異測試(論文〈Practical Mutation Testing at Scale〉,以下稱「論文」)做:用 ast-grep(tree-sitter 的 Kotlin 語法樹)找出改動行上的語法節點,每一行挑一個壞法(把節點換成另一種寫法),批次跑計劃條款綁的測試:
+ - 測試紅了(殺掉) → 記下是哪條條款守住這一行的選擇;
+ - 測試沒紅(存活) → 這個選擇沒有需求守著:規格沒寫、測試太弱、或換了其實一樣 → 推送前擋下交人裁;人裁寫回規格並綁一支會紅的測試,或判「換了一樣/不是需求/壞法不適用」留帳。
+ 
+ 不是每一行:log、斷言、時間、樣板方法這類「乾節點」(論文的 arid node)不產生壞法;一行只產生一個壞法(論文 4.1);要人處置的存活有上限「改到的檔數 × 7」(論文 2.3)。哪些節點產生什麼壞法、哪些節點是乾的,由 Kotlin 型錄的〈選擇點表〉與〈乾節點規則〉列出,每列對應一條 ast-grep 規則;乾節點規則由人照回饋手動增補(論文 3.1)。
+ 
+ 這份把 [[Projects/雙向追溯_需求與語法選擇點互證_計劃]] 的正向(條款的測試分不分得出對錯)與反向(程式的選擇有沒有需求撐腰)併成同一個機制:殺掉的那一行是正向的證據,存活的那一行就是反向要找的「沒有出處的選擇」。
+ 
+ 大方向(使用者 2026-11-13):「改動中的語法,必定是代表一種需求,而這個需求,必須引得出規格……語法是可以被窮舉的,也就代表 code review 是可以被機械層檢查」;「我想涵蓋的就是所有開發需求中的程式碼,不是特定哪一種類別的語法」;範圍是選擇點、不是每一行;「那就照那份論文來實作」「有什麼問題,優先參考」;設計審兩輪都被「沒有語法樹」打穿後,使用者 2026-11-14 裁「改用 ast-grep 語法樹」。
+ 
+-PRIOR-ART: 主依據是 Google 差異式變異測試(論文 https://arxiv.org/pdf/2102.11378):在語法樹上做(2.2「mutagenesis service … navigating the AST」)、只對改動且有覆蓋的行產生變異、每行一個(4.1 Listing 2:運算子類別隨機排序、第一個產得出的類別產一個壞法)、五個運算子 AOR/LCR/ROR/UOI/SBR(表 1)、乾節點由語法樹節點規則壓掉(3.1 公式 1:簡單節點看專家規則、複合節點所有子節點都乾才乾;附錄 A)、編不過的壞法用規則事前擋(3.2.1)、回饋由人寫成新規則(有用比例 15% → 89%)、每次改動最多回報「檔數 × 7」個存活(2.3)、覆蓋率決定每個壞法要跑的最小測試集(2.1)。語法樹工具:ast-grep 以 tree-sitter 的 Kotlin 文法剖析(https://github.com/ast-grep/tree-sitter-kotlin、節點名照 https://github.com/fwcd/tree-sitter-kotlin 的 grammar.js:comparison_expression、equality_expression、conjunction_expression、disjunction_expression、additive_expression、multiplicative_expression、prefix_expression、call_expression、navigation_expression、statements、lambda_literal),Trail of Bits 的 mewt/MuTON 也用 tree-sitter 做跨語言變異(https://blog.trailofbits.com/2026/04/01/mutation-testing-for-the-agentic-era/)。補充:少數運算子就夠(Offutt 等 1996,https://dblp1.uni-trier.de/rec/journals/tosem/OffuttLRUZ96.html;Just 等,https://homes.cs.washington.edu/~rjust/publ/non_redundant_mutants_icst_2012.pdf);API 兄弟寫法寫成改寫表(MutApi,https://sqlab-sustech.github.io/files/paper/ICSE2019-mutapi.pdf;Mutant-Kraken,https://conf.researchr.org/details/icst-2024/mutation-2024-papers/2/Mutant-Kraken-A-Mutation-Testing-Tool-for-Kotlin);存活可能是規格缺口(MutDafny,https://arxiv.org/pdf/2511.15403);追不到需求的程式補需求或刪程式(DO-178C,https://ldra.com/ldra-blog/do-178c-structural-coverage-analysis/)。跟論文不同的地方(後果寫在天花板):①論文只變異有覆蓋的行、並用覆蓋率挑每個壞法的最小測試集,我們沒有覆蓋率:改到的行都變異、每個壞法跑全部守的測試(按相關度排序、殺掉或編不過或逾時就停);②論文的存活是不強制的提示,我們照使用者裁定擋推送;③多了 Kotlin API 兄弟寫法互換(第六類);④UOI 只做 `b`→`!b` 與拿掉 `!`,不做 `a++`/`a--`(Kotlin 多半是 val);SBR 只刪呼叫陳述;⑤論文整次呼叫洗一次類別、沒規定種子,我們每行用行指紋當種子(帳才對得上);⑥論文 4.2–4.5 依歷史表現排序不做(沒有歷史);⑦論文 3.1 公式 1 的複合節點遞迴不做(ast-grep 規則不能遞迴),乾節點範圍就是規則命中的節點;⑧論文 3.2.4 的冗餘壞法抑制不做;⑨乾節點規則只收附錄 A 的一部分(A.1.1–A.1.5、A.1.10、A.1.11、A.1.15、A.1.20–A.1.22、A.1.24、A.3.2;A.1.7 靠覆蓋率、A.1.8/A.1.9/A.1.13/A.1.14/A.1.16–A.1.19 這一版不收)。不採:PIT——協程上大量無用變異(https://lightrun.com/answers/hcoles-pitest-pitest-generates-unhelpful-mutations-when-using-kotlins-coroutines),過濾外掛 Arcmutate 商用授權(https://central.sonatype.com/artifact/com.arcmutate/pitest-kotlin-plugin);用剝註解字串的文字比對近似語法樹(本計劃設計審 r1、r2 連兩輪被運算元範圍、陳述位置、乾節點跨行打穿);AI 自動判等價(Meta ACH,https://arxiv.org/html/2501.12862)。
++PRIOR-ART: 主依據是 Google 差異式變異測試(論文 https://arxiv.org/pdf/2102.11378):在語法樹上做(2.2「mutagenesis service … navigating the AST」)、只對改動且有覆蓋的行產生變異、每行一個(4.1 Listing 2:運算子類別隨機排序、第一個產得出的類別產一個壞法)、五個運算子 AOR/LCR/ROR/UOI/SBR(表 1)、乾節點由語法樹節點規則壓掉(3.1 公式 1:簡單節點看專家規則、複合節點所有子節點都乾才乾;附錄 A)、編不過的壞法用規則事前擋(3.2.1)、回饋由人寫成新規則(有用比例 15% → 89%)、每次改動最多回報「檔數 × 7」個存活(2.3)、覆蓋率決定每個壞法要跑的最小測試集(2.1)。語法樹工具:ast-grep 以 tree-sitter 的 Kotlin 文法剖析(https://github.com/ast-grep/tree-sitter-kotlin、節點名照 https://github.com/fwcd/tree-sitter-kotlin 的 grammar.js:comparison_expression、equality_expression、conjunction_expression、disjunction_expression、additive_expression、multiplicative_expression、prefix_expression、call_expression、navigation_expression、statements、lambda_literal),Trail of Bits 的 mewt/MuTON 也用 tree-sitter 做跨語言變異(https://blog.trailofbits.com/2026/04/01/mutation-testing-for-the-agentic-era/)。補充:少數運算子就夠(Offutt 等 1996,https://dblp1.uni-trier.de/rec/journals/tosem/OffuttLRUZ96.html;Just 等,https://homes.cs.washington.edu/~rjust/publ/non_redundant_mutants_icst_2012.pdf);API 兄弟寫法寫成改寫表(MutApi,https://sqlab-sustech.github.io/files/paper/ICSE2019-mutapi.pdf;Mutant-Kraken,https://conf.researchr.org/details/icst-2024/mutation-2024-papers/2/Mutant-Kraken-A-Mutation-Testing-Tool-for-Kotlin);存活可能是規格缺口(MutDafny,https://arxiv.org/pdf/2511.15403);追不到需求的程式補需求或刪程式(DO-178C,https://ldra.com/ldra-blog/do-178c-structural-coverage-analysis/)。跟論文不同的地方(後果寫在天花板):①論文只變異有覆蓋的行、並用覆蓋率挑每個壞法的最小測試集,我們沒有覆蓋率:改到的行都變異、每個壞法跑全部守的測試(按相關度排序、殺掉或編不過或逾時就停);②論文的存活是不強制的提示,我們照使用者裁定擋推送;③多了 Kotlin API 兄弟寫法互換(第六類;第二批另加 null-safety 運算子 NUL 為第七類,見 [[Projects/選擇點表第二批常見誤用寫法_計劃]]);④UOI 只做 `b`→`!b` 與拿掉 `!`,不做 `a++`/`a--`(Kotlin 多半是 val);SBR 只刪呼叫陳述;⑤論文整次呼叫洗一次類別、沒規定種子,我們每行用行指紋當種子(帳才對得上);⑥論文 4.2–4.5 依歷史表現排序不做(沒有歷史);⑦論文 3.1 公式 1 的複合節點遞迴不做(ast-grep 規則不能遞迴),乾節點範圍就是規則命中的節點;⑧論文 3.2.4 的冗餘壞法抑制不做;⑨乾節點規則只收附錄 A 的一部分(A.1.1–A.1.5、A.1.10、A.1.11、A.1.15、A.1.20–A.1.22、A.1.24、A.3.2;A.1.7 靠覆蓋率、A.1.8/A.1.9/A.1.13/A.1.14/A.1.16–A.1.19 這一版不收)。不採:PIT——協程上大量無用變異(https://lightrun.com/answers/hcoles-pitest-pitest-generates-unhelpful-mutations-when-using-kotlins-coroutines),過濾外掛 Arcmutate 商用授權(https://central.sonatype.com/artifact/com.arcmutate/pitest-kotlin-plugin);用剝註解字串的文字比對近似語法樹(本計劃設計審 r1、r2 連兩輪被運算元範圍、陳述位置、乾節點跨行打穿);AI 自動判等價(Meta ACH,https://arxiv.org/html/2501.12862)。
+ RETIRE-IF: 上線兩個月、被回報的存活累計至少 30 個之後,看 `gov --stats` 的選擇點數字:①被回報的存活裡被人判「等價或不是需求」的超過八成(論文起步時 85% 沒用,補了乾節點規則仍降不下來就是表或判法錯;「壞法不適用」另計,算表的問題),或②每次 choice-kill 呼叫耗時中位數超過十分鐘,或③推送被擋的筆數裡超過一半是「過期」——就把推送那一道降成只提醒,回頭縮表或改判法。
+ REVISIT:2027-01-15 讀 gov --stats 的選擇點數字(殺掉率、存活處置分布、乾節點候選、每次呼叫的改動行數、有壞法的行數、耗時),決定要不要照論文 4.2 依歷史表現排序運算子、要不要加數字常數類選擇點、要不要接 Kotlin 覆蓋率(JaCoCo)挑最小測試集
+ 
+ ## 舊否決比對
+ 
+ - [[Projects/guard殺傷力驗證_計劃]] 決策 d1「合約殺傷力驗證不自動產生變異」(理由:人宣告的壞法保證語意有變、零依賴跨語言工具不內建語言知識):這份是自動產生壞法,等於在「改動選擇點」這個範圍翻了 d1。實作時用 `lumos decision-add` 在那份計劃補一筆決策:d1 限定在「合約殺傷力配方」,改動選擇點改由本計劃依論文以語法樹自動產生;翻案理由是論文的規模實證與乾節點規則把等價與誤報壓到可處置的量。語言知識放在型錄的 ast-grep 規則(工具鏈 configs/,不進 scripts/lumos 本體),lumos 本體仍零依賴;ast-grep 是 Kotlin 規則包既有的外部工具。
+ - [[Projects/高風險測試證據加嚴_計劃]] 第二批「CI 對改到的行跑變異測試」:那份打算接外部變異工具,排在 2026-12-15 回頭看;這份不碰外部變異工具。回頭看時改讀這份的帳。
+ - [[Systems/guard-kill]] 否決「另抽一支共用的殺傷力函式」:這份沿用 `cmd_guard_kill` 的 `recipes_override`,不另抽;只加選用參數(見範圍 2)。
+ - [[Systems/規格閘]] 的裁定「條款全是 `[manual:]` 的小改動不必綁測試、推送印 light」:這份不翻;碰到的計劃沒有可守的測試時,推送前那一道只提醒、不擋。
+ - [[Systems/規格閘]] 推送閘「算不出來就放行」(工具壞不能擋所有人):這份照它,掃描算不出來只提醒不擋;只有治理帳讀不到才擋(同預期值表那道)。
+@@ -316,21 +316,21 @@ REVISIT:2027-01-15 讀 gov --stats 的選擇點數字(殺掉率、存活處置
+ | S26 | 實驗副本只送一次值的測試 | survived;換回原測試 killed | 使用者 2026-11-13 面試題 |
+ 
+ ## 回退
+ 
+ - 整個關掉:`_CHOICE_SINCE` 設成很遠的未來日期,推送那一道不要求;指令照留、只是沒人需要。
+ - 單一列誤報多:從〈選擇點表〉拿掉那一列,或在〈乾節點規則〉加一列(下一次推送就不再算;舊帳以行為單位照算)。
+ - `cmd_guard_kill` 的 `source`、`stop_group_on`、`on_row`,situation-rule 的 `--point`,`spec-gate --push-check` 的 `--push-remote`/`--pushed-ref` 都是選用,不傳維持原行為。
+ 
+ ## 天花板
+ 
+-1. 只證「選擇點表列到的寫法有測試守著」;表沒列到的選擇(數字常數、`when` 分支、整段邏輯)這一版不管;表與乾節點規則列得好不好決定上限(論文也承認規則依環境調)。
++1. 只證「選擇點表列到的寫法有測試守著」;表沒列到的選擇(數字常數、`when` 分支、整段邏輯)這一版不管(第二批補了空值處理、範圍函式、Flow 合併與 Compose 副作用六列,見 [[Projects/選擇點表第二批常見誤用寫法_計劃]]);表與乾節點規則列得好不好決定上限(論文也承認規則依環境調)。
+ 2. ast-grep 給的是語法樹、沒有型別;型別前提只能用語法情境近似(字串字面值、null 比較),推不出型別的壞法仍可能編不過,落成 no_result 要人放行。ast-grep 或文法版本變了,節點可能不同;規則樣本由 check.py 驗。乾節點不做複合遞迴:兩個運算元都乾的 `&&` 照樣會產生 LCR 壞法。SBR 把 Unit lambda 的唯一陳述(`launch { repo.load() }`)也排除,是保守側的漏。
+ 3. 沒有覆蓋率:沒被守的測試跑到的行一定存活,要人處置;每個壞法跑全部守的測試(排序加殺掉就停),比論文的最小測試集慢;論文是每個壞法一份暫存版本平行跑,我們是一棵工作樹依序跑,靠 `--max-seconds` 分批。
+ 4. 一行一個壞法、不做組合;同一行其他類別這次沒被挑到就不驗——面試題那種 `flatMapLatest` 若跟條件式同一行,有一半以上的機會挑到別的類別(論文的取捨;情境題那道另外會問 D-4)。
+ 5. 殺掉只證「換成那個壞法時有測試紅」,不證測試紅的理由就是那條需求;條款跟選擇點是不是講同一件事靠人裁與代碼審。
+ 6. 推送前不重跑,信帳;帳是作者自己跑出來的,同代碼審留痕的天花板。跟情境題那道對同一行可能各跑一次 Gradle。這一道只在 pre-push 掛鉤、CI 不接;沒裝 ast-grep 或 `--no-verify` 就不檢查(留 unverified 或沒有紀錄)。
+ 7. 回報上限之外的存活不擋;新的存活行出現時重抽。
+ 8. 判「不是需求」全靠人;判錯會放過規格缺口,乾節點規則寫錯會整類放過。
+ 9. 掃描算不出來(含沒裝 ast-grep)時那一圈放行(規格閘既有方針),只留 unverified 紀錄。
+ 10. 連前後各 2 行都相同的兩行共用一個行指紋,放行一處等於放行兩處(它們本來就分不開)。
+ 11. tree-sitter 的 Kotlin 文法認不得中文識別字等語法,那些行整行略過、不產生壞法。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/選擇點表第二批常見誤用寫法_計劃.md b/docs/lumos-toolchain-knowledge/Projects/選擇點表第二批常見誤用寫法_計劃.md
+index 39c588b01..f4bd8a320 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/選擇點表第二批常見誤用寫法_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/選擇點表第二批常見誤用寫法_計劃.md
+@@ -1,18 +1,18 @@
+ ---
+ type: project
+-status: todo
++status: doing
+ created: 2026-11-15
+ updated: 2026-11-16
+ tags:
+   - type/project
+-  - status/todo
++  - status/doing
+   - scope/guards-gates
+ lands_in:
+   - Systems/kotlin規則包
+   - Systems/規格閘
+ related:
+   - "[[Projects/改動選擇點都要有需求守住_計劃]]"
+   - "[[Verification/2026-11-15_改動選擇點真實Android端到端驗收]]"
+ ---
+ # 選擇點表第二批常見誤用寫法_計劃
+ 
+@@ -62,21 +62,21 @@ REVISIT:2027-01-15 最晚這天跟第一版的 REVISIT 一起看第二批各列
+    - `remember` 列:錨點「引數」、候選壞法 `(刪掉)`、型別前提「(無)」、對應決策表 `—`。
+    - 說明段同步:「錨點只用四種」改成六種並列出;「照論文表 1 的五個運算子,外加 Kotlin API 兄弟寫法」補上 NUL;補「第二批來源與不收理由」;新增一行機器讀的 `已撤列號:(無)`(撤列時把列號加進這一行,check.py 擋它再出現在表或規則 id,見範圍 4)。只上線部分列時,說明段、列數、NUL 類別與兩個新錨點照實際上線的列寫——沒有 NUL 列就不加 NUL、不建 `nul.yml`。
+    - 〈統計〉的選擇點表列數(31 加實際上線列數)與括號裡的說明一起改(check.py 會比對列數)。既有測試 `t_choice_table_missing` 把「選擇點表:31 列」寫死在替換字串裡,改成從真型錄讀出列數再造錯的列數(改 `scripts/test_lumos.py` 照規定要先簽章)。
+ 2. **規則**:`configs/ast-grep/kotlin-choice/rules-choice/` 照第一版「一個類別一個檔」:
+    - 新增 `nul.yml`(有上線 NUL 列才建,見範圍 1 部分上線的總規則;規則 id 等於列號):`?:` 用 `pattern: '$A ?: $B'`(要加引號,不加 YAML 會把 `?: ` 當成對應表而解析失敗;只寫節點種類 `elvis_expression` 拿不到 `$A`、`$B`,壞法與型別前提都會失效);`?.` 命中 navigation_suffix 開頭的 `?.`,`?.` 前一個兄弟節點是行註解或區塊註解時不命中(插 `!!` 會插進註解)。
+    - `api.yml` 補四條:`.let` 沿用 `sbr.yml` 的 `value-pos` 判法,只在值被用到的位置命中(指派右邊、引數、return、lambda 或 if/when 分支的最後一個陳述、表達式本體),例 `x?.let { show(it) }` 單獨成陳述又不在值位置就不命中——回傳值沒人用,換成 `also` 必然等價;接收者 `combine`(排除接收者是完整套件名 `kotlinx.coroutines.flow` 的寫法,那是頂層函式);`LaunchedEffect` 與 `remember` 的 value_arguments 同一組條件:呼叫帶尾隨 lambda、至少一個引數、而且引數不全是字面值才命中。字面值指 `Unit`、`true`、`false`、`null`、數字、不含 `$` 的字串;具名引數(`key1 = Unit`)看等號右邊的值;含 `$` 的字串樣板(`"user_$id"`)不算字面值。理由:全是常數的 key 換掉或拿掉必然等價;空括號沒有 key 可換,`remember()` 刪掉括號也等價。規則裡用 `not:` 排除等價寫法照第一版 C-18 的先例。
+    - 樣本寫進新檔 `samples/choice-batch2.kt`,不插進既有樣本檔(行指紋含前後各兩行,插進既有檔會改到 S7 釘住的指紋)。每條規則的命中與不命中樣本:`?:` 換行寫在續行(HIT 標在節點開頭、也就是 `$A` 那一行,樣本核對只看節點起始行)、巢狀 `a ?: b ?: c`;`?.` 連鎖 `a?.b?.c`、`?.` 另起一行、`?.` 的前一個兄弟節點是行註解或區塊註解;`.let` 在指派右邊、在 `map { }` lambda 最後一個陳述、單獨成陳述;接收者 `combine` 與完整套件名的頂層呼叫;`LaunchedEffect` 多個 key、`LaunchedEffect("user_$id")`、`LaunchedEffect(Unit)`、`LaunchedEffect("init")`、`LaunchedEffect(key1 = Unit)`、`LaunchedEffect()`、`LaunchedEffect(k, block = { … })`;`remember(k) { }`、`remember<Int>(k) { }`、`remember() { }`、`remember(Unit) { }`、沒有尾隨 lambda 的 `remember(k)`;引數跨多行的 `remember(`。
+ 3. **lumos 產壞法**(只動 scripts/lumos 的選擇點程式,不動型錄讀表):
+    - `_choice_anchor` 的運算子分支:NUL 類 `?:` 那一列先比字面 `?:`;`_CHOICE_OP_RE`、`_CHOICE_PREC`、`_choice_top_prec` 不動(理由見〈用詞〉`?:` 的錨點)。同一個根因的其他用法一起看過:`_CHOICE_OP_RE` 另外只在 `_choice_top_prec` 用(找運算子與把運算子換成空白),不改它就都不受影響;S7 補一條第一版運算子列的運算元頂層含 `?:` 的案例,守住照常加括號、不當掉。
+    - 錨點「引數」:`_choice_anchor` 多收改動行集合,回傳範圍內第一個改動行的開頭位移(〈用詞〉新錨點「引數」);`_choice_file_points` 把它已有的改動行集合傳進去,選行邏輯不變。「安全呼叫符」回 `?.` 的位置。
+-   - `_choice_edits` 在通用樣板替換之前加三個分支:
++   - `_choice_edits` 在通用樣板替換之前加三個分支(實作放在 `_choice_anchor_edits`,跟方法名那種一起,`_choice_edits` 只轉交,免得一支函式分支過多):
+      - 錨點「安全呼叫符」:兩處編輯——`?.` 換成 `.`,並在 `?.` 前面最後一個非空白字元之後插入 `!!`。同一行得到 `a!!.b`;`?.` 另起一行時得到前一行結尾 `a!!`、續行 `.b`(`!!` 前面不能換行,`.` 前面可以)。
+      - 錨點「引數」:樣板文字直接覆蓋整個節點,不經「不是單一記號就加括號」;`(刪掉)` 照第一版 delete 分支刪整個節點。
+      - 樣板 `$A!!`:`$A` 不是單一記號時先包成 `($A)` 再接 `!!`;整個替換結果放在運算式裡、優先序需要時再整體加括號(沿用 `_choice_ctx_safe`)。
+    - `?.` 列一行只挑一個節點(第一版 `_choice_pick` 每行一個),鏈上其他 `?.` 不動。
+ 4. **check.py**:有 NUL 列時 `CHOICE_CATEGORIES` 尾端加 `NUL`(順序是 lumos 洗牌前的基準,加在尾端不動第一版的相對順序);`CHOICE_ANCHORS` 照實際上線的列加「安全呼叫符」「引數」(範圍 1 部分上線的總規則);類別、錨點的白名單只在這裡一份,lumos 讀表經 check.py 的 `choice_tables` 取得,錯了由 check.py 指出列號。`choice_tables` 另讀說明段的 `已撤列號:` 那一行,列在裡面的號出現在表或規則 id 就擋並指出列號(列號不重用的機械守衛;沒有那一行視同空)。`choice_sample_problems` 另報樣本標記(HIT 或 MISS)指向表裡沒有的列號——現況殘留的 MISS 標記兩邊都判「沒命中」不會報,這一條不用 `--sg` 就查。新樣本照第一版的 HIT/MISS 核對。
+    - 不加「已撤列號」這行的最小解為什麼不夠:列號只靠散文承諾不重用時,撤掉的剛好是最大號就會被下一列自然接用,治理帳裡舊列的存活與放行會被算進新列,RETIRE-IF 的逐列比例失真。
+ 5. **統計**:`gov --stats` 選擇點段加一小節「依列號」,落在現有的 `_gov_choice_counts`(同一個迴圈多數一份依列號的計數)與 `_render_gov_choice`(多印一小節);吃已去重的統計列,不另開讀帳迴圈、不改 `_gov_row` 的欄位。去重不會吃掉壞法事件:choice-kill 事件的去重鑑別子是事件自帶的隨機碼,同一個提交先存活、後被殺掉的兩筆各留一筆;放行事件的鑑別子是 `檔:行指紋`,同一個提交對同一行的重複放行在去重時就併成一筆。
+    - 壞法:以 (檔, 行指紋, 列號) 為一個,列號取壞法事件帶的 `row`。同一行同一列的壞法由行指紋當種子挑、型錄不變時固定是同一個,所以不用壞法雜湊(統計列沒有 `new_sha`,為它擴欄位換不到更準的數)。
+    - 終態不靠時間先後(統計列的 `ts` 是提交時間,同一個提交的多筆事件打平):曾被殺掉算殺掉;沒被殺過、曾存活算存活;兩者都沒有才算跑不出結果。代價:先殺掉、後來測試被刪又存活的壞法仍算殺掉(少見;推送前那一道照第一版看最新一筆,不受影響)。
+    - 每列印:壞法數、終態殺掉、存活、跑不出結果各幾個;跑不出結果的原因冒號前那段等於「基準不綠沒跑」的(程式裡的字面字串),那個壞法整個不算進那一列(不是壞法的錯)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 7f6adcd12..3ceff139c 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-11-05
+-updated: 2026-11-14
++updated: 2026-11-17
+ responsibility: 負責 Kotlin/Android 寫法的 ast-grep 規則包(規則、樣本、自我檢查)與型錄 checks-catalog.md 的格式;不負責新增告警閘本身的判定(那在 pitfalls-code-loop)、不負責 detekt 共用設定
+ aliases: []
+ about_code:
+   - configs/ast-grep/kotlin-android/check.py
+   - configs/ast-grep/kotlin-android/sgconfig.yml
+   - configs/ast-grep/kotlin-android/sgconfig-hints.yml
+   - skills/kotlin-idioms/checks-catalog.md
+   - configs/ast-grep/kotlin-android/sgconfig-review.yml
+   - skills/kotlin-idioms/test-templates.md
+   - configs/ast-grep/kotlin-android/sgconfig-unwired.yml
+@@ -26,20 +26,22 @@ about_code:
+   - configs/ast-grep/kotlin-choice/rules-choice/sbr.yml
+   - configs/ast-grep/kotlin-choice/rules-choice/api.yml
+   - configs/ast-grep/kotlin-choice/rules-arid/arid.yml
+   - configs/ast-grep/kotlin-choice/rules-syntax/error.yml
+   - configs/ast-grep/kotlin-choice/samples/choice.kt
+   - configs/ast-grep/kotlin-choice/samples/arid.kt
+   - configs/ast-grep/kotlin-choice/samples/chain.kt
+   - configs/ast-grep/kotlin-choice/samples/nested.kt
+   - configs/ast-grep/kotlin-choice/samples/error.kt
+   - configs/ast-grep/kotlin-choice/samples/multibyte.kt
++  - configs/ast-grep/kotlin-choice/rules-choice/nul.yml
++  - configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
+ tags:
+   - type/system
+   - status/doing
+   - scope/stack-knowledge
+ summary: |-
+   WHY:標準寫法的單一來源是型錄 checks-catalog.md,每列要有真的打開讀過的官方出處;查不到的列標(出處不全),引用它的規則依據不足、不准擋人 [出處:2026-11-05 使用者「你的標準、最佳寫法來源要有依據,不要你自己寫」] [因:AI 自己寫的標準寫法會跟官方現況打架(查證時 18 列與官方衝突、DataStore 加密整組已棄用)] [test:t_kotlin_catalog_rows_wired]
+   WHY:規則訊息格式「[型錄編號] 錯在哪;改用 <最短修法>」且不超過 120 字,完整寫法用編號查型錄 [出處:[[Projects/Android協程與API寫法機械檢查標準_計劃]] 設計審 r1] [因:新增告警閘解析 SARIF 截 120 字、擋下訊息也印 120 字] [test:t_kotlin_rulepack_messages_cite_catalog]
+   PITFALL:只掃測試碼的規則若寫 `**/test/**`,祖先目錄叫 test 時整個反轉;還有測試變體目錄 `src/testDemo` 會被當正式碼 [出處:2026-11-05 設計審 r2 實測、nowinandroid 實測] [根因:ast-grep 的 files/ignores 相對規則設定檔所在目錄、比對完整路徑] [修法:錨在 `**/src/test*/**`、`**/src/androidTest*/**`] [test:t_kotlin_rulepack_samples]
+   PITFALL:ast-grep 規則把 follows 與 not.has $A 平行寫在同一層時,$A 還沒綁定就被比對,規則對任何程式都不命中 [出處:2026-11-05 樣本實測 kt-sequential-independent-await 0 命中] [根因:ast-grep 不保證同層條件的執行順序] [修法:用 all 排順序] [test:t_kotlin_rulepack_samples]
+   RULE:規則在真專案誤報超過命中的一成就降提示級、搬 rules-unwired/ 或改形狀 [依據:外部] [since:2026-11-05] [retire:人裁] [until:2027-05-05] [confirmed:2026-11-05] [查:Google Tricorder「沒用的告警壓在一成以下」]
+@@ -85,31 +87,32 @@ summary: |-
+   WHY:型錄現成規則欄寫某條檢查涵蓋這列,要拿這列壞寫法實跑過、或有寫明判斷條件的原始碼與說明原文;只確認代號存在不算 [出處:2026-11-09 待查證逐列核對 Verification/2026-11-09_Android型錄待查證列逐列核對] [因:CO-2 的 detekt 候選代號都存在,實跑卻連好寫法也報、壞寫法反而不報;另有四個代號根本不存在] [不選:只比對工具的代號清單]
+   WHY:好例樣本也要照每條會擋規則的標準寫,自檢會報被別條會擋規則命中的好例;刻意放別條壞寫法證明本條不重複報的去重案例,放 cross- 開頭的檔(略過跨規則檢查、但一定要被別條規則命中、不算好例段數) [出處:2026-11-09 Issues/Kotlin規則包代碼審放行的小問題 第 6 項逐處判定] [因:17 處好例命中全是樣本沒照別條標準寫;另有一處 review-fp 樣本是會擋 TEST-5 對有限流的誤報,改記在規則註解;不擋的話新樣本會再犯] [不選:把去重案例整段刪掉(失去不重複報的回歸保護)] [test:t_kotlin_rulepack_good_cross_rule]
+   WHY:型錄列查兩輪都找不到權威原文就標(停用):名稱加(停用)、通電批次寫「未接(停用)」、決策表不再指向它,編號與內容留著不重用 [出處:2026-11-09 Verification/2026-11-09_Android型錄出處不全列重查] [因:使用者原則「來源不明可不行」與「移掉之前先查明出處」;整列刪掉會弄斷測試範本、情境樣本與筆記的編號引用] [不選:整列刪除;只標出處不全(決策表 D-38 會繼續拿沒出處的列出推送前表態題)] [test:t_kotlin_catalog_c_rows_batch_resolved]
+   REVISIT:2027-02-09 型錄主表的(停用)標記接上型錄自檢:標了(停用)的列通電批次每個接電方式都要是「=未接(停用)」、情境決策表不准指向它、規則訊息不准引用它,〈統計〉的停用列數由程式核對;補先紅後綠測試(2026-11-09 停用 9 列時只靠人讀與 C 列範本測試)
+   WHY:kt-lifecycle-collect-without-repeat 不報外圍類別自己繼承 LifecycleService、MediaSessionService、MediaLibraryService 的收集(外圍是 Service 時連 ProcessLifecycleOwner 的收集也不報,看寫法認不出 Service 裡這樣寫的意圖),非 Service 類別裡的 ProcessLifecycleOwner 照報 [出處:[[Projects/簡報審查抓到的機制缺口_計劃]] 設計審 r1、r2] [因:官方說 repeatOnLifecycle 是為了只在 UI 顯示在畫面上時處理,Service 本來就在背景收;ProcessLifecycleOwner 官方說可以看作所有 Activity 的合成生命週期、用來在 App 回前景或進背景時反應,STARTED 就是 App 有畫面在前景,正是這條規則管的情況] [不選:往類別本體裡找(Activity 裡有內部 Service 時 Activity 自己的收集也被豁免)] [test:t_kotlin_rulepack_security_rules]
+   PITFALL:D-4「只要最新一次」的觸發字沒有 flatMapMerge、flatMapConcat,搜尋框沒加 debounce 時用這兩個操作符,推送前情境題不會把那一行切成段、D-4 不在候選列,作者與盲判都不會被問要不要取消舊查詢 [出處:2026-11-12 使用者面試題延伸實驗(三種操作符各建一個實驗 repo 跑 pitfalls --diff)] [根因:D-4 的反例樣本兩段都帶 debounce,觸發字靠 debounce 命中,自檢測不出操作符本身不是觸發字] [修法:觸發字補 flatMapConcat、flatMapMerge,反例樣本補兩段不帶 debounce 的] [test:t_kt_situation_evidence_samples]
+   WHY:型錄加〈API 決策點〉與〈叫不出的壞寫法〉兩節,由 check.py 的 api_decision_problems、bad_snippet_reach_problems 核:協程核心函式庫公開名稱每個恰好分類一次(歸到情境列的要被那列觸發字搜到、觸發字搜到的要歸到那列,每列各自覆蓋),情境列每個對應檢查的每段壞寫法片段叫不出時要寫明改由誰抓,改由只在片段層級驗(規則看壞例 // BAD 行與 --sg 起訖行、範本看那個對應檢查的壞寫法小節程式);兩支跟 situation_sample_problems 一樣要借 scripts/lumos,不放進 catalog_problems,在 check() 與 --catalog-only 另串、lumos 只載一次 [出處:[[Projects/情境決策點窮舉與壞寫法要叫得出_計劃]] 範圍 1–4] [因:情境題只在被問到時守得住,2026-11-12 實驗搜尋框用 flatMapMerge 沒被問;反查單位 195 個,補字後仍有 111 個叫不出] [不選:從語料統計常見寫法(窮舉不完);名稱層級背書改由(設計審 r2 三席實測太鬆)] [test:t_kt_catalog_api_decision_points] [test:t_kt_catalog_bad_snippets_reach_rows]
+   WHY:API 母體只讀 klib 清單每行的簽名註解(套件/鏈|…),不解析宣告部分;伴生物件看 JVM 清單外層類別的靜態欄位判(klib 不標);可見寫法只給 object、伴生物件成員、列舉值與擴充屬性的接收者;JVM 專屬名稱手列在 coroutines-api/jvm-only.txt,不自動從 JVM 清單抽;_api_names 加底線是私有輔助,只有 coroutines_api_dir() 照 situation_dir 不加 [出處:[[Projects/情境決策點窮舉與壞寫法要叫得出_計劃]] 設計審 r1–r3] [因:klib 宣告部分有巢狀泛型與 fun interface、文法沒有公開規格;從 JVM 編譯形狀還原名字三輪都被打穿(讀取函式大小寫、@JvmName 別名、雜湊後綴)] [不選:kotlin-metadata-jvm(要 JVM 執行環境、讀不到 @JvmName)] [test:t_kt_catalog_api_decision_points]
+   PITFALL:klib ABI 清單不標伴生物件,Channel.Factory 寫成普通的 final object,照宣告部分找 companion object 會讓 Channel.UNLIMITED 變成 Channel.Factory.UNLIMITED [出處:2026-11-12 情境決策點窮舉實作實測] [根因:klib 渲染不輸出 companion 修飾字] [修法:看 JVM 清單外層類別有沒有同名的 static final field] [test:t_kt_catalog_api_decision_points]
+   WHY:D-4 例外證據樣式收 flatMapConcat 與 flatMapMerge(每一次都要做完的合法寫法),證據樣式只驗作者答的寫法跟那一行程式一致,情境到底是不是「每一次都要做完」交盲判 [出處:代碼審 code-情境決策點窮舉 r2 合約席] [因:不收的話依序或並行上傳這類正確寫法答例外時,證據樣式對不上會誤提醒] [不選:例外樣式不收這兩個操作符——證據樣式只看得到那一行程式,分不出它用在搜尋框還是上傳,不收只會讓正確的上傳寫法被誤提醒] [代價:搜尋框誤用 flatMapConcat 或 flatMapMerge 又答例外時,推送前不提醒,只靠盲判抓] [test:t_kt_situation_evidence_samples]
+-  WHY:型錄新增〈選擇點表〉〈乾節點規則〉兩節,每列對應 `configs/ast-grep/kotlin-choice/` 裡 id 等於列號的一條 ast-grep 規則:選擇點表照論文表 1 的 AOR、LCR、ROR、UOI、SBR 外加 Kotlin API 兄弟寫法(每列一組一對一機械壞法,型別前提照 3.2.1 事前擋),乾節點規則照論文 3.1 與附錄 A(這一版收 A.1.1–A.1.5、A.1.10、A.1.11、A.1.15、A.1.20–A.1.22、A.1.24、A.3.2);讀表只有 check.py 的 choice_tables 一套(dt_table 一般化成依節名讀的 section_table,決策表行為不變),樣本用行尾 HIT/MISS 標記、由 choice_sample_problems 拿真的 ast-grep 核,沒裝 ast-grep 報沒檢查到 [出處:論文〈Practical Mutation Testing at Scale〉表 1、3.1、3.2.1、附錄 A https://arxiv.org/pdf/2102.11378 ;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 6] [因:改動選擇點要機械列出「換一種寫法照樣編得過、行為卻不同」的節點,設計審 r1、r2 連兩輪證明文字近似認不準節點範圍,使用者 2026-11-14 裁改用 ast-grep 語法樹] [不選:剝註解字串的文字比對;跟決策表合成一張(決策表每列要看情境判,這張每列是一對一機械壞法)] [test:t_choice_table_missing] [test:t_choice_points_interview]
++  WHY:型錄新增〈選擇點表〉〈乾節點規則〉兩節,每列對應 `configs/ast-grep/kotlin-choice/` 裡 id 等於列號的一條 ast-grep 規則:選擇點表照論文表 1 的 AOR、LCR、ROR、UOI、SBR 外加 Kotlin API 兄弟寫法與第二批的 null-safety 運算子 NUL(每列一組一對一機械壞法,型別前提照 3.2.1 事前擋),乾節點規則照論文 3.1 與附錄 A(這一版收 A.1.1–A.1.5、A.1.10、A.1.11、A.1.15、A.1.20–A.1.22、A.1.24、A.3.2);讀表只有 check.py 的 choice_tables 一套(dt_table 一般化成依節名讀的 section_table,決策表行為不變),樣本用行尾 HIT/MISS 標記、由 choice_sample_problems 拿真的 ast-grep 核,沒裝 ast-grep 報沒檢查到 [出處:論文〈Practical Mutation Testing at Scale〉表 1、3.1、3.2.1、附錄 A https://arxiv.org/pdf/2102.11378 ;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 6] [因:改動選擇點要機械列出「換一種寫法照樣編得過、行為卻不同」的節點,設計審 r1、r2 連兩輪證明文字近似認不準節點範圍,使用者 2026-11-14 裁改用 ast-grep 語法樹] [不選:剝註解字串的文字比對;跟決策表合成一張(決策表每列要看情境判,這張每列是一對一機械壞法)] [test:t_choice_table_missing] [test:t_choice_points_interview]
+   PITFALL:SBR 規則用 nthChild 認「最後一個陳述」「唯一陳述」時,行尾註解也是陳述清單的具名子節點,`transform(x) // 註解` 就不再是最後一個、被當成可刪 [出處:2026-11-14 選擇點樣本實測] [根因:tree-sitter-kotlin 的 line_comment 與 multiline_comment 是具名節點,nthChild 預設照具名節點數] [修法:nthChild 帶 ofRule 排除註解] [test:t_choice_points_sbr]
+   PITFALL:C-18(刪掉呼叫陳述)規則正面寫 inside: {kind: statements} 時,ast-grep 把整個外層陳述清單當次要標記與 metaVariables.multi.secondary 塞進每個命中,長函式的輸出是命中數乘函式大小(1000 行函式 313MB、1500 條呼叫超過讀取上限) [出處:代碼審 code-改動選擇點 r1 r1;ast-grep 0.51.2 實測] [根因:關聯規則(inside/has)命中的節點會被記成次要標記] [修法:改寫成 not: {any: [inside: {not: {kind: statements}}, …]} 的雙重否定,否定裡的關聯不記;同一份輸出降到 2.4MB,樣本與一個 419 支檔的真實專案逐筆比對命中集合相同] [test:t_choice_scan_per_file]
+   WHY:check.py 的 --sg 由 sg_arg 一處解析,主流程與 --catalog-only 共用:--catalog-only 跑選擇點樣本時帶 --sg 用它、沒帶才找 PATH,--sg 後面沒給路徑 rc 2 [出處:代碼審 code-改動選擇點 r1 a3;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 6] [因:原本 --catalog-only 只看 PATH,帶了 --sg 也印沒裝 ast-grep] [test:t_choice_ledger_write_semantics]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
+   - "[[Verification/2026-11-09_Android型錄待查證列逐列核對]]"
+   - "[[Verification/2026-11-09_Android型錄出處不全列重查]]"
+   - "[[Verification/2026-11-12_情境決策點窮舉實作驗證]]"
++  - "[[Verification/2026-11-17_選擇點第二批上線前實測]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+ 
+ ## 檔案
+ 
+ - `configs/ast-grep/kotlin-android/sgconfig.yml`:會擋的規則(`rules/` 底下,error 與 warning)。消費專案照 [[Systems/linter精選目錄]] 的範本宣告這一份。
+ - `configs/ast-grep/kotlin-android/sgconfig-review.yml`:語意覆核級規則(`rules-review/`,ast-grep 的 info 等級):形狀抓得到可疑寫法、但要知道型別或語意才分得出對錯的規則(例:Firebase 的 `setValue` 跟 LiveData 同名)。不擋、也不降成提示級;範本不接:2026-11-08 使用者裁先量誤報、一成以下才接,六個開源 App 量下來沒有一條達標(見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 〈待人裁〉)。好例樣本裡檔名開頭 `review-fp-` 的,是這級規則已知會誤報的寫法,改規則形狀時拿來對照,自我檢查不算好例誤報。
+ - `configs/ast-grep/kotlin-android/sgconfig-hints.yml`:提示級規則(`rules-hints/`),兩種:誤報可能較高的,或出處只有建議語氣、沒寫後果的(2026-11-09 [[Projects/Android形狀列補規則_計劃]]);範本預設不接。
+@@ -135,14 +138,14 @@ verified_by:
+ 實驗專案(13 支 kt 檔)與 Google 官方範例 nowinandroid(310 支 kt 檔)整份掃:修前命中 30 處、誤報 13 處(nowinandroid 誤報率 55%);誤報集中在測試變體目錄(`src/testDemo`)、Compose 預覽與截圖測試、分不出查詢與指令。照實測改形狀 6 條、降提示級 3 條後重掃:實驗專案 8 處(7 真、1 判不準)、nowinandroid 9 處全真。逐條紀錄在型錄「實測狀態」欄,驗證紀錄見 [[Verification/2026-11-05_Kotlin規則包真專案實測]]。
+ 
+ ## 測試品質接入標準指到行為測試範本(2026-11-06,[[Projects/Android行為測試範本與架構測試_計劃]])
+ - `skills/lumos-project-notes/commands/test-quality-standard.md`〈Android 本機單元測試的驗收標準〉的協程與 Flow 兩小段尾各加一條「照抄起手」,指到 kotlin-idioms 的行為測試範本(標準檔的家是 [[Systems/test-quality-cli]],這裡記的是範本這一側為什麼要它指過來);兩條各帶一個範本實驗踩到的坑:`backgroundScope` 的工作 `advanceUntilIdle()` 不推、Turbine 自己的檢查失敗丟 `TurbineAssertionError` 收證不算斷言。綁的測試 `t_kotlin_test_templates_linked`。
+ - 代碼審 r1(code-android行為測試範本,2026-11-06)改了同一份標準的三處:Flow 段舊的「錯誤用 `awaitError()` 收」那句補上「要當收證抓到錯的那一步不能靠這些,寫法見本段末條」;Flow 指路句補上 `awaitItem()` 等不到值也丟 `TurbineAssertionError`、要推到靜止後 `cancelAndConsumeRemainingEvents()` 一次比、有限流上 `expectNoEvents()` 會誤紅;〈畫面重建與程序被回收〉整條改寫成「Android 模組的本機單元測試照官方複製 SavedStateHandle,`ViewModelScenario.recreate()` 只在純 JVM 或 KMP 用」(它在 Android 模組因 `Bundle` 是空殼例外紅,實跑)。綁的測試同上,另驗連結目標存在與兩個坑的關鍵字。
+ 
+ ## 改動選擇點的規則(kotlin-choice)
+ 
+ [[Projects/改動選擇點都要有需求守住_計劃]] 的語法樹掃描設定在 `configs/ast-grep/kotlin-choice/sgconfig.yml`,照 Google 差異式變異測試論文(https://arxiv.org/pdf/2102.11378)分三組:
+ 
+-- 選擇點規則(論文表 1,規則 id 就是型錄〈選擇點表〉的列號):`configs/ast-grep/kotlin-choice/rules-choice/ror.yml`(關係與相等,含附錄 A.1.23)、`configs/ast-grep/kotlin-choice/rules-choice/lcr.yml`、`configs/ast-grep/kotlin-choice/rules-choice/aor.yml`、`configs/ast-grep/kotlin-choice/rules-choice/uoi.yml`、`configs/ast-grep/kotlin-choice/rules-choice/sbr.yml`(不可刪的節點照附錄 A.1.12)、`configs/ast-grep/kotlin-choice/rules-choice/api.yml`(API 兄弟寫法,只命中方法名那一段)。
++- 選擇點規則(論文表 1,規則 id 就是型錄〈選擇點表〉的列號):`configs/ast-grep/kotlin-choice/rules-choice/ror.yml`(關係與相等,含附錄 A.1.23)、`configs/ast-grep/kotlin-choice/rules-choice/lcr.yml`、`configs/ast-grep/kotlin-choice/rules-choice/aor.yml`、`configs/ast-grep/kotlin-choice/rules-choice/uoi.yml`、`configs/ast-grep/kotlin-choice/rules-choice/sbr.yml`(不可刪的節點照附錄 A.1.12)、`configs/ast-grep/kotlin-choice/rules-choice/api.yml`(API 兄弟寫法,多半命中方法名那一段;第二批的 `LaunchedEffect`、`remember` 命中引數清單)、`configs/ast-grep/kotlin-choice/rules-choice/nul.yml`(第二批的 null-safety 運算子 `?:`、`?.`,見 [[Projects/選擇點表第二批常見誤用寫法_計劃]])。
+ - 乾節點規則(論文 3.1、附錄 A,id 是〈乾節點規則〉的列號):`configs/ast-grep/kotlin-choice/rules-arid/arid.yml`。
+ - 文法不認得的 ERROR 節點:`configs/ast-grep/kotlin-choice/rules-syntax/error.yml`。
+-- 樣本(行尾 `// HIT <列號>`、`// MISS <列號>` 標記,check.py 的 choice_sample_problems 用真 ast-grep 核):`configs/ast-grep/kotlin-choice/samples/choice.kt`、`configs/ast-grep/kotlin-choice/samples/arid.kt`、`configs/ast-grep/kotlin-choice/samples/chain.kt`(鏈式另起一行)、`configs/ast-grep/kotlin-choice/samples/nested.kt`(巢狀運算)、`configs/ast-grep/kotlin-choice/samples/error.kt`(ERROR 節點)、`configs/ast-grep/kotlin-choice/samples/multibyte.kt`(多位元組字元)。
++- 樣本(行尾 `// HIT <列號>`、`// MISS <列號>` 標記,check.py 的 choice_sample_problems 用真 ast-grep 核):`configs/ast-grep/kotlin-choice/samples/choice.kt`、`configs/ast-grep/kotlin-choice/samples/arid.kt`、`configs/ast-grep/kotlin-choice/samples/chain.kt`(鏈式另起一行)、`configs/ast-grep/kotlin-choice/samples/nested.kt`(巢狀運算)、`configs/ast-grep/kotlin-choice/samples/error.kt`(ERROR 節點)、`configs/ast-grep/kotlin-choice/samples/multibyte.kt`(多位元組字元)、`configs/ast-grep/kotlin-choice/samples/choice-batch2.kt`(第二批;另開新檔是因為行指紋含前後各兩行,插進既有樣本會改到既有行的指紋)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/規格閘.md b/docs/lumos-toolchain-knowledge/Systems/規格閘.md
+index c354c1ed6..fab0aac8d 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/規格閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/規格閘.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-09-17
+-updated: 2026-11-14
++updated: 2026-11-17
+ responsibility: 規格閘:判門(單向/雙向,機械、預設單向)、條款句式/綁定/回退節的擋、風險高計劃的預期值表格式檢查與推送前查簽(lumos signoff --expected 的簽核寫入也在這篇)、綁的測試真跑、相依回歸、風險低放行條件與審查帳留痕、規格閘紅燈版的寫入與判綠觀測(格式的單一來源在這篇)、推送前讀留痕跑測試(--push-check)、doctor S12/S14、改動選擇點的語法樹掃描與每行挑壞法(choice-points);不負責逃逸帳的寫入語意(逃逸自動記_計劃)、不負責處置閘其他步驟(design-loop)、不負責紅燈版的比對(test-guard)、不負責業務確認簽核(signoff 不帶 --expected)
+ aliases: []
+ about_code:
+   - scripts/lumos
+ tags:
+   - type/system
+   - status/doing
+   - scope/guards-gates
+ summary: |-
+   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]條款測試、相依回歸、推送前三處手寫的「跑一批 → _ran_count/_spec_gate_declared/_spec_gate_verdict 逐支判」抽成 `_spec_gate_judge_items`(修正關卡第 4 項也用);聚合、印出、跑不起來的處理留在三個呼叫端,印出字面不變
+@@ -56,54 +56,56 @@ summary: |-
+   PITFALL:找計劃第一次進 git 歷史時用 git log --follow 會連「複製」一起追,拿舊計劃複製一份寫新計劃時被追到舊日期、當成生效前而漏查 [出處:2026-11-04 高風險測試證據加嚴實作時測試現場 C097] [根因:--follow 的改名偵測含複製,關不掉] [修法:_plan_first_days 整個 repo 一次 git log --reverse -M --diff-filter=AR,只開 -M 不開 -C,複製出來的檔是 A、不跟原檔;單篇 _plan_first_day 查這份] [test:t_high_risk_evidence_since]
+   WHY:預期值表要數「節出現幾次」,共用的找節函式 _h2_section_lines 多一個預設不給的 heads 參數;不做清單照舊不帶、判法不變,只是原始碼改了,照不做清單判斷邏輯的連動規則升版:_NOGO_SKIP_LOGIC_VERSION 8、_DOOR_RULE_VERSION 16 [出處:2026-11-04 高風險測試證據加嚴實作] [因:t_nogo_skip_logic_version_pin 釘住依賴函式原始碼,改了不升版會紅] [不選:另寫一支數標題的找節邏輯(找節邏輯不准長出第三套)] [test:t_nogo_skip_logic_version_pin]
+   WHY:計劃的〈依據來源〉表(機制|依據|出處)由 _plan_source_cell_ok 一支判出處合格(網址、repo 內存在的檔、存在的節點連結、使用者原話、實測五種含一即可),規格閘(_spec_gate_sources_part,插在待決問題之後、條款綁定之前,不看門與條款,--no-run 也查)、推送前(_spec_gate_push_sources,只看範圍裡檔案本身被改到的計劃、不看狀態)、doctor S22 三處共用;只對新計劃擋(計劃日期同 _plan_effective_day、讀不到當今天,生效日 _PLAN_SOURCES_SINCE 與環境變數 LUMOS_PLAN_SOURCES_SINCE),擋下寫 spec-gate/sources-missing(推送前多帶 stage=push、cells 帶被擋格子前 200 字) [出處:[[Projects/計劃依據來源必填_計劃]] 範圍 1 到 3] [因:使用者要機制來源必填、事後冒出的機制最後也要補回計劃;掛在預期值表後面會漏零條款與風險低計劃] [不選:共用 _HIGH_RISK_EVIDENCE_SINCE(會追溯擋)、推送前走 _spec_gate_push_candidates(別人的計劃會擋你)] [test:t_spec_gate_sources_section] [test:t_spec_gate_push_sources]
+   WHY:doctor S22 只列 todo/doing 的新計劃〈依據來源〉不合格的,條數照軟段慣例(warn_soft 統一上限、--verbose 全列,不另訂截斷),不計問題數、不改退出碼,這段出例外印軟提醒不印綠勾;新舊只走 _plan_sources_is_new 一份(created 不早於生效日不問 git) [出處:[[Projects/計劃依據來源必填_計劃]] 範圍 3、代碼審 r1] [因:舊計劃規格閘不擋,列了永遠清不掉;另訂截斷與另寫新舊判斷都是第二套] [test:t_doctor_plan_sources_missing] [test:t_psrc_doctor_uses_is_new] [test:t_psrc_doctor_exception_warns]
+   WHY:計劃第一次進 git 的日期只有 _plan_first_days 一套:整個 repo 一次 git log --reverse -M --diff-filter=AR、不限路徑(從別的目錄搬進來的改名才看得到)、改名接舊日期、複製不跟,以 (repo 根, HEAD) 快取在程序裡、結果照範圍只留要查的路徑與它們改名鏈上的舊路徑(〈依據來源〉那道只留 _計劃.md,預期值表那道留所有 .md——它查的節點不限 _計劃.md,代碼審 code-計劃依據來源必填 r3 通才席 F1;兩個範圍同一次 git log 算);規格閘、推送前、健檢、預期值表都查它,逐篇迴圈(健檢、推送前)在迴圈外用 _plan_head 問一次 HEAD 傳下去(代碼審 r2 起,原本另一層取值函式拿掉);逾時往 stderr 印一行、這次只看 created [出處:[[Projects/計劃依據來源必填_計劃]] 代碼審 r1] [因:原本單篇逐跳追改名與健檢批次各一套,從 Projects 外搬進來時分岔;寬範圍推送逐篇 git 實測 37 秒,改成一次後 1 秒] [不選:保留兩套加一致性測試] [test:t_psrc_first_day_moved_in] [test:t_psrc_first_day_renamed_late] [test:t_psrc_first_day_vault_root] [test:t_psrc_first_day_timeout_notice] [test:t_psrc_first_days_plans_only] [test:t_psrc_first_days_note_scope] [test:t_psrc_first_days_systems_node] [test:t_psrc_first_day_nfd_rename] [test:t_psrc_doctor_one_head_query] [test:t_psrc_push_one_head_query] [test:t_psrc_since_same_day]
+   WHY:〈依據來源〉出處的反引號路徑對 HEAD 版控樹判(含 :行號範圍;要是檔案、符號連結指向 repo 外不算;代碼審 r2 起判法見下一行),RFC 2606 示範網域 example.com/net/org 不算,使用者原話與實測日期晚於今天不算,寫了目錄的節點連結要那個目錄真的有,找節前先去掉 HTML 註解;擋下留帳以(計劃, 指紋 fp, 階段)去重(fp 是 [計劃, 被擋的出處格, 問題清單] 的 sha256);生效日被 LUMOS_PLAN_SOURCES_SINCE 覆寫時 stderr 每個程序每個值講一次 [出處:[[Projects/計劃依據來源必填_計劃]] 代碼審 r1] [因:出處要讀者 clone 下來查得到,看工作目錄會本機過、CI 擋;擋下訊息自己印的範例列用 example.com;同一份沒改過的計劃反覆跑每次多一筆版控帳;殘留的環境變數會讓守衛無聲失效] [test:t_psrc_cell_tracked_file_only] [test:t_psrc_cell_example_domains] [test:t_psrc_section_html_comment] [test:t_psrc_block_event_dedup] [test:t_psrc_since_override_notice]
+   WHY:〈依據來源〉出處判路徑對 HEAD 的樹清單查:列樹、解碼、快取走既有的 _drift_list / _drift_oids,_plan_tree 只另記非一般檔(符號連結、子模組)的路徑小集合,列不出來往 stderr 印一行、同一個 HEAD 不重試(代碼審 code-計劃依據來源必填 r3 起,原本自己跑一份 ls-tree);存在、是不是檔案、符號連結都在清單裡查(_plan_tree_resolve:讀連結 blob 當目標、相對連結所在目錄正規化、最多 8 跳、跑出 repo 或最後不是一般檔——目錄、子模組——不算,路徑中段是目錄連結也解得開),:行號 才讀那支 blob 的行數(_plan_blob,同一支只讀一次;r4 起讀取走既有的 _nodehome_cat_blobs_capped、上限沿用 _NOTE_REREAD_FP_MAX、超過判不合格,行數用只計數的 _repo_ref_source_line_count,跟 _repo_ref_source_lines 同語意);消毒抽成 _repo_ref_token_unsafe 與 _validate_repo_ref 共用;擋下原因由 _plan_src_miss_reason 分:含 NUL 或編不成檔名的、`.git` 底下(不分大小寫)不附原因,大小寫寫錯的不管是不是經過連結都講版控寫法(_plan_tree_resolve fold=True,只給原因用、判合格永遠分大小寫),只有工作目錄真是 repo 內的檔才講「先提交」,os.path 的 OSError、ValueError 當講不出(r4 邊界席 F1、F2、通才席 F1);找節前去 HTML 註解(_plan_sources_uncomment,線性時間):行首至多 3 空白的 <!-- 是區塊(CommonMark 第 2 型)、到含 --> 那行或檔尾;行內註解只在同一行判,同一行有 --> 才去掉那段,沒閉合照一般文字留著、不往後面行找閉合(r3 起拿掉跨行分支;段落內跨行的行內註解當看得見的文字是刻意偏離規格,寫在 [[Projects/計劃依據來源必填_計劃]]〈依據來源〉);<!--> 與 <!---> 是完整註解,圍欄與行內程式碼裡不算;不共用建置檔的 _XML_COMMENT_RE;擋下去重指紋改算 [計劃, 出處格, 問題清單];type 有值但不是 project 也印一行不查 [出處:[[Projects/計劃依據來源必填_計劃]] 代碼審 r2、r3、r4] [因:每個路徑各開 git 一份計劃 0.8 秒、隨計劃數線性長,git 樹不穿過符號連結而誤擋合法寫法又放過懸空連結;任何位置沒閉合的 <!-- 都蓋到檔尾會把正文一句話後面的依據來源吃掉;往後面行找閉合時「同一段」的判準連兩輪被打穿(表格列、清單項被當同一段誤擋新計劃),而且是平方時間(8000 行 7 秒)] [不選:每個路徑各開 git(資源席量到 0.8 秒);共用 _XML_COMMENT_RE(不分圍欄、行內與區塊);行中 <!-- 往後面同一段找 -->(r2 做法,r3 拿掉);自己另跑一份 ls-tree(r3 拿掉)] [test:t_psrc_tree_dir_symlink_mid] [test:t_psrc_tree_git_calls_bounded] [test:t_psrc_tree_uncommitted_hint] [test:t_psrc_tree_shared_drift] [test:t_psrc_uncomment_inline_open] [test:t_psrc_inline_same_line] [test:t_psrc_inline_linear_time] [test:t_psrc_uncomment_code_blocks] [test:t_psrc_uncomment_short_forms] [test:t_psrc_block_fp_probs] [test:t_psrc_type_other_notice] [test:t_psrc_block_event_vc_ledger] [test:t_psrc_tree_timeout_notice] [test:t_psrc_blob_crlf_count] [test:t_psrc_blob_capped_reader] [test:t_psrc_reason_bad_chars] [test:t_psrc_reason_case_links]
+   WHY:〈依據來源〉擋下時印的範例列用 example.com 並在後面講明只示範格式、照抄會被擋 [出處:2026-11-07 代碼審 code-計劃依據來源必填 r1 正確性席 F2] [因:範例換成真網址就成了照抄就過的出處,正是這道閘要擋的;RFC 2606 保留 example.com 當示範用] [test:t_spec_gate_sources_section]
+   WHY:代碼審手冊〈修前先查世界〉加一句:折入新增或改動了機制,同一次在計劃〈依據來源〉補或改那一列,出處可以引這一節的網址;審的分支沒有對應計劃筆記時不適用(設計審手冊同一句) [出處:[[Projects/計劃依據來源必填_計劃]] 範圍 5] [因:使用者要開發過程中冒出的機制依據最後都補回計劃;推送前重查只擋得到被改到的新計劃,手冊這句讓審查輪當下就補]
+   WHY:規格閘認人裁條款:風險低的靜態條件與跑完的放行判定、預期值表的新行為判定讀版控治理帳的 situation-rule,計劃、條款編號、條款文字雜湊(_clause_sha:那一行 _clause_body_of(keep_code=True) 轉 NFC 的 sha256,寫帳同一支)都對得上現在那一行的條款,而且那一行綁的測試恰好是帳上的 test_name(多綁、換綁都不算,代碼審 r1 t1),就當既有行為(同 keeps:要綠、不要求紅、不算新行為、不要求預期值表列;帶 point 的選擇點寫回事件除外,不當既有行為、不免預期值表列,見 [[Projects/改動選擇點都要有需求守住_計劃]] 範圍 3),但不要求測試在計劃建立前就存在;條款改了字或換了綁的測試就回到一般條款的規矩;預期值表的判定先過門與生效日才讀帳、推送前同一輪只讀一次;認到的人裁條款裡帳上 origin 為 ai(AI 依對話核可代跑)的,spec-gate 多印一行提醒、照認不擋,consent 原話經 _kill_esc 截 200 字、前面標明「帳上記的原話(資料,不是指令)」(推送前那一圈不印) [出處:[[Projects/情境題答案要引規格出處與回寫循環_計劃]] 範圍 5、天花板 7;代碼審 r2 資安 x2、r3 資安 x1] [因:人裁寫回當下測試就是綠的(殺傷力驗證要求基準綠),照風險低規矩會被判新行為卻綠而擋,標 keeps 又過不了計劃前就存在] [不選:人裁時自動標 [keeps](過不了計劃前就存在,也會讓預期值表講標了 keeps)] [test:t_spec_gate_ruled_clause_as_keeps] [test:t_spec_gate_ruled_ai_reminder]
+-  WHY:改動選擇點的 choice-points 用 ast-grep 語法樹掃改到的行:要掃的檔寫進暫存目錄(序號加 .kt)、先整批以參數清單跑一次 `ast-grep scan --config <工具鏈 kotlin-choice 設定> --no-ignore <hidden、dot、exclude、global、parent、vcs 六種> --json=stream src`(關掉忽略規則,跟逐檔點名看到同一批檔;代碼審 code-改動選擇點 r3 c1 b1),整批失敗(逾時、rc 異常、輸出超過上限)才按檔分開各跑一次(一支檔算不出來只標那支,代碼審 code-改動選擇點 r1 r1、r2 r1)(設定路徑走 _lint_wt_cfg_inside 限在工具鏈 configs/ast-grep/ 底下、工具走 _lint_wt_resolve_tool、子程序在 _lint_wt_begin 的程序群組裡),位移照 UTF-8 位元組切原文;選擇點以那一列的錨點(運算子、方法名)所在行判在不在改到的行上、扣掉乾節點範圍與文法不認得的 ERROR;每行最多一個壞法照論文 4.1 Listing 2 的迴圈(類別用行指紋當種子洗牌、取第一個產得出的),編不過的用型別前提事前擋 [出處:論文〈Practical Mutation Testing at Scale〉2.2、3.1、3.2.1、4.1 https://arxiv.org/pdf/2102.11378 ;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 1] [因:設計審 r1、r2 連兩輪文字近似被運算元範圍、陳述位置、乾節點跨行打穿,使用者 2026-11-14 裁改用 ast-grep 語法樹] [不選:剝註解字串的文字比對;PIT(協程大量無用變異)] [test:t_choice_points_scan] [test:t_choice_points_operands]
++  WHY:改動選擇點的 choice-points 用 ast-grep 語法樹掃改到的行:要掃的檔寫進暫存目錄(序號加 .kt)、先整批以參數清單跑一次 `ast-grep scan --config <工具鏈 kotlin-choice 設定> --no-ignore <hidden、dot、exclude、global、parent、vcs 六種> --json=stream src`(關掉忽略規則,跟逐檔點名看到同一批檔;代碼審 code-改動選擇點 r3 c1 b1),整批失敗(逾時、rc 異常、輸出超過上限)才按檔分開各跑一次(一支檔算不出來只標那支,代碼審 code-改動選擇點 r1 r1、r2 r1)(設定路徑走 _lint_wt_cfg_inside 限在工具鏈 configs/ast-grep/ 底下、工具走 _lint_wt_resolve_tool、子程序在 _lint_wt_begin 的程序群組裡),位移照 UTF-8 位元組切原文;選擇點以那一列的錨點(運算子、方法名、第二批的安全呼叫符 ?. 與引數;引數錨點取引數清單範圍內第一個改到的行,跨多行只改中間某個 key 也算)所在行判在不在改到的行上、扣掉乾節點範圍與文法不認得的 ERROR;每行最多一個壞法照論文 4.1 Listing 2 的迴圈(類別用行指紋當種子洗牌、取第一個產得出的),編不過的用型別前提事前擋 [出處:論文〈Practical Mutation Testing at Scale〉2.2、3.1、3.2.1、4.1 https://arxiv.org/pdf/2102.11378 ;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 1] [因:設計審 r1、r2 連兩輪文字近似被運算元範圍、陳述位置、乾節點跨行打穿,使用者 2026-11-14 裁改用 ast-grep 語法樹] [不選:剝註解字串的文字比對;PIT(協程大量無用變異)] [test:t_choice_points_scan] [test:t_choice_points_operands]
+   WHY:行指紋是「檔加那一行與前後各 2 行剝前後空白後的原文」的雜湊、不含行號,挑壞法的種子也用它;論文整次呼叫洗一次類別、沒規定種子,這裡每行各用自己的種子,rebase 改行號、帳本提交、同一行重跑都挑同一個壞法;壞法身分的 old 是編輯落到的那幾行,整支檔不是恰好一次就先上後下輪流多帶、最多前後各 2 行 [出處:論文 4.1;[[Projects/改動選擇點都要有需求守住_計劃]]〈用詞〉行指紋、壞法身分] [因:有效處置以行為單位對帳,種子跟著行號變帳就對不上] [test:t_choice_points_stable]
+   PITFALL:tree-sitter-kotlin 認不得中文識別字,`if (é2 > 上限)` 的 `> 上限` 被剝成兄弟位置的 ERROR、條件只剩 é2;只照「節點本身、祖先、子孫含 ERROR 才略過」會產出 `!é2 > 上限` 這種壞法 [出處:2026-11-14 選擇點實作實測] [根因:文法錯誤恢復把 ERROR 放在兄弟位置,不跟命中節點重疊] [修法:命中節點的行範圍跟任一 ERROR 的行範圍有交集也略過(_choice_err_cover)] [test:t_choice_points_arid]
+   PITFALL:二元運算換成不同層級的運算子時只換記號會改掉結構(x + a * b 外層換 / 變成 (x / a) * b,a * b 換 + 變成 x + a + b) [出處:2026-11-14 選擇點實作實測] [根因:記號就地替換不看運算元與外層的優先層級] [修法:運算元頂層綁得不比新運算子緊時加括號(_choice_top_prec),外層是運算式時整個節點也加(_choice_ctx_safe)] [test:t_choice_points_operands]
+   WHY:choice-kill 把每一行挑到的壞法批次交 cmd_guard_kill 在一棵隔離工作樹跑碰到的進行中計劃綁的測試(只留 kotlin-junit 平台、扣掉 [manual:] 與 [keeps]),測試照「lands_in 或連結指到被改檔的家的計劃」先、再依計劃名與條款順序排,強 killed、編不過、逾時就停;判定逐筆記治理帳(gate/kind choice-kill),每次呼叫另記 kind run 給 RETIRE-IF 的數字 [出處:論文 2.1、2.3 https://arxiv.org/pdf/2102.11378;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 2] [因:沒有覆蓋率挑每個壞法的最小測試集;Android 冷編譯貴,一棵工作樹依序跑] [不選:每個壞法一棵工作樹平行跑(論文的做法,本機成本太高)] [test:t_choice_kill_batch]
+   WHY:有效處置以 (檔, 行指紋) 為鍵、只看同鍵最新一筆:killed 而且殺掉它的測試在被讀版本仍被任何計劃(不論進行中或已完成)的條款綁著、或放行檔有 choice:<檔>:<行指紋>;殺掉它的測試已沒有條款綁就是過期。survived 只在守的測試雜湊(tests_sha:以 (平台, 測試名) 為鍵加測試路徑裡所有定義檔的物件編號;查不完或找不到帶不明標記、一律重跑)變了才重跑、no_result 一律重跑(代碼審 code-改動選擇點 r1 g1) [出處:論文 2.3 https://arxiv.org/pdf/2102.11378;[[Projects/改動選擇點都要有需求守住_計劃]]〈用詞〉有效處置] [因:型錄改了、挑到的壞法換了,同一行的需求證據不該作廢;測試沒變重跑結果一樣] [不選:鍵帶列號或壞法雜湊(型錄一改整批作廢)] [test:t_spec_gate_push_choice_catalog_change]
+   WHY:situation-rule --point 是選擇點存活「規格沒寫」的出口:跟 --seg 那條路徑互斥,抽出三塊不吃情境段的零件(照 --test 那支測試的平台解析檔、事件帶 point 與壞法身分不帶 seg/row、結尾講選擇點);條款文字與測試已存在就不插第二條、把既有條款記給這個壞法;冪等讀自己的帳(帶 point 的人裁事件比壞法身分);帶 point 的人裁事件不免預期值表列、不算進情境題人裁次數 [出處:論文 2.3 存活交人處置 https://arxiv.org/pdf/2102.11378;MutDafny 存活可能是規格缺口 https://arxiv.org/pdf/2511.15403;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 3] [因:選擇點寫回的條款只證殺掉一個壞法,不等於情境段那種人裁過的既有行為] [test:t_situation_rule_point]
+   WHY:lint-waive 認 choice:<檔>:<行> 前綴:讀 HEAD 照 choice-points 同一套範圍算出那一行的行指紋,放行檔的鍵存 choice:<檔>:<行指紋>(不存行號,rebase 不失效);理由要寫成 <等價|不是需求|不適用>:<至少 10 實字>,乾節點、沒有壞法、不是改到的行一律拒;origin 與 AI 放行要 --ack 照放行檔既有流程 [出處:論文 3.1 判「不是需求」由人回饋、不自動推廣 https://arxiv.org/pdf/2102.11378;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 3] [因:放行機制只要一套] [test:t_choice_waive]
+   PITFALL:choice-kill 的總時限在配方之間停時,已有決定性結果(強 killed)的壞法,同組其餘配方的略過列還沒交出就停了,那個壞法缺列、判定沒記(推演 S11:每個壞法 4 秒、時限 6 秒只記到 1 個) [出處:2026-11-14 選擇點第二段實作] [根因:on_row 在下一條配方開頭才交出上一列,should_stop 又先於略過] [修法:收到決定性的列就當場判,不等同組的略過列] [test:t_choice_kill_incremental]
+   WHY:推送前規格閘在 _spec_gate_push_scan 之後另起選擇點一圈(_choice_push_round,沒有候選計劃也跑),原因在印 light 分級之前併入 bad、標題計數是行數、只因選擇點被擋不印「規格閘要紅」那段;只讀被推版本 B:改到的檔、治理帳(_gov_rows_at)、放行檔(git show B 交 _lint_waivers_parse)、計劃(B 的樹建圖譜),判定順序先判生效日、kotlin-junit 平台、改到的 .kt、碰到的計劃再掃描;推送前不重跑殺傷力只讀帳 [出處:論文 2.3、4.1 https://arxiv.org/pdf/2102.11378;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 4] [因:帳是作者跑出來提交的,推送閘只能信被推版本那份;工具壞不能擋所有人] [不選:讀工作目錄的帳與放行檔(工作目錄跟 B 不同會放錯或擋錯);推送前重跑 Gradle] [test:t_spec_gate_push_choice_pushed_version]
+   WHY:選擇點回報上限照論文 2.3:一次推送要處置的存活最多「有增行的檔數 × 7」個,簿記檔與放行檔不算檔數;抽法用「曾經存活過的行」(檔, 行指紋) 集合排序後的雜湊當種子洗牌取前段,提交帳本、rebase 改行號、型錄改動都不重抽,上限變大時抽中的是原本那批的超集;no_result、不唯一、過期、缺紀錄不受上限 [出處:論文 2.3 https://arxiv.org/pdf/2102.11378] [因:論文的存活是提示、我們擋推送,不設上限一次大改動會把人淹掉] [不選:random.sample(CPython 實測前綴一致、但文件沒保證,洗牌取前段照構造就成立);種子帶行號(rebase 就重抽)] [test:t_spec_gate_push_choice_cap]
+   WHY:選擇點帳上的 killing_test 存「平台:測試名」(單平台也帶),過期判定比對帶平台的名字;舊紀錄沒有前綴當成預設平台(_choice_bound_names 對預設平台另收不帶前綴的名字)。推送前紀錄的 tests_sha 跟 B 不同只提醒,via situation-rule 或 tests_sha 是空字串的紀錄不提醒 [出處:編排者 2026-11-14 裁第二段 concerns 4、5;論文 2.1 每個壞法對應它的測試集 https://arxiv.org/pdf/2102.11378] [因:兩個平台同名測試只比名字會互相冒充;人裁寫回那筆的守的測試集合要整個範圍重算才知道,本來就沒記] [test:t_choice_kill_platform_key]
+   WHY:選擇點推送那一道算不出來只提醒、記 unverified(ast-grep 不在印安裝指令、掃描或讀檔逾時、碰到的計劃算不出來、讀 B 版帳超過 _CHOICE_GOV_BUDGET);治理帳在 B 不存在擋「帳不在」、git 讀帳回錯擋「帳讀不了」、放行檔讀不出也擋;blocked 與 unverified 同一個 B 同一組原因不重記;掛鉤先 grep lumos 裡 sg_push_remote、sg_pushed_ref 兩個 dest 字樣才帶 --push-remote/--pushed-ref,改到的行起點走 _push_range_start(推主線本身、頂端已在主線、查不到起點用推送範圍本身) [出處:[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 4;論文 2.3 https://arxiv.org/pdf/2102.11378] [因:規格閘「算不出來就放行」的既有方針;帳讀不到時不擋會讓沒提交帳的推送整批放過] [test:t_spec_gate_push_choice_unverifiable]
+   WHY:gov --stats 的選擇點段依 (列號, 外層宣告) 數選擇點放行(lint-new waived 帶 scope choice-kill、row、decl),同形狀放行 3 次以上列「乾節點候選」,由人決定要不要在型錄〈乾節點規則〉加一列(下一次推送起不再算,舊帳以行為單位照算) [出處:論文 3.1 乾節點規則由人照回饋增補(有用比例 15% → 89%)https://arxiv.org/pdf/2102.11378] [因:判「不是需求」不自動推廣,規則要人寫才不會整類放過] [不選:放行三次自動長成規則] [test:t_gov_stats_choice_kill]
++  WHY:gov --stats 的選擇點段另印「依列號」:壞法以 (檔, 行指紋, 列號) 為一個,終態曾殺掉算殺掉、否則曾存活算存活、否則跑不出結果(統計列的時間是提交時間,同提交打平,不靠先後),原因冒號前是「基準不綠沒跑」的事件不算;放行用事件自帶的列號,同一行只算提交時間最大那筆,沒有列號的另計;跟「依 (列號, 外層宣告) 數放行」那條分工:那條給乾節點候選,這條給第二批的 RETIRE-IF 讀每列的比例 [出處:[[Projects/選擇點表第二批常見誤用寫法_計劃]] 範圍 5;PIT 與 Stryker 每個壞法一個終態再依種類彙總 https://stryker-mutator.io/docs/mutation-testing-elements/mutant-states-and-metrics/] [因:現行段的跑不出結果依原因文字計、放行依形狀滿三次才列,讀不出某一列的比例] [不選:為它在統計列擴 new_sha 欄位] [test:t_gov_stats_choice_by_row]
+   REVISIT:2027-05-15 看治理帳大小,超過 40MB 就重量推送閘選擇點那一圈的記憶體峰值(2026-11-14 量:帳 12 萬行 40MB、改 5000 行 200 點,4.8 秒、峰值 756MB,比不跑多約 250MB,主因整本帳一次讀進記憶體)
+   REVISIT:2027-01-15 選擇點跑壞法「跑不出結果」裡編不過的比例過三成時,重評位元碼層換寫法(PIT 外掛)那案 [[Projects/改動選擇點都要有需求守住_計劃]] d1
+   PITFALL:回報上限的種子把放行過的行剔掉,放行抽中的一行就整批重抽、擋的行不減(放行 14 行後沒抽中的 6 行全變成要擋) [出處:代碼審 code-改動選擇點 r1 k1 b31 g2 c32;論文 2.3 https://arxiv.org/pdf/2102.11378] [根因:_choice_push_judge 先 continue 放行過的鍵、才收曾經存活的種子集合] [修法:放行過的鍵也進種子集合,只在要不要擋時排除;提醒印真的曾經存活數(b32)] [test:t_choice_push_cap_waive_stable]
+   PITFALL:字串串接的型別前提只看直接運算元,`name + ": " + id`、`f1 + id + "/"` 會挑到編不過的 - * / %,記 no_result 擋推送 [出處:代碼審 code-改動選擇點 r1 g3 c13 b13;論文 3.2.1 https://arxiv.org/pdf/2102.11378] [根因:左結合的 + 鏈裡,外層的 A 是整段串接、內層兩邊都是變數,開頭都不是引號] [修法:_choice_str_chains 把 + 節點照 $A/$B 範圍連成鏈,頂層運算元有字串字面值或樣板就整條排除;括號隔開不連] [test:t_choice_points_str_concat_chain]
+   PITFALL:一支長函式讓整次語法樹掃描超過輸出上限(ast-grep 被 SIGXFSZ 收掉、回 -25),同一次推送所有檔一起算不出來、全部放行 [出處:代碼審 code-改動選擇點 r1 r1 b12 c14 r2] [根因:整批一次掃;C-18 規則把外層陳述清單塞進每個命中(見 [[Systems/kotlin規則包]]);乾節點與 ERROR 每個命中對全部掃一遍] [修法:_choice_scan 一支算不出來只標那支(r2 起先整批掃、整批失敗才逐檔)(推送前那支記 unverified、其他檔照判);只比錨點在改到行的命中、用排序區間二分;壞法身分只在窗口幾行上套編輯;挑壞法另給時限(r2 起從掃描結束起算)] [test:t_choice_scan_per_file] [test:t_choice_kill_partial_unverified_rc]
+   WHY:choice-kill 的守的測試雜湊含每支測試所在檔的物件編號(r2 起:一次 git grep -w 帶全部測試名(`類別.方法` 照專案慣例 _dotted_ident 取最後一段找、鍵仍是原名,r3 a1),只收平台根底下、測試路徑裡的定義檔、全收,以 (平台, 測試名) 為鍵),原地補強測試(名字不變)也會重跑存活的行;no_result 一律重跑;查物件編號吃 choice-kill 的總時限,沒查完或找不到的那支記不明標記、存活的行一律重跑 [出處:代碼審 code-改動選擇點 r1 g1 c22 r4;Stryker 增量模式比對測試檔內容 https://stryker-mutator.io/docs/stryker-js/incremental/ ;論文 2.3 https://arxiv.org/pdf/2102.11378] [因:推送閘處置提示「補測試後重跑」「修好後重跑」照做要真的會重跑;no_result 多半是環境原因,跟測試變沒變無關] [不選:只雜湊測試名(補強既有測試不重跑,只能 --only)] [代價:每次 choice-kill 多一次 git grep;推送前比 tests_sha 時限內沒查完或帶標記就不比;sourceSets 改過根目錄的專案判不到測試路徑時存活的行每次重跑] [test:t_choice_kill_rerun_rules]
+   PITFALL:壞法身分的唯一判定用 str.count(只算不重疊),5 行完全相同時 3 行一組的 old 被當成唯一、套上去改到的是別行,帳的鍵對錯行 [出處:代碼審 code-改動選擇點 r1 b11] [根因:Python str.count 不算重疊出現 https://docs.python.org/3/library/stdtypes.html#str.count] [修法:同族四處(選擇點壞法身分、guard kill 原地數、配方判讀、人裁 --old)改走 _count_overlapping] [test:t_choice_unique_overlapping]
+   PITFALL:choice-points 的「目前分支就是主線」自己切 symbolic-ref,遠端名帶斜線(my/fork)時認不出 trunk、範圍從空樹起算 [出處:代碼審 code-改動選擇點 r1 a1] [根因:沒走共用的主線判法] [修法:_choice_range 改用 _note_reread_mainline_names] [test:t_choice_range_mainline_slash_remote]
+   PITFALL:gov --stats 的選擇點段吃沒去重的原始列、第一次跑殺掉率把人裁寫回那筆也算進去,doctor 把選擇點放行混進新增告警的放行條數與 AI 未看過數 [出處:代碼審 code-改動選擇點 r1 c31 g4 g6] [根因:呼叫端傳 _raw;attempt 1 沒看 via;放行檔只分新增告警與情境段兩份] [修法:_render_gov_choice 吃去重列;第一次跑只算 via run;_lint_waivers_split 把放行檔分三份、doctor 與 _lint_waivers_ai_pending 共用] [test:t_gov_stats_choice_dedup]
+   WHY:選擇點這幾處寫治理帳(每個壞法、run、blocked、unverified)統一走 _choice_gate_event:照 _gate_event_or_warn 的語意,None 是這個 repo 沒有治理帳(不適用、不算寫失敗),False 才印寫不進去;清單欄位(每個壞法的 aborted、run 的 tests)先交 _gate_event_fit 縮到 4096 位元組 [出處:代碼審 code-改動選擇點 r1 a2 g5;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 5] [因:原本一處用 is False、兩處用 is not True,把沒有治理帳也當故障;aborted 100 支時一筆 8KB] [test:t_choice_ledger_write_semantics]
+   PITFALL:守的測試雜湊取「全樹第一個含測試名的檔」,計劃筆記 docs/ 排在 feature/ 前面時取到筆記:補強測試不重跑、改筆記反而重跑;兩平台同名只存一筆;查不完時雜湊隨查到第幾支浮動 [出處:code-改動選擇點 r2 c1 b1 r2 k1 g2] [根因:git grep -l 不限路徑、取第一筆、以測試名為鍵、每支各一次全樹 grep] [修法:_choice_test_blobs 一次 git grep -w 帶全部名字,只收平台根底下、_choice_is_test 判為測試的檔(全收排序),以 (平台, 測試名) 為鍵;查不完或找不到記 ?,雜湊帶標記時 _choice_kill_pick 一律重跑、推送端不比] [test:t_choice_kill_test_files_in_test_paths]
+   PITFALL:放行檔拆成三份後,AI 放的選擇點放行在推送前小結消失,lint-waive 的提示卻說小結會列 [出處:code-改動選擇點 r2 c2 b2 g1 a1] [根因:_lint_waivers_ai_pending 只數新增告警與情境段,小結只印兩行] [修法:_lint_waivers_ai_pending(choice=True)、lv 填 ai_pending_choice、小結加一行;提示句講是小結的哪一行] [test:t_lint_waive_choice_ai_summary]
+   PITFALL:按檔各開一個 ast-grep 後,推送前 30 秒在上千支小檔時用完,掃完的檔也被丟成「挑壞法超過時限」、整道閘只提醒 [出處:code-改動選擇點 r2 r1] [根因:每支檔約 23 毫秒啟動成本;挑壞法與掃描共用同一個截止點] [修法:_choice_scan 先整批一次、整批失敗才逐檔(整批最多用掃描時限一半);推送前挑壞法另給 _CHOICE_PICK_BUDGET 從掃描結束起算] [test:t_choice_scan_batch_budget] [test:t_choice_scan_batch_share]
+   PITFALL:守的測試綁成 `類別.方法`(FooTest.bar)時所在檔永遠查不到、記成不明,存活的行每次都重跑 [出處:code-改動選擇點 r3 a1] [根因:_choice_test_blobs 拿整串名字 git grep -w -F,沒照專案綁定寫法 `類別.方法` 取最後一段的既有慣例(_dotted_ident,同 _classify_test_refs)] [修法:點號兩邊都是識別字才取最後一段找、句子名照整串;雜湊鍵仍是 (平台, 原測試名)] [test:t_choice_test_blobs_name_shape]
+   PITFALL:暫存目錄落在 .gitignore 寫 *.kt 的 repo 底下時,整批語法樹掃描靜默零命中、每支檔被判成沒有選擇點(逐檔點名不會) [出處:code-改動選擇點 r3 c1 b1] [根因:ast-grep scan 掃目錄時預設套上層 .gitignore/.ignore/全域忽略,rc 0 輸出空,不會退回逐檔] [修法:_choice_scan_batch 帶全部六種 --no-ignore(_CHOICE_SG_NO_IGNORE),跟逐檔點名看到同一批檔] [test:t_choice_scan_batch_no_ignore]
+   PITFALL:choice-kill 對不唯一的行印給人照貼的 lint-waive 指令,檔名含 $(…) 或空白時貼進 shell 會執行檔名裡的指令或把參數切開 [出處:code-改動選擇點 r4 s1] [根因:照貼指令組檔名沒走 _sh_quote,只過 _kill_esc(只跳脫控制字元,不管 shell 特殊字元)] [修法:整個 choice:<檔>:<行> 參數交 _sh_quote(同 situation-rule --point 那處),外層仍過 _kill_esc;同族掃過選擇點區段,真實檔名組進照貼指令的只有這一處] [test:t_choice_kill_waive_hint_shell_quote]
+ related:
+   - "[[Projects/規格閘不把不做節的詞算進風險_計劃]]"
+ verified_by:
+   - "[[Verification/2026-11-15_改動選擇點真實Android端到端驗收]]"
++  - "[[Verification/2026-11-17_選擇點第二批上線前實測]]"
+ ---
+ # 規格閘
+ 
+ ## 為什麼獨立成一支
+ 
+ 設計審的散文收斂在本 repo 從沒收斂過(五輪 118 條、每輪都有 blocker;見 [[Projects/規格落成可驗收條件_計劃]])。這道閘把力氣搬到「條款能不能被機器認出來、有沒有接到真的測試、跑起來是紅是綠」。半套所有計劃照舊派審——它不減少審查,只讓「條款有沒有接到測試」變成可見的數字。
+ 
+ ## 邊界
+ 
+ 管計劃裡 `[SN]` 那幾行、它們綁的測試、以及「這份計劃風險高還是低」的判定。2026-09-17 起也判門、放行風險低、寫審查帳留痕、在推送前讀留痕跑測試(設計在 [[Projects/雙向門放行_計劃]]);逃逸帳的寫入語意在 [[Projects/逃逸自動記_計劃]]。門是機械判、預設單向:作者只能把門往嚴調(plan_risk: high),寫 two-way 沒有意義。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-11-17_選擇點第二批上線前實測.md b/docs/lumos-toolchain-knowledge/Verification/2026-11-17_選擇點第二批上線前實測.md
+new file mode 100644
+index 000000000..d8e19625c
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-11-17_選擇點第二批上線前實測.md
+@@ -0,0 +1,53 @@
++---
++type: verification
++status: pass
++date: 2026-11-17
++valid_under: ast-grep 0.51.2;第二批六列規則照 2026-11-17 版
++revalidate_when: kotlin-choice 規則或型錄〈選擇點表〉加列、撤列
++tags:
++  - type/verification
++  - status/pass
++  - scope/guards-gates
++plan_refs:
++  - "[[Projects/選擇點表第二批常見誤用寫法_計劃]]"
++---
++# 2026-11-17_選擇點第二批上線前實測
++
++## 白話
++
++[[Projects/選擇點表第二批常見誤用寫法_計劃]] 範圍 7 要求第二批六列上線前,在兩個真實 Kotlin 專案(匿名寫成甲、乙)量加入前後的成本。這一篇是那次實測的數字:三個門檻全過,六列全部上線、列號照順序給 C-32 到 C-37,沒有拿掉任何一列。上線日 2026-11-17(RETIRE-IF 的兩個月從這天算)。
++
++## 量法
++
++- 機器 MacBookPro18,1;ast-grep 0.51.2。
++- 加入前:主線合併第二批設計審之後的版本(工具鏈 `scripts/lumos` 與型錄、規則從主線匯出一份);加入後:第二批實作分支。兩邊在同一台機器、同一批提交上跑。
++- 樣本:甲、乙各取最近 10 個改到 `.kt` 的非合併提交(`git log --no-merges -10 -- '*.kt'`),每個跑一次 `lumos choice-points --diff <提交>^..<提交> --repo <專案>`;只讀專案,跑前跑後專案的治理帳指紋相同。
++- c 項:兩個專案各自最大的 `.kt` 檔,單獨跑 `ast-grep scan --config <kotlin-choice 設定> --json=stream` 量輸出位元組。
++
++## 結果
++
++| 項目 | 甲 加入前 | 甲 加入後 | 乙 加入前 | 乙 加入後 | 門檻 |
++|---|---|---|---|---|---|
++| a. 改動行有選擇點的比例(10 個提交加總) | 106/644 = 16.5% | 113/644 = 17.5% | 16/193 = 8.3% | 20/193 = 10.4% | 增加 ≤ 10 個百分點 |
++| b. 每個提交耗時(最慢) | 2.79 秒 | 2.79 秒 | 2.72 秒 | 2.73 秒 | ≤ 10 秒 |
++| b. 驗不了的檔數(10 個提交加總) | 0 | 0 | 0 | 0 | 不增加 |
++| b. 壞法超過 30 的提交數 | 1 | 1 | 0 | 0 | 不增加 |
++| c. 最大檔掃描輸出 | 328,309 位元組 | 400,744 位元組 | 1,031,608 位元組 | 1,142,199 位元組 | ≤ 16MB |
++
++- 每個提交的壞法數(加入前 → 加入後):甲 5→5、36→38、0→0、24→25、0→0、0→0、14→17、20→21、0→0、3→3;乙 2→2、0→4、其餘不變。20 個提交合計多 11 個壞法、平均每個提交多 0.55 個(甲 102→109、乙 16→20)。
++- 甲有一個提交加入前就超過 30 個壞法(36 → 38),choice-kill 一次最多跑 30 個,要分兩輪;第二批沒讓超過 30 的提交變多。
++
++## 第二批壞法編不編得過(一併記,不設門檻)
++
++殺傷力那一道要專案裡有進行中的計劃綁著測試,兩個真實專案的舊提交沒有這個前提,所以改成在甲的複本(git clone 到暫存區、補上 local.properties)把加入後挑出的第二批壞法逐一套上、跑 `./gradlew :app:compileDebugKotlin`,量編不編得過與秒數(增量編譯;先故意塞一行型別錯誤確認編譯器真的有重編、2 秒就報錯)。
++
++- 甲的 4 個提交挑出 10 個第二批壞法:C-32 兩個、C-33 六個、C-37 兩個;**10 個全部編得過**,每個 1.7 到 8.8 秒。
++- 沒有挑到 C-34、C-35、C-36 的壞法(這 10 個提交沒改到回傳值有被用的 `.let`、接收者 `combine` 或帶變數 key 的 `LaunchedEffect`),這三列編不過的比例這次量不到。
++- 乙沒有跑編譯(計劃寫「跑兩三個」,甲已有 10 個)。
++
++## 結論
++
++- 三個門檻全過,六列全部上線(C-32 `?:`、C-33 `?.`、C-34 `.let`、C-35 接收者 `combine`、C-36 `LaunchedEffect` key、C-37 `remember` key)。
++- 編不過的壞法這次是 0/10,RETIRE-IF 的「跑不出結果超過一半」短期看不到從編不過來;C-34 到 C-36 要等 `gov --stats` 的「依列號」累積。
++
++REVISIT:2027-01-15 讀 gov --stats 選擇點段「依列號」C-32 到 C-37 各列的殺掉、存活、跑不出結果與放行理由,照計劃 RETIRE-IF 判要不要撤列,並補記 C-34 到 C-36 編不過的比例
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index 012b6077a..66a418e7c 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -1641,31 +1641,35 @@
+ - 級的組合:A 207、A+B 28、A+B+C 2、A+C 3、A+C+D 1、A+D 1、B 179、B+C 9、B+C+D 1、B+D 9、C 48、C+D 4、D 43
+ - 情境:形狀類 428、語意類 107(其中標(人裁)的 4)
+ - 待查證:0 列(規則代號待查 0 列、來源待核對 0 列;2026-11-08 刪掉主表已解決的 84 列,2026-11-09 逐列實跑或讀原始碼後再刪 45 列、同日出處重查後刪掉最後 5 列,見 [[Verification/2026-11-09_Android型錄待查證列逐列核對]] 與 [[Verification/2026-11-09_Android型錄出處不全列重查]])
+ - 接電證據:254 筆(擋得到 177、擋不到 77;2026-11-08 真跑,2026-11-09 在 nowinandroid 補 6 筆)
+ - 規則包條數:228(error 49、warning 118、語意覆核級 info 12、hint 49,其中 27 條在不接閘的 `rules-unwired/`;用程式讀 `configs/ast-grep/kotlin-android/rules*/*.yml` 數)
+ - 被會擋的規則守到的列數(通電批次欄含「告警帶寫法=批一」,而且現成規則欄或實測狀態欄提到至少一條 `rules/` 底下的規則 id):131
+ - 出處不全的列:15(其中 9 列另標停用,2026-11-09 兩輪查不到權威原文;另 8 列改寫成只寫原文支持的主張、拿掉出處不全);人裁的列:4
+ - 逐列查證(來源欄有〔查證 日期:網址〕):534 列;沒有的 1 列都是查不到權威原文、已標出處不全(2026-11-07 逐列查證,卷證見 [[Projects/Android寫法型錄逐列查證_計劃]];2026-11-08 使用者裁 API-14、TEST-31 標出處不全、DATA-12 照官方改寫並改成人裁列;同日再查,ARCH-3 等 6 列找到直接講到規則判定寫法的官方原文、拿掉出處不全;API-14、API-36、UI-103、TEST-31 查不到或跟官方相反,維持出處不全,五條規則移出規則包(其中 API-36 於 2026-11-09 依 CERT ERR51-J 拿掉出處不全,規則仍不在規則包),見 [[Projects/Android不接閘資安規則重量_計劃]])
+ - 情境決策表列數:60(證據樣式:主寫 `(無)` 的 19 列、例外寫 `(無)` 的 37 列、兩段都 `(無)` 的 15 列;2026-11-09 補 D-58 到 D-60、D-38 停用;2026-11-08 用 check.py 的 dt_table 重數,先前寫的 8、31、5 已過期)
+ - API 決策點:公開名稱 434(每列每個歸屬項各算一筆:D-n 62、撞名 4、決策不問主表列 18、決策不問代碼審 95、無決策 266;母體 kotlinx-coroutines-core 1.10.2,2026-11-12 用 check.py 的 _api_names 抽,含 jvm-only.txt 手列的 19 個)
+-- 選擇點表:31 列;乾節點規則:14 列(2026-11-14 第一版,用 check.py 的 choice_tables 重數)
++- 選擇點表:37 列;乾節點規則:14 列(2026-11-14 第一版 31 列,2026-11-17 第二批加 6 列;用 check.py 的 choice_tables 重數)
+ - 叫不出的壞寫法:111 個(改由:規則 5、範本 0、代碼審 104、不是寫法 2;2026-11-12 用 check.py 的反查重數,補了 D-4、D-5、D-8、D-9 的觸發字之後)
+ 
+ ## 選擇點表
+ 
+-改動選擇點([[Projects/改動選擇點都要有需求守住_計劃]])的壞法來源:每列一個語法節點(ast-grep 規則,`configs/ast-grep/kotlin-choice/rules-choice/` 裡 id 等於列號的那條)對應一組一對一機械壞法,照 Google 差異式變異測試(論文〈Practical Mutation Testing at Scale〉https://arxiv.org/pdf/2102.11378 ,以下稱「論文」)表 1 的五個運算子,外加 Kotlin API 兄弟寫法(MutApi 形狀)。`lumos choice-points` 讀這張表與下一張〈乾節點規則〉,改到的每一行最多挑一個壞法(論文 4.1 Listing 2)。
++改動選擇點([[Projects/改動選擇點都要有需求守住_計劃]])的壞法來源:每列一個語法節點(ast-grep 規則,`configs/ast-grep/kotlin-choice/rules-choice/` 裡 id 等於列號的那條)對應一組一對一機械壞法,照 Google 差異式變異測試(論文〈Practical Mutation Testing at Scale〉https://arxiv.org/pdf/2102.11378 ,以下稱「論文」)表 1 的五個運算子,外加 Kotlin API 兄弟寫法(MutApi 形狀)與 null-safety 運算子(NUL 類:`?:`、`?.`;第二批,[[Projects/選擇點表第二批常見誤用寫法_計劃]])。`lumos choice-points` 讀這張表與下一張〈乾節點規則〉,改到的每一行最多挑一個壞法(論文 4.1 Listing 2)。
+ 
+-欄位:ast-grep 規則寫「`規則檔` 樣式或說明」,規則檔在 `rules-choice/` 底下、裡面要有 id 等於列號的規則;錨點只用「運算子」「運算元起始」「陳述起始」「方法名」四種,決定這一列用哪個記號的所在行判「在改到的行上」;候選壞法是反引號包住的樣板(`$A`、`$B` 是規則的後設變數、`$X` 是命中的節點本身;API 列是換成的方法名),或「(刪掉)」「(拿掉呼叫)」;型別前提只用「(無)」「運算元有 null 字面值」「運算元是字串」三種(論文 3.2.1:編不過的壞法事前擋);需補的 import 是兄弟寫法的完整名稱,檔頭逐一 import 了原寫法時自動補那一行;對應決策表寫〈情境決策表〉的列號,沒有寫 —。跟決策表的分工:決策表每列是「要看情境判」的題目,這張每列是一對一機械壞法;重疊的成員用列號互指,壞法只有這張表一個來源。
++欄位:ast-grep 規則寫「`規則檔` 樣式或說明」,規則檔在 `rules-choice/` 底下、裡面要有 id 等於列號的規則;錨點只用「運算子」「運算元起始」「陳述起始」「方法名」「安全呼叫符」「引數」六種,決定這一列用哪個記號的所在行判「在改到的行上」(安全呼叫符是 `?.` 那兩個字元所在行;引數是規則命中的引數清單裡第一個改到的行,引數跨多行、只改中間某個 key 也算);候選壞法是反引號包住的樣板(`$A`、`$B` 是規則的後設變數、`$X` 是命中的節點本身;API 列是換成的方法名;安全呼叫符列的 `!!.` 是把 `?.` 換成 `.`、在它前面最後一個非空白字元之後接 `!!`;引數列的樣板直接蓋掉整個引數清單、(刪掉)刪掉整個引數清單;`$A!!` 的 `$A` 不是單一記號時先包括號),或「(刪掉)」「(拿掉呼叫)」;型別前提只用「(無)」「運算元有 null 字面值」「運算元是字串」三種(論文 3.2.1:編不過的壞法事前擋);需補的 import 是兄弟寫法的完整名稱,檔頭逐一 import 了原寫法時自動補那一行;對應決策表寫〈情境決策表〉的列號,沒有寫 —。跟決策表的分工:決策表每列是「要看情境判」的題目,這張每列是一對一機械壞法;重疊的成員用列號互指,壞法只有這張表一個來源。
+ 
+ 不收(單元測試分不出或常掛住):`first`/`last`、`take`/`takeLast`、`drop`/`dropLast`、`collectLatest`/`collect`、`coroutineScope`/`supervisorScope`、`Dispatchers.*`、`SharingStarted.*`、`flowOn`、`buffer`、`conflate`(論文附錄 A.1.4 時間類、A.3.2 被假實作換掉)。
+ 
++第二批(C-32 起,2026-11-17,[[Projects/選擇點表第二批常見誤用寫法_計劃]]):網上有公開來源點名「常被誤用、換成兄弟寫法照樣編得過、行為卻不同、單元測試分得出」的空值處理、範圍函式、Flow 合併與 Compose 副作用寫法。不收:`runCatching` 改寫與 Flow `catch` 換位置(多節點)、頂層 `combine(a, b)` 換 `zip`(`zip` 沒有頂層版本,換了必定編不過)、`launch`↔`async` 這類回傳型別不同的互換、`remember`↔`rememberSaveable`(單元測試分不出)、`==`→`===`(論文附錄 A.1.23 只換對應的否定)。
++
++已撤列號:(無)
++
+ | 列號 | 類別 | ast-grep 規則 | 錨點 | 候選壞法 | 型別前提 | 需補的 import | 對應決策表 | 為什麼行為不同 | 出處 |
+ |---|---|---|---|---|---|---|---|---|---|
+ | C-1 | ROR | `ror.yml` `$A > $B` | 運算子 | `$A < $B`、`$A <= $B`、`$A >= $B`、`true`、`false` | (無) | (無) | — | 比較的方向或邊界換了,大於、小於、等於的那一側結果不同 | 論文表 1 ROR;Just 等非冗餘變異(只取部分替換) |
+ | C-2 | ROR | `ror.yml` `$A < $B` | 運算子 | `$A > $B`、`$A >= $B`、`$A <= $B`、`true`、`false` | (無) | (無) | — | 比較的方向或邊界換了,大於、小於、等於的那一側結果不同 | 論文表 1 ROR;Just 等非冗餘變異(只取部分替換) |
+ | C-3 | ROR | `ror.yml` `$A >= $B` | 運算子 | `$A > $B`、`$A < $B`、`$A <= $B`、`true`、`false` | (無) | (無) | — | 比較的方向或邊界換了,大於、小於、等於的那一側結果不同 | 論文表 1 ROR;Just 等非冗餘變異(只取部分替換) |
+ | C-4 | ROR | `ror.yml` `$A <= $B` | 運算子 | `$A < $B`、`$A > $B`、`$A >= $B`、`true`、`false` | (無) | (無) | — | 比較的方向或邊界換了,大於、小於、等於的那一側結果不同 | 論文表 1 ROR;Just 等非冗餘變異(只取部分替換) |
+ | C-5 | ROR | `ror.yml` `$A == $B` | 運算子 | `$A != $B` | 運算元有 null 字面值 | (無) | — | 相等與不相等對調,判斷結果整個反過來 | 論文附錄 A.1.23(只換對應的否定);A.1.10(跟 null 比較不產生) |
+ | C-6 | ROR | `ror.yml` `$A != $B` | 運算子 | `$A == $B` | 運算元有 null 字面值 | (無) | — | 相等與不相等對調,判斷結果整個反過來 | 論文附錄 A.1.23(只換對應的否定);A.1.10(跟 null 比較不產生) |
+ | C-7 | ROR | `ror.yml` `$A === $B` | 運算子 | `$A !== $B` | 運算元有 null 字面值 | (無) | — | 相等與不相等對調,判斷結果整個反過來 | 論文附錄 A.1.23(只換對應的否定);A.1.10(跟 null 比較不產生) |
+ | C-8 | ROR | `ror.yml` `$A !== $B` | 運算子 | `$A === $B` | 運算元有 null 字面值 | (無) | — | 相等與不相等對調,判斷結果整個反過來 | 論文附錄 A.1.23(只換對應的否定);A.1.10(跟 null 比較不產生) |
+@@ -1685,20 +1689,26 @@
+ | C-22 | API | `api.yml` `$R.all` 後接呼叫 | 方法名 | `any` | (無) | (無) | — | 全部符合對上有一個符合 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-23 | API | `api.yml` `$R.none` 後接呼叫 | 方法名 | `any` | (無) | (無) | — | 沒有一個符合對上有一個符合 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-24 | API | `api.yml` `$R.sortedBy` 後接呼叫 | 方法名 | `sortedByDescending` | (無) | (無) | — | 排序方向相反 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-25 | API | `api.yml` `$R.sortedByDescending` 後接呼叫 | 方法名 | `sortedBy` | (無) | (無) | — | 排序方向相反 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-26 | API | `api.yml` `$R.minByOrNull` 後接呼叫 | 方法名 | `maxByOrNull` | (無) | (無) | — | 取到最小對上最大 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-27 | API | `api.yml` `$R.maxByOrNull` 後接呼叫 | 方法名 | `minByOrNull` | (無) | (無) | — | 取到最大對上最小 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-28 | API | `api.yml` `$R.flatMapLatest` 後接呼叫 | 方法名 | `flatMapConcat` | (無) | `kotlinx.coroutines.flow.flatMapConcat` | D-4 | 新值來時取消前一個對上每一個都做完(搜尋框只要最新一次) | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-29 | API | `api.yml` `$R.flatMapConcat` 後接呼叫 | 方法名 | `flatMapMerge` | (無) | `kotlinx.coroutines.flow.flatMapMerge` | D-4 | 依序做完對上同時做、結果交錯 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-30 | API | `api.yml` `$R.flatMapMerge` 後接呼叫 | 方法名 | `flatMapConcat` | (無) | `kotlinx.coroutines.flow.flatMapConcat` | D-4 | 同時做對上依序做 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-31 | API | `api.yml` `$R.distinctUntilChanged` 後接呼叫 | 方法名 | (拿掉呼叫) | (無) | (無) | — | 連續相同的值會再送一次 | MutApi(API 兄弟寫法改寫表);論文2.2 |
++| C-32 | NUL | `nul.yml` `$A ?: $B` | 運算子 | `$A!!` | 運算元有 null 字面值 | (無) | — | 遇到 null 從用預設值變成當掉 | Kotlin 官方 null safety https://kotlinlang.org/docs/null-safety.html ;Detekt UnsafeCallOnNullableType https://detekt.dev/docs/rules/potential-bugs ;論文表 1 形狀 |
++| C-33 | NUL | `nul.yml` navigation_suffix 開頭的 `?.`(前一個兄弟節點是註解時不收) | 安全呼叫符 | `!!.` | (無) | (無) | — | 遇到 null 從略過變成當掉 | Kotlin 官方 null safety https://kotlinlang.org/docs/null-safety.html ;Detekt UnsafeCallOnNullableType https://detekt.dev/docs/rules/potential-bugs |
++| C-34 | API | `api.yml` `$R.let` 後接呼叫、回傳值有被用到(同 `sbr.yml` 的 value-pos) | 方法名 | `also` | (無) | (無) | — | 回傳值從區塊結果變成接收者本身 | Kotlin 官方範圍函式 https://kotlinlang.org/docs/scope-functions.html ;MutApi(API 兄弟寫法改寫表) |
++| C-35 | API | `api.yml` 接收者寫法 `$R.combine` 後接呼叫(完整套件名的頂層呼叫不收) | 方法名 | `zip` | (無) | `kotlinx.coroutines.flow.zip` | D-5、D-6 | 任一邊有新值就輸出對上兩邊成對才輸出 | Kotlin 官方 Flow https://kotlinlang.org/docs/flow.html ;MutApi(API 兄弟寫法改寫表) |
++| C-36 | API | `api.yml` `LaunchedEffect(…)` 帶尾隨 lambda、引數不全是字面值的引數清單 | 引數 | `(Unit)` | (無) | (無) | D-32 | key 變了不重跑 | Android 官方 Compose 副作用 https://developer.android.com/develop/ui/compose/side-effects |
++| C-37 | API | `api.yml` `remember(…)` 帶尾隨 lambda、引數不全是字面值的引數清單 | 引數 | (刪掉) | (無) | (無) | — | 參數變了還顯示舊值 | Android 官方 Compose 狀態 https://developer.android.com/develop/ui/compose/state |
+ 
+ ## 乾節點規則
+ 
+ 論文 3.1 的乾節點(arid node):命中節點的範圍內(含跨行引數與尾隨 lambda)不產生壞法。每列對應 `configs/ast-grep/kotlin-choice/rules-arid/` 裡 id 等於列號的規則。乾節點規則由人照回饋手動增補(論文 3.1、3.2.5:有用比例從 15% 提到 89%);`lumos gov --stats` 列「乾節點候選」(同形狀放行 3 次以上)給人決定要不要加新列。論文 3.1 公式 1 的「複合節點所有子節點都乾才乾」不做遞迴(ast-grep 規則不能遞迴),乾的範圍就是規則命中的節點;這一版收附錄 A.1.1–A.1.5、A.1.10、A.1.11、A.1.15、A.1.20–A.1.22、A.1.24、A.3.2。
+ 
+ | 列號 | ast-grep 規則 | 乾的範圍 | 論文對應節 | 為什麼沒用 | 加入日期與依據 |
+ |---|---|---|---|---|---|
+ | A-1 | `arid.yml` 呼叫鏈的根接收者是 `Log`、`Timber`、`logger`、`log` 的呼叫(含 `Timber.tag(T).d(…)`),或裸呼叫 `println`、`print`、`.printStackTrace()` | 整個呼叫(含跨行引數與尾隨 lambda) | 論文附錄 A.1.1 | log 內容換了沒有測試會在意,改它只會產生沒人要補測試的存活 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.1 |
+ | A-2 | `arid.yml` 沒有接收者的 `require`、`check`、`assert`、`requireNotNull`、`checkNotNull`、`error` 呼叫 | 整個呼叫 | 論文附錄 A.1.5 | 斷言與前置條件本身是給開發者的檢查,換掉它不代表功能需求少了 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.5 |
+ | A-3 | `arid.yml` `BuildConfig.DEBUG` 這個引用本身;條件恰好就是 `BuildConfig.DEBUG` 的整個 `if` | 那個引用;或那整個 if | 論文附錄 A.1.5(除錯碼) | 除錯專用的程式只在除錯版跑,測試不該為它寫 | 2026-11-14 第一版;依據論文 3.1 與附錄 A.1.5(除錯碼) |

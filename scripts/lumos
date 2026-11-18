@@ -17901,16 +17901,43 @@ def _gov_choice_counts(rows):
     原因含「過期」的筆數;unverified 筆數。整數一律 type(x) is int(排除 bool)。"""
     from collections import Counter
     c = {"ever": set(), "changed": [], "mutant_lines": [], "secs": [], "first": Counter(), "after": Counter(), "waive": Counter(),
-         "nores": Counter(), "shape": Counter(), "test_files": {}, "blocked": 0, "stale_blocked": 0, "unverified": 0}
+         "nores": Counter(), "shape": Counter(), "test_files": {}, "blocked": 0, "stale_blocked": 0, "unverified": 0,
+         "row_mut": {}, "row_waive": {}}
     for r in rows:
         if r.get("gate") == "lint-new" and r.get("ck_waive"):
             w = r["ck_waive"]
             c["waive"][str(w.get("label") or "?")] += 1
             if isinstance(w.get("row"), str):
                 c["shape"][(w["row"], str(w.get("decl") or "(沒有外層宣告)"))] += 1
+            # 依列號(第二批計劃範圍 5):同一個 (檔, 行指紋) 多筆放行只算提交時間最晚那筆(同一個提交的重複放行去重時已併成一筆);
+            # 時間先後照 _loop_ts_newer 比 UTC 秒數(帳裡可能混不同時區偏移,直接比字串會選錯;代碼審 code-選擇點第二批 r1 a1),同時刻後讀到的那筆贏
+            wk, ts = (w.get("file"), w.get("fp")), str(r.get("ts") or "")
+            if wk not in c["row_waive"] or not _loop_ts_newer(c["row_waive"][wk][0], ts):
+                c["row_waive"][wk] = (ts, w.get("row"), str(w.get("label") or "?"))
         elif r.get("gate") == _CHOICE_KILL_GATE:
             _gov_choice_count_one(c, r, r.get("ck") or {}, r.get("kind"))
     return c
+
+
+_CHOICE_BASE_RED = "基準不綠沒跑"   # 跑不出結果原因的冒號前那段等於它時,不是壞法的錯(choice-kill 判定處的字面字串;依列號統計不算)
+
+
+def _gov_choice_by_row(c):
+    """依列號的數(第二批計劃範圍 5;PIT、Stryker 每個壞法一個終態再依種類彙總)→ ({列號: {"mut", "killed", "survived", "no_result",
+    "waive": Counter}}, 沒有列號的放行數)。壞法以 (檔, 行指紋, 列號) 為一個;終態不靠時間先後(統計列的時間是提交時間,同提交打平):
+    曾被殺掉算殺掉、沒殺過而曾存活算存活、都沒有才算跑不出結果。放行照 _gov_choice_counts 留下的每個 (檔, 行指紋) 最後一筆。"""
+    from collections import Counter
+    out, norow = {}, 0
+    for (_f, _fp, row), seen in c["row_mut"].items():
+        d = out.setdefault(row, {"mut": 0, "killed": 0, "survived": 0, "no_result": 0, "waive": Counter()})
+        d["mut"] += 1
+        d["killed" if "killed" in seen else "survived" if "survived" in seen else "no_result"] += 1
+    for _ts, row, label in c["row_waive"].values():
+        if not isinstance(row, str):
+            norow += 1
+            continue
+        out.setdefault(row, {"mut": 0, "killed": 0, "survived": 0, "no_result": 0, "waive": Counter()})["waive"][label] += 1
+    return out, norow
 
 
 def _gov_choice_count_one(c, r, ck, kind):
@@ -17942,6 +17969,10 @@ def _gov_choice_count_verdict(c, r, ck):
             c["test_files"].setdefault(ck["killing_test"], set()).add(ck.get("file"))
     elif v == "no_result":
         c["nores"][str(r.get("reason") or "?").split(":")[0][:40]] += 1
+    row = r.get("row")
+    if (isinstance(row, str) and v in ("killed", "survived", "no_result")
+            and not (v == "no_result" and str(r.get("reason") or "").split(":")[0] == _CHOICE_BASE_RED)):
+        c["row_mut"].setdefault((ck.get("file"), ck.get("fp"), row), set()).add(v)
 
 
 def _render_gov_choice(rows):
@@ -17970,6 +18001,21 @@ def _render_gov_choice(rows):
     if many:
         print("    單一測試殺掉 3 支以上不同檔的壞法(看是不是太粗的測試在撐):" + "、".join(f"{_kill_esc(t)} {n} 檔" for t, n in many))
     print(f"    推送被擋 {c['blocked']} 筆(過期 {c['stale_blocked']}/{c['blocked']});算不出來(unverified){c['unverified']} 筆")
+    by_row, norow = _gov_choice_by_row(c)
+    if by_row or norow:
+        print("    依列號(Projects/選擇點表第二批常見誤用寫法_計劃 範圍 5;壞法以 (檔, 行指紋, 列號) 計,曾殺掉算殺掉、否則曾存活算存活、"
+              "否則跑不出結果,基準不綠沒跑的不算;放行每行只算最後一筆):")
+        # 排序鍵只認 C-<1 到 9 位 ASCII 數字>:int() 對超過 4300 位的字串會丟例外(代碼審 code-選擇點第二批 r2 b2)
+        def _row_key(x):
+            n = x[2:]
+            ok = x[:2] == "C-" and n.isascii() and n.isdecimal() and len(n) <= 9
+            return (int(n) if ok else 10 ** 9, x)
+        for row in sorted(by_row, key=_row_key):
+            d = by_row[row]
+            w = "、".join(f"{k} {v}" for k, v in sorted(d["waive"].items())) or "0"
+            print(f"      {_kill_esc(row)[:20]}:壞法 {d['mut']}、殺掉 {d['killed']}、存活 {d['survived']}、跑不出結果 {d['no_result']};放行 {_kill_esc(w)}")
+        if norow:
+            print(f"      沒有列號的放行 {norow}")
 
 
 def _render_gov_situation(rows):
@@ -77115,16 +77161,29 @@ def _choice_scan_parse(raw, names, texts):
     return res
 
 
-def _choice_anchor(b, hit, row):
+def _choice_anchor(b, hit, row, changed=None, starts=None):
     """命中節點 → (錨點位移, 運算子 (起, 迄) 或 None)。錨點照那一列的錨點欄:運算子(二元運算是兩個運算元之間跳過空白與註解後的運算子,
-    前綴 ! 是節點開頭)、運算元起始與陳述起始是節點開頭、方法名是 navigation_suffix 裡跳過 ?. 或 . 之後的識別字。對不上回 (None, None)。"""
+    前綴 ! 是節點開頭)、運算元起始與陳述起始是節點開頭、方法名是 navigation_suffix 裡跳過 ?. 或 . 之後的識別字。對不上回 (None, None)。
+    第二批([[Projects/選擇點表第二批常見誤用寫法_計劃]]〈用詞〉):NUL 類 `?:` 那一列的運算子只比字面 `?:`(`_CHOICE_OP_RE` 與
+    `_CHOICE_PREC` 不動:那支正規式也給 _choice_top_prec 算優先層級,加進 `?:` 會查表查不到而當掉);安全呼叫符是 `?.` 那兩個字元;
+    引數是節點範圍內第一個改動行的開頭(changed 是改動行集合、starts 是每行開頭位移;範圍內沒有改動行或沒給就回節點開頭)。"""
     mv = hit["mv"]
     if row["anchor"] == "方法名":
         m = re.match(rb"(\?\.|\.)\s*([A-Za-z_]\w*)", b[hit["s"]:hit["e"]])
         return (hit["s"] + m.start(2), (hit["s"] + m.start(2), hit["s"] + m.end(2))) if m else (None, None)
+    if row["anchor"] == "安全呼叫符":
+        s = hit["s"]
+        return (s, (s, s + 2)) if b.startswith(b"?.", s) else (None, None)
+    if row["anchor"] == "引數":
+        for ln in range(hit["line"], hit["end_line"] + 1):
+            if changed is not None and starts is not None and ln in changed and ln - 1 < len(starts):
+                return max(hit["s"], starts[ln - 1]), None
+        return hit["s"], None
     if row["anchor"] == "運算子" and "A" in mv and "B" in mv:
         gs, ge = mv["A"][1], mv["B"][0]
         k = _CHOICE_GAP_SKIP_RE.match(b, gs, ge).end()   # 帶 pos 的 match:end() 是整份的位移
+        if row.get("category") == "NUL":
+            return (k, (k, k + 2)) if b.startswith(b"?:", k) else (None, None)
         m = _CHOICE_OP_RE.match(b, k, ge)
         return (k, (k, m.end())) if m else (None, None)
     return hit["s"], None
@@ -77257,8 +77316,9 @@ def _choice_edits(b, hit, row, op, tpl):
     s, e, mv = hit["s"], hit["e"], hit["mv"]
     if tpl == "delete":
         return [(s, e, b"")]
-    if row["anchor"] == "方法名":
-        return _choice_api_edits(b, s, e, op, tpl)
+    got = _choice_anchor_edits(b, hit, row, op, tpl)
+    if got is not _CHOICE_NOT_MINE:
+        return got
     m = re.fullmatch(r"\$A (\S+) \$B", tpl)
     if m and op is not None:
         return _choice_swap_edits(b, hit, op, m.group(1))
@@ -77273,6 +77333,35 @@ def _choice_edits(b, hit, row, op, tpl):
             if val is None:
                 return None
             text = text.replace("$" + k, val)
+    if not _choice_atomic(text) and not _choice_ctx_safe(b, s, e):
+        text = f"({text})"
+    return [(s, e, text.encode("utf-8"))]
+
+
+_CHOICE_NOT_MINE = object()   # _choice_anchor_edits 回這個:不是照錨點或樣板決定的那幾種編輯,交回 _choice_edits 的通用路徑
+
+
+def _choice_anchor_edits(b, hit, row, op, tpl):
+    """照錨點或樣板決定編法的幾種(_choice_edits 在通用樣板替換之前交過來)→ 編輯清單、None(產不出)或 _CHOICE_NOT_MINE(不是這幾種)。
+    方法名交 _choice_api_edits;下面三種是第二批([[Projects/選擇點表第二批常見誤用寫法_計劃]] 範圍 3)。
+    安全呼叫符:`?.` 換成 `.`,在它前面最後一個非空白字元之後插 `!!`(`?.` 另起一行時 `!!` 接在前一行結尾:`!!` 前面不能換行,`.` 前面可以);
+    引數:樣板直接蓋掉整個引數清單(不經「不是單一記號就加括號」);`$A!!`:`$A` 不是單一記號先包括號,整個結果放回運算式時照 _choice_ctx_safe 加括號。"""
+    s, e, mv = hit["s"], hit["e"], hit["mv"]
+    if row["anchor"] == "方法名":
+        return _choice_api_edits(b, s, e, op, tpl)
+    if row["anchor"] not in ("安全呼叫符", "引數") and tpl != "$A!!":
+        return _CHOICE_NOT_MINE
+    if row["anchor"] == "安全呼叫符":
+        if op is None or tpl != "!!.":
+            return None
+        p = len(b[:op[0]].rstrip())
+        return [(p, p, b"!!"), (op[0], op[1], b".")]
+    if row["anchor"] == "引數":
+        return [(s, e, tpl.encode("utf-8"))]
+    if "A" not in mv:
+        return None
+    a = mv["A"][2]
+    text = (a if _choice_atomic(a) else f"({a})") + "!!"
     if not _choice_atomic(text) and not _choice_ctx_safe(b, s, e):
         text = f"({text})"
     return [(s, e, text.encode("utf-8"))]
@@ -77451,7 +77540,7 @@ def _choice_file_points(rel, text, lines_changed, scan, tables, deadline=None):
         row = rows.get(h["rule"])
         if row is None:
             continue
-        anchor, op = _choice_anchor(b, h, row)
+        anchor, op = _choice_anchor(b, h, row, want, starts)
         if anchor is None or line_of(anchor) not in want or err_hit(h["line"], h["end_line"]):
             continue
         n = dict(h, anchor=anchor, op=op, arid=arid_cover(h["s"], h["e"]), strcat=(h["s"], h["e"]) in strcat)
@@ -77859,7 +77948,7 @@ def _choice_kill_judge(order, rows):
     live = [t for t in order if t not in aborted]
     if not live:
         ex = next((rows[t].get("fail_excerpt") or rows[t].get("detail") or "" for t in aborted if rows.get(t)), "")
-        return "no_result", None, "基準不綠沒跑", ex, aborted
+        return "no_result", None, _CHOICE_BASE_RED, ex, aborted
     for t in live:
         r = rows.get(t)
         if r and r["verdict"] == "killed" and not r.get("weak") and not r.get("compile_error"):

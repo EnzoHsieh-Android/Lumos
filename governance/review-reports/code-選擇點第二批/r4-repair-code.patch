@@ -1,0 +1,140 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index de2bf28d1..6f85b09f7 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -1513,38 +1513,39 @@ def choice_tables(text, rules_dir=None):
+         if not cells:
+             probs.append((tag, f"〈{title}〉一列都沒有"))
+         if rules_dir is not False:
+             probs += _choice_rules_match(out[key], rules_dir, sub, tag)
+     probs += _choice_retired_problems(text, out["choice"], rules_dir)
+     return out, probs
+ 
+ 
+ def _choice_retired(text):
+     """〈選擇點表〉說明段的「已撤列號:」那一行 → (撤掉的列號集合, 問題或 None)。這一節沒有提到「已撤列號」視同空;寫「(無)」是空;
+-    其餘只准列號(C-<n>)與「、」「,」空白分隔。這一節裡提到「已撤列號」的行只准恰好一行、而且頂格寫成 `已撤列號:…`(冒號半形全形都認),
++    其餘只准列號(C-<n>,半形數字、不帶前導零)與「、」「,」空白分隔。這一節裡提到「已撤列號」的行只准恰好一行、而且頂格寫成 `已撤列號:…`(冒號半形全形都認),
+     多一行、前面帶清單符號或粗體都報看不懂——認不出來時不當成沒有,免得撤列守衛靜默失效(代碼審 code-選擇點第二批 r1 b2 g1)。"""
+     i = text.find(f"\n## {CHOICE_TITLE}")
+     if i < 0:
+         return set(), None
+     j = text.find("\n## ", i + 1)
+     lines = [ln for ln in text[i:j if j >= 0 else len(text)].split("\n") if "已撤列號" in ln]
+     if not lines:
+         return set(), None
+     m = _CHOICE_RETIRED_RE.match(lines[0].strip()) if len(lines) == 1 and lines[0] == lines[0].lstrip() else None
+     if not m:
+         return set(), ("〈選擇點表〉提到「已撤列號」的行要恰好一行、頂格寫成「已撤列號:(無)」或「已撤列號:C-<n>、C-<n>」,"
+                        f"這裡是:{' / '.join(ln.strip()[:60] for ln in lines[:3])}")
+     val = m.group(1).strip()
+     if val == "(無)":
+         return set(), None
+-    ids = re.findall(r"C-\d+", val)
+-    if not ids or re.sub(r"C-\d+|[、,,\s]", "", val):
++    # 列號只認半形數字、不帶前導零(\d 也收全形數字,C-040 跟表裡的 C-40 字串比不上,撤號守衛會靜默漏擋;代碼審 r3 b1)
++    ids = re.findall(r"C-[1-9][0-9]*", val)
++    if not ids or re.sub(r"C-[1-9][0-9]*|[、,,\s]", "", val):
+         return set(), f"已撤列號那一行要寫「(無)」或列號(C-<n>,用「、」分隔),這裡是「{val}」"
+     return set(ids), None
+ 
+ 
+ def _choice_retired_problems(text, rows, rules_dir):
+     """列號不重用(第二批計劃範圍 4;ESLint 停用的規則留著不另作他用 https://eslint.org/docs/v8.x/use/rule-deprecation ):
+     已撤列號出現在表裡或 rules-choice/ 的規則 id → 擋並指出列號。rules_dir 是 False 時不看規則檔。"""
+     retired, why = _choice_retired(text)
+     out = [(f"<{CHOICE_TITLE}>", why)] if why else []
+     out += [(r["id"], f"{r['id']} 已撤(說明段「已撤列號:」那一行),列號不准重用") for r in rows if r["id"] in retired]
+diff --git a/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt b/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
+index 3137d20bb..d04b20c46 100644
+--- a/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
++++ b/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
+@@ -27,20 +27,27 @@ fun scope(x: Int?, list: List<Int?>, c: Boolean) {
+     when (c) { true -> x.let { show(it) }; else -> go() } // MISS C-34
+     val z = if (c) x.let { it + 1 } else 0 // HIT C-34
+     if (c) { go() } else if (d) { x.let { show(it) } } // MISS C-34
+     if (c) go() else if (d) x.let { show(it) } // MISS C-34
+     if (c) if (d) x.let { show(it) } // MISS C-34
+     for (i in list) if (c) x.let { show(it) } // MISS C-34
+     if (c) when (d) { true -> x.let { show(it) }; else -> go() } // MISS C-34
+     if (c) try { x.let { show(it) } } catch (e: Exception) { go() } // MISS C-34
+     val q = if (c) 1 else if (d) x.let { it + 1 } else 0 // MISS C-34(巢狀在分支裡的 if 當值用,語法判不完,不收)
+     fun h() = if (c) x.let { it + 1 } else 2 // HIT C-34
++    // 值位置的每一種外層各一行 HIT、catch 區塊當陳述一行 MISS:規則每個子句拿掉都要有一行翻紅(代碼審 r3 c1 g1)
++    val u = when (c) { true -> x.let { it + 1 }; else -> 0 } // HIT C-34
++    val v = if (c) { go(); x.let { it + 1 } } else 0 // HIT C-34
++    val w = when (c) { true -> { go(); x.let { it + 1 } }; else -> 0 } // HIT C-34
++    val t = try { go(); x.let { it + 1 } } catch (e: Exception) { 0 } // HIT C-34
++    val t2 = try { go() } catch (e: Exception) { x.let { it + 1 } } // HIT C-34
++    if (c) try { go() } catch (e: Exception) { x.let { show(it) } } // MISS C-34
+     done()
+ }
+ 
+ fun flows(a: Flow<Int>, b: Flow<Int>) {
+     val f = a.combine(b) { x, y -> x + y } // HIT C-35
+     val g = combine(a, b) { x, y -> x + y } // MISS C-35
+     val h = kotlinx.coroutines.flow.combine(a, b) { x, y -> x + y } // MISS C-35
+ }
+ 
+ @Composable
+@@ -50,20 +57,33 @@ fun effects(userId: String, id: Int, k: Int, items: List<Int>) {
+     LaunchedEffect(Unit) { load() } // MISS C-36
+     LaunchedEffect("init") { load() } // MISS C-36
+     LaunchedEffect(key1 = Unit) { load() } // MISS C-36
+     LaunchedEffect() { load() } // MISS C-36
+     LaunchedEffect(k, block = { load() }) // MISS C-36
+     LaunchedEffect(-1) { load() } // MISS C-36
+     LaunchedEffect('c') { load() } // MISS C-36
+     LaunchedEffect(+2.5) { load() } // MISS C-36
+     LaunchedEffect(-1.coerceAtLeast(k)) { load() } // HIT C-36
+     LaunchedEffect(-k) { load() } // HIT C-36
++    // 每一種字面值各一行 MISS:字面值清單漏抄一種就有一行翻紅(代碼審 r3 c2)
++    LaunchedEffect(true) { load() } // MISS C-36
++    LaunchedEffect(null) { load() } // MISS C-36
++    LaunchedEffect(1) { load() } // MISS C-36
++    LaunchedEffect(1.5) { load() } // MISS C-36
++    LaunchedEffect(1L) { load() } // MISS C-36
++    LaunchedEffect(0x1F) { load() } // MISS C-36
++    LaunchedEffect(0b1) { load() } // MISS C-36
++    LaunchedEffect(1u) { load() } // MISS C-36
++    LaunchedEffect(-1L) { load() } // MISS C-36
++    LaunchedEffect(-0x1F) { load() } // MISS C-36
++    LaunchedEffect(-0b1) { load() } // MISS C-36
++    LaunchedEffect(-1u) { load() } // MISS C-36
+     val r1 = remember(k) { items.sorted() } // HIT C-37
+     val r2 = remember<Int>(k) { 3 } // HIT C-37
+     val r3 = remember() { 3 } // MISS C-37
+     val r4 = remember(Unit) { 3 } // MISS C-37
+     val r7 = remember(-1) { 3 } // MISS C-37
+     val r8 = remember(-1.0.coerceAtLeast(k)) { 3 } // HIT C-37
+     val r5 = remember(k) // MISS C-37
+     val r6 = remember( // HIT C-37
+         items,
+         k,
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index 66a418e7c..698392c4f 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -1691,21 +1691,21 @@
+ | C-24 | API | `api.yml` `$R.sortedBy` 後接呼叫 | 方法名 | `sortedByDescending` | (無) | (無) | — | 排序方向相反 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-25 | API | `api.yml` `$R.sortedByDescending` 後接呼叫 | 方法名 | `sortedBy` | (無) | (無) | — | 排序方向相反 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-26 | API | `api.yml` `$R.minByOrNull` 後接呼叫 | 方法名 | `maxByOrNull` | (無) | (無) | — | 取到最小對上最大 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-27 | API | `api.yml` `$R.maxByOrNull` 後接呼叫 | 方法名 | `minByOrNull` | (無) | (無) | — | 取到最大對上最小 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-28 | API | `api.yml` `$R.flatMapLatest` 後接呼叫 | 方法名 | `flatMapConcat` | (無) | `kotlinx.coroutines.flow.flatMapConcat` | D-4 | 新值來時取消前一個對上每一個都做完(搜尋框只要最新一次) | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-29 | API | `api.yml` `$R.flatMapConcat` 後接呼叫 | 方法名 | `flatMapMerge` | (無) | `kotlinx.coroutines.flow.flatMapMerge` | D-4 | 依序做完對上同時做、結果交錯 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-30 | API | `api.yml` `$R.flatMapMerge` 後接呼叫 | 方法名 | `flatMapConcat` | (無) | `kotlinx.coroutines.flow.flatMapConcat` | D-4 | 同時做對上依序做 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-31 | API | `api.yml` `$R.distinctUntilChanged` 後接呼叫 | 方法名 | (拿掉呼叫) | (無) | (無) | — | 連續相同的值會再送一次 | MutApi(API 兄弟寫法改寫表);論文2.2 |
+ | C-32 | NUL | `nul.yml` `$A ?: $B` | 運算子 | `$A!!` | 運算元有 null 字面值 | (無) | — | 遇到 null 從用預設值變成當掉 | Kotlin 官方 null safety https://kotlinlang.org/docs/null-safety.html ;Detekt UnsafeCallOnNullableType https://detekt.dev/docs/rules/potential-bugs ;論文表 1 形狀 |
+ | C-33 | NUL | `nul.yml` navigation_suffix 開頭的 `?.`(前一個兄弟節點是註解時不收) | 安全呼叫符 | `!!.` | (無) | (無) | — | 遇到 null 從略過變成當掉 | Kotlin 官方 null safety https://kotlinlang.org/docs/null-safety.html ;Detekt UnsafeCallOnNullableType https://detekt.dev/docs/rules/potential-bugs |
+-| C-34 | API | `api.yml` `$R.let` 後接呼叫、回傳值有被用到(同 `sbr.yml` 的 value-pos) | 方法名 | `also` | (無) | (無) | — | 回傳值從區塊結果變成接收者本身 | Kotlin 官方範圍函式 https://kotlinlang.org/docs/scope-functions.html ;MutApi(API 兄弟寫法改寫表) |
++| C-34 | API | `api.yml` `$R.let` 後接呼叫、回傳值確定被用到(`sbr.yml` 的 value-pos,再排除外層 if/when/try 自己掛在另一個分支底下的位置) | 方法名 | `also` | (無) | (無) | — | 回傳值從區塊結果變成接收者本身 | Kotlin 官方範圍函式 https://kotlinlang.org/docs/scope-functions.html ;MutApi(API 兄弟寫法改寫表) |
+ | C-35 | API | `api.yml` 接收者寫法 `$R.combine` 後接呼叫(完整套件名的頂層呼叫不收) | 方法名 | `zip` | (無) | `kotlinx.coroutines.flow.zip` | D-5、D-6 | 任一邊有新值就輸出對上兩邊成對才輸出 | Kotlin 官方 Flow https://kotlinlang.org/docs/flow.html ;MutApi(API 兄弟寫法改寫表) |
+ | C-36 | API | `api.yml` `LaunchedEffect(…)` 帶尾隨 lambda、引數不全是字面值的引數清單 | 引數 | `(Unit)` | (無) | (無) | D-32 | key 變了不重跑 | Android 官方 Compose 副作用 https://developer.android.com/develop/ui/compose/side-effects |
+ | C-37 | API | `api.yml` `remember(…)` 帶尾隨 lambda、引數不全是字面值的引數清單 | 引數 | (刪掉) | (無) | (無) | — | 參數變了還顯示舊值 | Android 官方 Compose 狀態 https://developer.android.com/develop/ui/compose/state |
+ 
+ ## 乾節點規則
+ 
+ 論文 3.1 的乾節點(arid node):命中節點的範圍內(含跨行引數與尾隨 lambda)不產生壞法。每列對應 `configs/ast-grep/kotlin-choice/rules-arid/` 裡 id 等於列號的規則。乾節點規則由人照回饋手動增補(論文 3.1、3.2.5:有用比例從 15% 提到 89%);`lumos gov --stats` 列「乾節點候選」(同形狀放行 3 次以上)給人決定要不要加新列。論文 3.1 公式 1 的「複合節點所有子節點都乾才乾」不做遞迴(ast-grep 規則不能遞迴),乾的範圍就是規則命中的節點;這一版收附錄 A.1.1–A.1.5、A.1.10、A.1.11、A.1.15、A.1.20–A.1.22、A.1.24、A.3.2。
+ 
+ | 列號 | ast-grep 規則 | 乾的範圍 | 論文對應節 | 為什麼沒用 | 加入日期與依據 |
+ |---|---|---|---|---|---|

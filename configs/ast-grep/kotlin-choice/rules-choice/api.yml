@@ -141,3 +141,163 @@ rule:
   inside:
     kind: navigation_expression
     inside: {kind: call_expression}
+---
+# 第二批([[Projects/選擇點表第二批常見誤用寫法_計劃]]):.let 換 .also(回傳值從區塊結果變成接收者本身)。只收回傳值有被用到的 .let:
+# 回傳值沒人用時換成 also 必然等價(Trivial Compiler Equivalence)。value-pos 照抄 sbr.yml(ast-grep 的 utils 只在同一份規則文件裡有效;
+# 兩份要一字不差,t_choice_samples_batch2 比對)。sbr.yml 用它保守地「不確定是不是值就不刪」,這裡方向相反(不確定就不收),
+# 所以 value-used 另外排除沒大括號的 if/for/while/when 分支(control_structure_body 的直接子節點,只有 if/when 本身在確定是值的
+# 位置時才算,見 value-direct;代碼審 code-選擇點第二批 r1 c1、r2 g1 c1)。
+id: C-34
+language: kotlin
+severity: hint
+message: API 兄弟寫法 let(換成 also,回傳值不同)
+utils:
+  code:
+    not:
+      any:
+        - kind: line_comment
+        - kind: multiline_comment
+  value-pos:
+    # 值被拿去用的運算式:父節點不是陳述清單,或它是 lambda 的最後一個陳述
+    any:
+      - not: {inside: {kind: statements}}
+      - all:
+          - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
+          - inside: {kind: statements, inside: {kind: lambda_literal}}
+  value-direct:
+    # 確定是值的位置:value-pos 而且父節點不是控制結構的分支。外層 if/when/try 自己掛在另一個控制結構的分支底下
+    # (else if 鏈、巢狀 if、if 裡的 when)時,它是不是值要看再外一層,語法上判不完,一律當不確定(代碼審 code-選擇點第二批 r2 g1 c1)
+    all:
+      - matches: value-pos
+      - not: {inside: {kind: control_structure_body}}
+  value-used:
+    any:
+      - matches: value-direct
+      - inside: {kind: control_structure_body, inside: {kind: if_expression, matches: value-direct}}
+      - inside: {kind: control_structure_body, inside: {kind: when_entry, inside: {kind: when_expression, matches: value-direct}}}
+      - all:
+          - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
+          - inside:
+              kind: statements
+              any:
+                - inside: {kind: control_structure_body, inside: {kind: if_expression, matches: value-direct}}
+                - inside: {kind: control_structure_body, inside: {kind: when_entry, inside: {kind: when_expression, matches: value-direct}}}
+                - inside: {kind: try_expression, matches: value-direct}
+                - inside: {kind: catch_block, inside: {kind: try_expression, matches: value-direct}}
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*let$'
+  # 父節點是 navigation_expression、它的父節點是值被用到的呼叫;寫成雙重否定(同 C-18,避免外層整段被塞進每個命中)
+  not:
+    inside:
+      not:
+        kind: navigation_expression
+        inside: {kind: call_expression, matches: value-used}
+---
+# 第二批:接收者寫法 a.combine(b) 換 zip(任一邊有新值就輸出 → 兩邊成對才輸出;Kotlin 官方 Flow https://kotlinlang.org/docs/flow.html )。
+# 完整套件名 kotlinx.coroutines.flow.combine(a, b) 是頂層函式,zip 沒有頂層版本,換了必定編不過,不收。
+id: C-35
+language: kotlin
+severity: hint
+message: API 兄弟寫法 combine(接收者寫法,換成 zip)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*combine$'
+  not:
+    inside:
+      not:
+        kind: navigation_expression
+        not: {regex: '^kotlinx\s*\.\s*coroutines\s*\.\s*flow\s*\.\s*combine$'}
+        inside: {kind: call_expression}
+---
+# 第二批:LaunchedEffect 的 key 換成 Unit(key 變了不重跑;Android 官方 Compose 副作用 https://developer.android.com/develop/ui/compose/side-effects )。
+# 命中的是引數清單 value_arguments(錨點「引數」)。只收:帶尾隨 lambda、至少一個引數、而且引數不全是字面值;全是常數的 key 換成 Unit 必然等價。
+id: C-36
+language: kotlin
+severity: hint
+message: Compose LaunchedEffect 的 key(換成 Unit,key 變了不重跑)
+utils:
+  literal-arg:
+    # 字面值:Unit、true、false、null、數字(含負號)、字元、不含 $ 的字串;具名引數看等號右邊的值(引數節點的最後一個具名子節點)。
+    # C-36 與 C-37 各一份(utils 只在同一份規則文件裡有效),兩份要一字不差(t_choice_samples_batch2 比對)
+    kind: value_argument
+    has:
+      nthChild: {position: 1, reverse: true}
+      any:
+        - {kind: simple_identifier, regex: '^Unit$'}
+        - kind: boolean_literal
+        - kind: null_literal
+        - kind: integer_literal
+        - kind: real_literal
+        - kind: long_literal
+        - kind: hex_literal
+        - kind: bin_literal
+        - kind: unsigned_literal
+        - kind: character_literal
+        - all:
+            # 帶正負號的數字:看結構不看文字開頭,運算元本身要是數字常數(-1.coerceAtLeast(k) 的運算元是呼叫,不算;代碼審 r2 b1 c2)。
+            # 不比對開頭的 -、+:數字常數前面能接的前綴只有正負號與標註,標註加常數(@Suppress("x") 1)仍是常數(代碼審 r5 c3)
+            - kind: prefix_expression
+            - has: {nthChild: {position: 1, reverse: true}, any: [{kind: integer_literal}, {kind: real_literal}, {kind: long_literal}, {kind: hex_literal}, {kind: bin_literal}, {kind: unsigned_literal}]}
+        - all:
+            - kind: string_literal
+            - not: {has: {any: [{kind: interpolated_identifier}, {kind: interpolated_expression}], stopBy: end}}
+rule:
+  kind: value_arguments
+  has: {kind: value_argument, not: {matches: literal-arg}}
+  # 父節點是帶尾隨 lambda 的 call_suffix、祖父是呼叫 LaunchedEffect 的 call_expression。寫成雙重否定:正面寫 inside 時外層呼叫連同整個
+  # 尾隨 lambda 被當次要標記塞進每個命中,巢狀 LaunchedEffect 的輸出平方成長(代碼審 code-選擇點第二批 r1 r2:巢狀 150 層 57MB → 0.1MB)
+  not:
+    inside:
+      not:
+        kind: call_suffix
+        has: {kind: annotated_lambda}
+        inside:
+          kind: call_expression
+          has: {kind: simple_identifier, nthChild: 1, regex: '^LaunchedEffect$'}
+---
+# 第二批:remember 拿掉 key(參數變了還顯示舊值;Android 官方 Compose 狀態 https://developer.android.com/develop/ui/compose/state )。
+# 條件同 C-36(帶尾隨 lambda、至少一個引數、不全是字面值):remember() 刪掉括號、全是常數的 key 拿掉都必然等價;沒有尾隨 lambda 刪了編不過。
+id: C-37
+language: kotlin
+severity: hint
+message: Compose remember 的 key(拿掉,參數變了還顯示舊值)
+utils:
+  literal-arg:
+    # 字面值:Unit、true、false、null、數字(含負號)、字元、不含 $ 的字串;具名引數看等號右邊的值(引數節點的最後一個具名子節點)。
+    # C-36 與 C-37 各一份(utils 只在同一份規則文件裡有效),兩份要一字不差(t_choice_samples_batch2 比對)
+    kind: value_argument
+    has:
+      nthChild: {position: 1, reverse: true}
+      any:
+        - {kind: simple_identifier, regex: '^Unit$'}
+        - kind: boolean_literal
+        - kind: null_literal
+        - kind: integer_literal
+        - kind: real_literal
+        - kind: long_literal
+        - kind: hex_literal
+        - kind: bin_literal
+        - kind: unsigned_literal
+        - kind: character_literal
+        - all:
+            # 帶正負號的數字:看結構不看文字開頭,運算元本身要是數字常數(-1.coerceAtLeast(k) 的運算元是呼叫,不算;代碼審 r2 b1 c2)。
+            # 不比對開頭的 -、+:數字常數前面能接的前綴只有正負號與標註,標註加常數(@Suppress("x") 1)仍是常數(代碼審 r5 c3)
+            - kind: prefix_expression
+            - has: {nthChild: {position: 1, reverse: true}, any: [{kind: integer_literal}, {kind: real_literal}, {kind: long_literal}, {kind: hex_literal}, {kind: bin_literal}, {kind: unsigned_literal}]}
+        - all:
+            - kind: string_literal
+            - not: {has: {any: [{kind: interpolated_identifier}, {kind: interpolated_expression}], stopBy: end}}
+rule:
+  kind: value_arguments
+  has: {kind: value_argument, not: {matches: literal-arg}}
+  # 父節點是帶尾隨 lambda 的 call_suffix、祖父是呼叫 remember 的 call_expression。寫成雙重否定:正面寫 inside 時外層呼叫連同整個
+  # 尾隨 lambda 被當次要標記塞進每個命中,巢狀 remember 的輸出平方成長(代碼審 code-選擇點第二批 r1 r2:巢狀 150 層 57MB → 0.1MB)
+  not:
+    inside:
+      not:
+        kind: call_suffix
+        has: {kind: annotated_lambda}
+        inside:
+          kind: call_expression
+          has: {kind: simple_identifier, nthChild: 1, regex: '^remember$'}
