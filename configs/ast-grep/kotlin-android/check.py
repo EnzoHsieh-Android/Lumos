@@ -548,7 +548,7 @@ def catalog_problems(rules=None, sg=None):
     problems += template_problems(rows)   # 主表只讀一次:把上面讀好的列交過去
     problems += pending_problems(text, rows) + wiring_problems(text, rows) + stats_problems(text, rows, rules)
     tables, cprobs = choice_tables(text)
-    problems += cprobs + (choice_sample_problems(sg, tables) if sg else [])
+    problems += cprobs + choice_sample_mark_problems(tables) + (choice_sample_problems(sg, tables) if sg else [])
     return problems
 
 
@@ -1389,8 +1389,10 @@ CHOICE_TITLE, ARID_TITLE = "選擇點表", "乾節點規則"
 _CHOICE_ROW_RE, _ARID_ROW_RE = r"^\|\s*C-\d+\s*\|", r"^\|\s*A-\d+\s*\|"
 _CHOICE_HEADER = ("列號", "類別", "ast-grep 規則", "錨點", "候選壞法", "型別前提", "需補的 import", "對應決策表", "為什麼行為不同", "出處")
 _ARID_HEADER = ("列號", "ast-grep 規則", "乾的範圍", "論文對應節", "為什麼沒用", "加入日期與依據")
-CHOICE_CATEGORIES = ("AOR", "LCR", "ROR", "UOI", "SBR", "API")          # 論文表 1 的五個運算子 + API 兄弟寫法;順序也是 lumos 洗牌前的基準順序
-CHOICE_ANCHORS = ("運算子", "運算元起始", "陳述起始", "方法名")
+# 論文表 1 的五個運算子 + API 兄弟寫法 + 第二批的 null-safety 運算子(NUL);順序也是 lumos 洗牌前的基準順序(NUL 加在尾端,不動第一版的相對順序)
+CHOICE_CATEGORIES = ("AOR", "LCR", "ROR", "UOI", "SBR", "API", "NUL")
+CHOICE_ANCHORS = ("運算子", "運算元起始", "陳述起始", "方法名", "安全呼叫符", "引數")
+_CHOICE_RETIRED_RE = re.compile(r"^已撤列號[:\uff1a](.*)$")   # 〈選擇點表〉說明段一行(半形或全形冒號):撤掉的列號不准再出現在表或規則 id(列號不重用)
 CHOICE_PRECONDITIONS = ("(無)", "運算元有 null 字面值", "運算元是字串")   # 論文 3.2.1 事前擋編不過的壞法;語法樹沒有型別,只能用語法情境近似
 CHOICE_SPECIALS = {"(刪掉)": "delete", "(拿掉呼叫)": "drop_call"}
 _CHOICE_IMPORT_RE = re.compile(r"^`([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)`$")
@@ -1487,7 +1489,7 @@ def _choice_rules_match(rows, rules_dir, sub, tag):
 
 def choice_tables(text, rules_dir=None):
     """型錄全文 → ({"choice": [選擇點列], "arid": [乾節點列]}, 問題 [(列號或 <選擇點表>/<乾節點規則>, 原因)])。
-    兩節都依節名讀(section_table);列號重複、欄位壞、類別/錨點/型別前提不在固定詞表、候選空白都報;給了 rules_dir
+    兩節都依節名讀(section_table);列號不是半形數字不帶前導零(C-<n>、A-<n>)、列號重複、欄位壞、類別/錨點/型別前提不在固定詞表、候選空白都報;給了 rules_dir
     (預設 CHOICE)再核列號跟規則檔對得上。scripts/lumos 讀到任何問題就整張表不用(表壞要擋並指出哪一列,S23)。"""
     rules_dir = CHOICE if rules_dir is None else rules_dir
     out, probs = {"choice": [], "arid": [], "categories": list(CHOICE_CATEGORIES)}, []
@@ -1500,6 +1502,10 @@ def choice_tables(text, rules_dir=None):
             continue
         seen = set()
         for rid, c in cells:
+            # 列號只認半形數字、不帶前導零,同撤號那一行(列號比對靠字串相等,C-040、全形數字跟 C-40 比不上,規則 id 跟著寫就繞過撤號;代碼審 r4 g1)
+            if not re.fullmatch(r"[CA]-[1-9][0-9]*", rid):
+                probs.append((rid, f"列號要寫成 {rid[:2]}<n>(半形數字、不帶前導零),這裡是「{rid}」"))
+                continue
             if rid in seen:
                 probs.append((rid, "列號重複"))
                 continue
@@ -1512,7 +1518,45 @@ def choice_tables(text, rules_dir=None):
             probs.append((tag, f"〈{title}〉一列都沒有"))
         if rules_dir is not False:
             probs += _choice_rules_match(out[key], rules_dir, sub, tag)
+    probs += _choice_retired_problems(text, out["choice"], rules_dir)
     return out, probs
+
+
+def _choice_retired(text):
+    """〈選擇點表〉說明段的「已撤列號:」那一行 → (撤掉的列號集合, 問題或 None)。這一節沒有提到「已撤列號」視同空;寫「(無)」是空;
+    其餘只准列號(C-<n>,半形數字、不帶前導零)與「、」「,」空白分隔。這一節裡提到「已撤列號」的行只准恰好一行、而且頂格寫成 `已撤列號:…`(冒號半形全形都認),
+    多一行、前面帶清單符號或粗體都報看不懂——認不出來時不當成沒有,免得撤列守衛靜默失效(代碼審 code-選擇點第二批 r1 b2 g1)。"""
+    i = text.find(f"\n## {CHOICE_TITLE}")
+    if i < 0:
+        return set(), None
+    j = text.find("\n## ", i + 1)
+    lines = [ln for ln in text[i:j if j >= 0 else len(text)].split("\n") if "已撤列號" in ln]
+    if not lines:
+        return set(), None
+    m = _CHOICE_RETIRED_RE.match(lines[0].strip()) if len(lines) == 1 and lines[0] == lines[0].lstrip() else None
+    if not m:
+        return set(), ("〈選擇點表〉提到「已撤列號」的行要恰好一行、頂格寫成「已撤列號:(無)」或「已撤列號:C-<n>、C-<n>」,"
+                       f"這裡是:{' / '.join(ln.strip()[:60] for ln in lines[:3])}")
+    val = m.group(1).strip()
+    if val == "(無)":
+        return set(), None
+    # 列號只認半形數字、不帶前導零(\d 也收全形數字,C-040 跟表裡的 C-40 字串比不上,撤號守衛會靜默漏擋;代碼審 r3 b1)
+    ids = re.findall(r"C-[1-9][0-9]*", val)
+    if not ids or re.sub(r"C-[1-9][0-9]*|[、,,\s]", "", val):
+        return set(), f"已撤列號那一行要寫「(無)」或列號(C-<n>,用「、」分隔),這裡是「{val}」"
+    return set(ids), None
+
+
+def _choice_retired_problems(text, rows, rules_dir):
+    """列號不重用(第二批計劃範圍 4;ESLint 停用的規則留著不另作他用 https://eslint.org/docs/v8.x/use/rule-deprecation ):
+    已撤列號出現在表裡或 rules-choice/ 的規則 id → 擋並指出列號。rules_dir 是 False 時不看規則檔。"""
+    retired, why = _choice_retired(text)
+    out = [(f"<{CHOICE_TITLE}>", why)] if why else []
+    out += [(r["id"], f"{r['id']} 已撤(說明段「已撤列號:」那一行),列號不准重用") for r in rows if r["id"] in retired]
+    if rules_dir is not False and retired:
+        ids = choice_rule_ids(Path(rules_dir) / "rules-choice") or {}
+        out += [(i, f"規則 {i}(rules-choice/{f})的列號已撤,列號不准重用") for i, f in sorted(ids.items()) if i in retired]
+    return out
 
 
 def _choice_sample_marks(samples_dir):
@@ -1524,6 +1568,15 @@ def _choice_sample_marks(samples_dir):
             if m:
                 out += [(f.name, i, m.group(1), rid) for rid in m.group(2).split()]
     return out
+
+
+def choice_sample_mark_problems(tables, rules_dir=None):
+    """樣本行尾標記(HIT 或 MISS)指向表裡沒有的列號 → 問題清單(第二批計劃範圍 4)。不用 ast-grep:撤列時漏拿的 MISS 標記
+    在 choice_sample_problems 裡兩邊都判「沒命中」不會報,要在這裡單獨查。"""
+    rules_dir = Path(CHOICE if rules_dir is None else rules_dir)
+    known = {r["id"] for r in tables.get("choice", [])} | {r["id"] for r in tables.get("arid", [])} | {CHOICE_SYNTAX_RULE}
+    return [(rid, f"樣本 {f} 第 {ln} 行標 {kind} {rid},表裡沒有這一列") for f, ln, kind, rid in _choice_sample_marks(rules_dir / "samples")
+            if rid not in known]
 
 
 def choice_sample_problems(sg, tables, rules_dir=None):

@@ -1,0 +1,393 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index 5b020a929..de2bf28d1 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -1385,21 +1385,21 @@ TEMPLATE_HEADING_RE = re.compile(r"^## (T\d+)(?:[ \t]|$)")   # 範本檔一組
+ # (`configs/ast-grep/kotlin-choice/`,規則 id 就是列號),選擇點表每列是論文表 1 那種一對一機械壞法,乾節點規則照論文 3.1、附錄 A。
+ # scripts/lumos 經 _kt_pack_check 借 choice_tables 讀表(讀表只有這一套,同 dt_table)。
+ CHOICE = Path(__file__).resolve().parent.parent / "kotlin-choice"   # 照這支檔的真實位置找(規則包複本只換 HERE,選擇點規則照讀真的那份)
+ CHOICE_TITLE, ARID_TITLE = "選擇點表", "乾節點規則"
+ _CHOICE_ROW_RE, _ARID_ROW_RE = r"^\|\s*C-\d+\s*\|", r"^\|\s*A-\d+\s*\|"
+ _CHOICE_HEADER = ("列號", "類別", "ast-grep 規則", "錨點", "候選壞法", "型別前提", "需補的 import", "對應決策表", "為什麼行為不同", "出處")
+ _ARID_HEADER = ("列號", "ast-grep 規則", "乾的範圍", "論文對應節", "為什麼沒用", "加入日期與依據")
+ # 論文表 1 的五個運算子 + API 兄弟寫法 + 第二批的 null-safety 運算子(NUL);順序也是 lumos 洗牌前的基準順序(NUL 加在尾端,不動第一版的相對順序)
+ CHOICE_CATEGORIES = ("AOR", "LCR", "ROR", "UOI", "SBR", "API", "NUL")
+ CHOICE_ANCHORS = ("運算子", "運算元起始", "陳述起始", "方法名", "安全呼叫符", "引數")
+-_CHOICE_RETIRED_RE = re.compile(r"^已撤列號:(.*)$", re.M)   # 〈選擇點表〉說明段一行:撤掉的列號不准再出現在表或規則 id(列號不重用)
++_CHOICE_RETIRED_RE = re.compile(r"^已撤列號[:\uff1a](.*)$")   # 〈選擇點表〉說明段一行(半形或全形冒號):撤掉的列號不准再出現在表或規則 id(列號不重用)
+ CHOICE_PRECONDITIONS = ("(無)", "運算元有 null 字面值", "運算元是字串")   # 論文 3.2.1 事前擋編不過的壞法;語法樹沒有型別,只能用語法情境近似
+ CHOICE_SPECIALS = {"(刪掉)": "delete", "(拿掉呼叫)": "drop_call"}
+ _CHOICE_IMPORT_RE = re.compile(r"^`([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)`$")
+ _CHOICE_RULE_FILE_RE = re.compile(r"^`([\w-]+\.yml)`")
+ _CHOICE_SAMPLE_MARK = re.compile(r"//\s*(HIT|MISS)\s+([\w -]+?)\s*$")
+ CHOICE_SYNTAX_RULE = "syntax-error"
+ 
+ 
+ def choice_rule_ids(rules_dir):
+     """規則目錄 → {規則 id: 檔名};同一檔多份文件以 --- 分隔(同 load_rules 的讀法)。目錄不在回 None。"""
+@@ -1512,29 +1512,34 @@ def choice_tables(text, rules_dir=None):
+                 out[key].append(row)
+         if not cells:
+             probs.append((tag, f"〈{title}〉一列都沒有"))
+         if rules_dir is not False:
+             probs += _choice_rules_match(out[key], rules_dir, sub, tag)
+     probs += _choice_retired_problems(text, out["choice"], rules_dir)
+     return out, probs
+ 
+ 
+ def _choice_retired(text):
+-    """〈選擇點表〉說明段的「已撤列號:」那一行 → (撤掉的列號集合, 問題或 None)。沒有那一行視同空;寫「(無)」是空;
+-    其餘只准列號(C-<n>)與「、」「,」空白分隔,看不懂報問題。"""
++    """〈選擇點表〉說明段的「已撤列號:」那一行 → (撤掉的列號集合, 問題或 None)。這一節沒有提到「已撤列號」視同空;寫「(無)」是空;
++    其餘只准列號(C-<n>)與「、」「,」空白分隔。這一節裡提到「已撤列號」的行只准恰好一行、而且頂格寫成 `已撤列號:…`(冒號半形全形都認),
++    多一行、前面帶清單符號或粗體都報看不懂——認不出來時不當成沒有,免得撤列守衛靜默失效(代碼審 code-選擇點第二批 r1 b2 g1)。"""
+     i = text.find(f"\n## {CHOICE_TITLE}")
+     if i < 0:
+         return set(), None
+     j = text.find("\n## ", i + 1)
+-    m = _CHOICE_RETIRED_RE.search(text[i:j if j >= 0 else len(text)])
+-    if not m:
++    lines = [ln for ln in text[i:j if j >= 0 else len(text)].split("\n") if "已撤列號" in ln]
++    if not lines:
+         return set(), None
++    m = _CHOICE_RETIRED_RE.match(lines[0].strip()) if len(lines) == 1 and lines[0] == lines[0].lstrip() else None
++    if not m:
++        return set(), ("〈選擇點表〉提到「已撤列號」的行要恰好一行、頂格寫成「已撤列號:(無)」或「已撤列號:C-<n>、C-<n>」,"
++                       f"這裡是:{' / '.join(ln.strip()[:60] for ln in lines[:3])}")
+     val = m.group(1).strip()
+     if val == "(無)":
+         return set(), None
+     ids = re.findall(r"C-\d+", val)
+     if not ids or re.sub(r"C-\d+|[、,,\s]", "", val):
+         return set(), f"已撤列號那一行要寫「(無)」或列號(C-<n>,用「、」分隔),這裡是「{val}」"
+     return set(ids), None
+ 
+ 
+ def _choice_retired_problems(text, rows, rules_dir):
+diff --git a/configs/ast-grep/kotlin-choice/rules-choice/api.yml b/configs/ast-grep/kotlin-choice/rules-choice/api.yml
+index 0030c6f22..990add349 100644
+--- a/configs/ast-grep/kotlin-choice/rules-choice/api.yml
++++ b/configs/ast-grep/kotlin-choice/rules-choice/api.yml
+@@ -136,129 +136,159 @@ language: kotlin
+ severity: hint
+ message: API 兄弟寫法 distinctUntilChanged(MutApi 形狀)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*distinctUntilChanged$'
+   inside:
+     kind: navigation_expression
+     inside: {kind: call_expression}
+ ---
+ # 第二批([[Projects/選擇點表第二批常見誤用寫法_計劃]]):.let 換 .also(回傳值從區塊結果變成接收者本身)。只收回傳值有被用到的 .let:
+-# 回傳值沒人用時換成 also 必然等價(Trivial Compiler Equivalence)。值被用到的判法照 sbr.yml 的 value-pos(父節點不是陳述清單、lambda 的
+-# 最後一個陳述、當值用的 if/when/try 區塊最後一個陳述);ast-grep 的 utils 只在同一份規則文件裡有效,所以照抄一份,改 sbr.yml 時一起改。
++# 回傳值沒人用時換成 also 必然等價(Trivial Compiler Equivalence)。value-pos 照抄 sbr.yml(ast-grep 的 utils 只在同一份規則文件裡有效;
++# 兩份要一字不差,t_choice_samples_batch2 比對)。sbr.yml 用它保守地「不確定是不是值就不刪」,這裡方向相反(不確定就不收),
++# 所以 value-used 另外排除沒大括號的 if/for/while/when 分支(control_structure_body 的直接子節點,只有 if/when 本身當值用時才算;
++# 代碼審 code-選擇點第二批 r1 c1)。
+ id: C-34
+ language: kotlin
+ severity: hint
+ message: API 兄弟寫法 let(換成 also,回傳值不同)
+ utils:
+   code:
+     not:
+       any:
+         - kind: line_comment
+         - kind: multiline_comment
+   value-pos:
++    # 值被拿去用的運算式:父節點不是陳述清單,或它是 lambda 的最後一個陳述
+     any:
+       - not: {inside: {kind: statements}}
+       - all:
+           - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
+           - inside: {kind: statements, inside: {kind: lambda_literal}}
+   value-used:
+     any:
+-      - matches: value-pos
++      - all:
++          - not: {inside: {kind: statements}}
++          - not: {inside: {kind: control_structure_body}}
++      - all:
++          - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
++          - inside: {kind: statements, inside: {kind: lambda_literal}}
++      - inside: {kind: control_structure_body, inside: {kind: if_expression, matches: value-pos}}
++      - inside: {kind: control_structure_body, inside: {kind: when_entry, inside: {kind: when_expression, matches: value-pos}}}
+       - all:
+           - nthChild: {position: 1, reverse: true, ofRule: {matches: code}}
+           - inside:
+               kind: statements
+               any:
+                 - inside: {kind: control_structure_body, inside: {kind: if_expression, matches: value-pos}}
+                 - inside: {kind: control_structure_body, inside: {kind: when_entry, inside: {kind: when_expression, matches: value-pos}}}
+                 - inside: {kind: try_expression, matches: value-pos}
+                 - inside: {kind: catch_block, inside: {kind: try_expression, matches: value-pos}}
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*let$'
+-  inside:
+-    kind: navigation_expression
+-    inside: {kind: call_expression, matches: value-used}
++  # 父節點是 navigation_expression、它的父節點是值被用到的呼叫;寫成雙重否定(同 C-18,避免外層整段被塞進每個命中)
++  not:
++    inside:
++      not:
++        kind: navigation_expression
++        inside: {kind: call_expression, matches: value-used}
+ ---
+ # 第二批:接收者寫法 a.combine(b) 換 zip(任一邊有新值就輸出 → 兩邊成對才輸出;Kotlin 官方 Flow https://kotlinlang.org/docs/flow.html )。
+ # 完整套件名 kotlinx.coroutines.flow.combine(a, b) 是頂層函式,zip 沒有頂層版本,換了必定編不過,不收。
+ id: C-35
+ language: kotlin
+ severity: hint
+ message: API 兄弟寫法 combine(接收者寫法,換成 zip)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*combine$'
+-  inside:
+-    kind: navigation_expression
+-    not: {regex: '^kotlinx\s*\.\s*coroutines\s*\.\s*flow\s*\.\s*combine$'}
+-    inside: {kind: call_expression}
++  not:
++    inside:
++      not:
++        kind: navigation_expression
++        not: {regex: '^kotlinx\s*\.\s*coroutines\s*\.\s*flow\s*\.\s*combine$'}
++        inside: {kind: call_expression}
+ ---
+ # 第二批:LaunchedEffect 的 key 換成 Unit(key 變了不重跑;Android 官方 Compose 副作用 https://developer.android.com/develop/ui/compose/side-effects )。
+ # 命中的是引數清單 value_arguments(錨點「引數」)。只收:帶尾隨 lambda、至少一個引數、而且引數不全是字面值;全是常數的 key 換成 Unit 必然等價。
+-# 字面值:Unit、true、false、null、數字、不含 $ 的字串;具名引數(key1 = Unit)看等號右邊的值(引數節點的最後一個具名子節點)。
+ id: C-36
+ language: kotlin
+ severity: hint
+ message: Compose LaunchedEffect 的 key(換成 Unit,key 變了不重跑)
+ utils:
+   literal-arg:
++    # 字面值:Unit、true、false、null、數字(含負號)、字元、不含 $ 的字串;具名引數看等號右邊的值(引數節點的最後一個具名子節點)。
++    # C-36 與 C-37 各一份(utils 只在同一份規則文件裡有效),兩份要一字不差(t_choice_samples_batch2 比對)
+     kind: value_argument
+     has:
+       nthChild: {position: 1, reverse: true}
+       any:
+         - {kind: simple_identifier, regex: '^Unit$'}
+         - kind: boolean_literal
+         - kind: null_literal
+         - kind: integer_literal
+         - kind: real_literal
+         - kind: long_literal
+         - kind: hex_literal
+         - kind: bin_literal
+         - kind: unsigned_literal
++        - kind: character_literal
++        - {kind: prefix_expression, regex: '^[-+]\s*[0-9]'}
+         - all:
+             - kind: string_literal
+             - not: {has: {any: [{kind: interpolated_identifier}, {kind: interpolated_expression}], stopBy: end}}
+ rule:
+   kind: value_arguments
+   has: {kind: value_argument, not: {matches: literal-arg}}
+-  inside:
+-    kind: call_suffix
+-    has: {kind: annotated_lambda}
++  # 父節點是帶尾隨 lambda 的 call_suffix、祖父是呼叫 LaunchedEffect 的 call_expression。寫成雙重否定:正面寫 inside 時外層呼叫連同整個
++  # 尾隨 lambda 被當次要標記塞進每個命中,巢狀 LaunchedEffect 的輸出平方成長(代碼審 code-選擇點第二批 r1 r2:巢狀 150 層 57MB → 0.1MB)
++  not:
+     inside:
+-      kind: call_expression
+-      has: {kind: simple_identifier, nthChild: 1, regex: '^LaunchedEffect$'}
++      not:
++        kind: call_suffix
++        has: {kind: annotated_lambda}
++        inside:
++          kind: call_expression
++          has: {kind: simple_identifier, nthChild: 1, regex: '^LaunchedEffect$'}
+ ---
+ # 第二批:remember 拿掉 key(參數變了還顯示舊值;Android 官方 Compose 狀態 https://developer.android.com/develop/ui/compose/state )。
+ # 條件同 C-36(帶尾隨 lambda、至少一個引數、不全是字面值):remember() 刪掉括號、全是常數的 key 拿掉都必然等價;沒有尾隨 lambda 刪了編不過。
+ id: C-37
+ language: kotlin
+ severity: hint
+ message: Compose remember 的 key(拿掉,參數變了還顯示舊值)
+ utils:
+   literal-arg:
++    # 字面值:Unit、true、false、null、數字(含負號)、字元、不含 $ 的字串;具名引數看等號右邊的值(引數節點的最後一個具名子節點)。
++    # C-36 與 C-37 各一份(utils 只在同一份規則文件裡有效),兩份要一字不差(t_choice_samples_batch2 比對)
+     kind: value_argument
+     has:
+       nthChild: {position: 1, reverse: true}
+       any:
+         - {kind: simple_identifier, regex: '^Unit$'}
+         - kind: boolean_literal
+         - kind: null_literal
+         - kind: integer_literal
+         - kind: real_literal
+         - kind: long_literal
+         - kind: hex_literal
+         - kind: bin_literal
+         - kind: unsigned_literal
++        - kind: character_literal
++        - {kind: prefix_expression, regex: '^[-+]\s*[0-9]'}
+         - all:
+             - kind: string_literal
+             - not: {has: {any: [{kind: interpolated_identifier}, {kind: interpolated_expression}], stopBy: end}}
+ rule:
+   kind: value_arguments
+   has: {kind: value_argument, not: {matches: literal-arg}}
+-  inside:
+-    kind: call_suffix
+-    has: {kind: annotated_lambda}
++  # 父節點是帶尾隨 lambda 的 call_suffix、祖父是呼叫 remember 的 call_expression。寫成雙重否定:正面寫 inside 時外層呼叫連同整個
++  # 尾隨 lambda 被當次要標記塞進每個命中,巢狀 remember 的輸出平方成長(代碼審 code-選擇點第二批 r1 r2:巢狀 150 層 57MB → 0.1MB)
++  not:
+     inside:
+-      kind: call_expression
+-      has: {kind: simple_identifier, nthChild: 1, regex: '^remember$'}
++      not:
++        kind: call_suffix
++        has: {kind: annotated_lambda}
++        inside:
++          kind: call_expression
++          has: {kind: simple_identifier, nthChild: 1, regex: '^remember$'}
+diff --git a/configs/ast-grep/kotlin-choice/rules-choice/nul.yml b/configs/ast-grep/kotlin-choice/rules-choice/nul.yml
+index 1628023e3..e38f3cbf1 100644
+--- a/configs/ast-grep/kotlin-choice/rules-choice/nul.yml
++++ b/configs/ast-grep/kotlin-choice/rules-choice/nul.yml
+@@ -8,17 +8,20 @@ rule:
+   # 要加引號:不加 YAML 會把「?: 」當成對應表而解析失敗;只寫節點種類 elvis_expression 拿不到 $A、$B,壞法與型別前提都會失效
+   pattern: '$A ?: $B'
+ ---
+ id: C-33
+ language: kotlin
+ severity: hint
+ message: 安全呼叫符 ?.(換成 !!. 從略過變成當掉)
+ rule:
+   kind: navigation_suffix
+   regex: '^\?\.'
+-  inside: {kind: navigation_expression}
+-  # 前一個兄弟節點是註解時不命中:!! 要插在 ?. 前面最後一個非空白字元之後,會插進註解裡
++  # 父節點是 navigation_expression。寫成雙重否定:正面寫 inside 時 ast-grep 把整條外層鏈當次要標記塞進每個命中,
++  # 長鏈與密集檔的輸出變成平方(同 sbr.yml C-18 的做法,代碼審 code-選擇點第二批 r1 r1 r2)
+   not:
+-    follows:
+-      any:
+-        - kind: line_comment
+-        - kind: multiline_comment
++    any:
++      - inside: {not: {kind: navigation_expression}}
++      # 前一個兄弟節點是註解時不命中:!! 要插在 ?. 前面最後一個非空白字元之後,會插進註解裡
++      - follows:
++          any:
++            - kind: line_comment
++            - kind: multiline_comment
+diff --git a/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt b/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
+index f3727dacc..26c70d4e2 100644
+--- a/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
++++ b/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
+@@ -9,42 +9,51 @@ fun nul(name: String?, a: String?, b: String?, c: String) {
+     val k = a ?: b ?: c // HIT C-32
+     val s = user?.profile?.name // HIT C-33
+     val t = repo.user()
+         ?.name // HIT C-33
+     val u = repo.user() // 取使用者
+         ?.name // MISS C-33
+     val v = repo.user() /* 註 */ ?.name // MISS C-33
+     val w = repo.user().name // MISS C-33 C-32
+ }
+ 
+-fun scope(x: Int?, list: List<Int?>) {
++fun scope(x: Int?, list: List<Int?>, c: Boolean) {
+     val y = x.let { it + 1 } // HIT C-34
+     val xs = list.map { it?.let { g(it) } } // HIT C-34 C-33
+     x?.let { show(it) } // MISS C-34
++    if (c) x.let { show(it) } // MISS C-34
++    for (i in list) x.let { show(it) } // MISS C-34
++    while (c) x.let { show(it) } // MISS C-34
++    if (c) go() else x.let { show(it) } // MISS C-34
++    when (c) { true -> x.let { show(it) }; else -> go() } // MISS C-34
++    val z = if (c) x.let { it + 1 } else 0 // HIT C-34
+     done()
+ }
+ 
+ fun flows(a: Flow<Int>, b: Flow<Int>) {
+     val f = a.combine(b) { x, y -> x + y } // HIT C-35
+     val g = combine(a, b) { x, y -> x + y } // MISS C-35
+     val h = kotlinx.coroutines.flow.combine(a, b) { x, y -> x + y } // MISS C-35
+ }
+ 
+ @Composable
+ fun effects(userId: String, id: Int, k: Int, items: List<Int>) {
+     LaunchedEffect(userId, id) { load(userId, id) } // HIT C-36
+     LaunchedEffect("user_$id") { load() } // HIT C-36
+     LaunchedEffect(Unit) { load() } // MISS C-36
+     LaunchedEffect("init") { load() } // MISS C-36
+     LaunchedEffect(key1 = Unit) { load() } // MISS C-36
+     LaunchedEffect() { load() } // MISS C-36
+     LaunchedEffect(k, block = { load() }) // MISS C-36
++    LaunchedEffect(-1) { load() } // MISS C-36
++    LaunchedEffect('c') { load() } // MISS C-36
+     val r1 = remember(k) { items.sorted() } // HIT C-37
+     val r2 = remember<Int>(k) { 3 } // HIT C-37
+     val r3 = remember() { 3 } // MISS C-37
+     val r4 = remember(Unit) { 3 } // MISS C-37
++    val r7 = remember(-1) { 3 } // MISS C-37
+     val r5 = remember(k) // MISS C-37
+     val r6 = remember( // HIT C-37
+         items,
+         k,
+     ) { items.size + k }
+ }
+diff --git a/scripts/lumos b/scripts/lumos
+index 6b0d8b160..1746c91bf 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -17902,23 +17902,24 @@ def _gov_choice_counts(rows):
+     from collections import Counter
+     c = {"ever": set(), "changed": [], "mutant_lines": [], "secs": [], "first": Counter(), "after": Counter(), "waive": Counter(),
+          "nores": Counter(), "shape": Counter(), "test_files": {}, "blocked": 0, "stale_blocked": 0, "unverified": 0,
+          "row_mut": {}, "row_waive": {}}
+     for r in rows:
+         if r.get("gate") == "lint-new" and r.get("ck_waive"):
+             w = r["ck_waive"]
+             c["waive"][str(w.get("label") or "?")] += 1
+             if isinstance(w.get("row"), str):
+                 c["shape"][(w["row"], str(w.get("decl") or "(沒有外層宣告)"))] += 1
+-            # 依列號(第二批計劃範圍 5):同一個 (檔, 行指紋) 多筆放行只算提交時間最大那筆(同一個提交的重複放行去重時已併成一筆)
++            # 依列號(第二批計劃範圍 5):同一個 (檔, 行指紋) 多筆放行只算提交時間最晚那筆(同一個提交的重複放行去重時已併成一筆);
++            # 時間先後照 _loop_ts_newer 比 UTC 秒數(帳裡可能混不同時區偏移,直接比字串會選錯;代碼審 code-選擇點第二批 r1 a1),同時刻後讀到的那筆贏
+             wk, ts = (w.get("file"), w.get("fp")), str(r.get("ts") or "")
+-            if wk not in c["row_waive"] or ts >= c["row_waive"][wk][0]:
++            if wk not in c["row_waive"] or not _loop_ts_newer(c["row_waive"][wk][0], ts):
+                 c["row_waive"][wk] = (ts, w.get("row"), str(w.get("label") or "?"))
+         elif r.get("gate") == _CHOICE_KILL_GATE:
+             _gov_choice_count_one(c, r, r.get("ck") or {}, r.get("kind"))
+     return c
+ 
+ 
+ _CHOICE_BASE_RED = "基準不綠沒跑"   # 跑不出結果原因的冒號前那段等於它時,不是壞法的錯(choice-kill 判定處的字面字串;依列號統計不算)
+ 
+ 
+ def _gov_choice_by_row(c):
+@@ -17997,21 +17998,21 @@ def _render_gov_choice(rows):
+         print("    乾節點候選前 5(同形狀放行 3 次以上,人決定要不要寫成〈乾節點規則〉新列,論文 3.1):"
+               + "、".join(f"{row} {_kill_esc(decl)[:40]} ×{v}" for (row, decl), v in cand))
+     many = sorted((t, len(fs)) for t, fs in c["test_files"].items() if len(fs) >= 3)
+     if many:
+         print("    單一測試殺掉 3 支以上不同檔的壞法(看是不是太粗的測試在撐):" + "、".join(f"{_kill_esc(t)} {n} 檔" for t, n in many))
+     print(f"    推送被擋 {c['blocked']} 筆(過期 {c['stale_blocked']}/{c['blocked']});算不出來(unverified){c['unverified']} 筆")
+     by_row, norow = _gov_choice_by_row(c)
+     if by_row or norow:
+         print("    依列號(Projects/選擇點表第二批常見誤用寫法_計劃 範圍 5;壞法以 (檔, 行指紋, 列號) 計,曾殺掉算殺掉、否則曾存活算存活、"
+               "否則跑不出結果,基準不綠沒跑的不算;放行每行只算最後一筆):")
+-        for row in sorted(by_row, key=lambda x: (int(x[2:]) if x[:2] == "C-" and x[2:].isdigit() else 10 ** 9, x)):
++        for row in sorted(by_row, key=lambda x: (int(x[2:]) if x[:2] == "C-" and x[2:].isascii() and x[2:].isdecimal() else 10 ** 9, x)):
+             d = by_row[row]
+             w = "、".join(f"{k} {v}" for k, v in sorted(d["waive"].items())) or "0"
+             print(f"      {_kill_esc(row)[:20]}:壞法 {d['mut']}、殺掉 {d['killed']}、存活 {d['survived']}、跑不出結果 {d['no_result']};放行 {_kill_esc(w)}")
+         if norow:
+             print(f"      沒有列號的放行 {norow}")
+ 
+ 
+ def _render_gov_situation(rows):
+     """gov --stats 的情境題段(計劃範圍 7):每列作者判適用數、正一致率、相符率、二元 Cohen's kappa(樣本 ≥20 且兩方各有兩種答案才印);
+     仲裁採作者/採盲判、段放行(分 ai 與 human)、重判次數、證據樣式提醒經盲判終局確認的真陽性/誤報/待確認;

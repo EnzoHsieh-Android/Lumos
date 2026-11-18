@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-11-05
-updated: 2026-11-14
+updated: 2026-11-17
 responsibility: 負責 Kotlin/Android 寫法的 ast-grep 規則包(規則、樣本、自我檢查)與型錄 checks-catalog.md 的格式;不負責新增告警閘本身的判定(那在 pitfalls-code-loop)、不負責 detekt 共用設定
 aliases: []
 about_code:
@@ -33,6 +33,8 @@ about_code:
   - configs/ast-grep/kotlin-choice/samples/nested.kt
   - configs/ast-grep/kotlin-choice/samples/error.kt
   - configs/ast-grep/kotlin-choice/samples/multibyte.kt
+  - configs/ast-grep/kotlin-choice/rules-choice/nul.yml
+  - configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
 tags:
   - type/system
   - status/doing
@@ -92,10 +94,12 @@ summary: |-
   WHY:API 母體只讀 klib 清單每行的簽名註解(套件/鏈|…),不解析宣告部分;伴生物件看 JVM 清單外層類別的靜態欄位判(klib 不標);可見寫法只給 object、伴生物件成員、列舉值與擴充屬性的接收者;JVM 專屬名稱手列在 coroutines-api/jvm-only.txt,不自動從 JVM 清單抽;_api_names 加底線是私有輔助,只有 coroutines_api_dir() 照 situation_dir 不加 [出處:[[Projects/情境決策點窮舉與壞寫法要叫得出_計劃]] 設計審 r1–r3] [因:klib 宣告部分有巢狀泛型與 fun interface、文法沒有公開規格;從 JVM 編譯形狀還原名字三輪都被打穿(讀取函式大小寫、@JvmName 別名、雜湊後綴)] [不選:kotlin-metadata-jvm(要 JVM 執行環境、讀不到 @JvmName)] [test:t_kt_catalog_api_decision_points]
   PITFALL:klib ABI 清單不標伴生物件,Channel.Factory 寫成普通的 final object,照宣告部分找 companion object 會讓 Channel.UNLIMITED 變成 Channel.Factory.UNLIMITED [出處:2026-11-12 情境決策點窮舉實作實測] [根因:klib 渲染不輸出 companion 修飾字] [修法:看 JVM 清單外層類別有沒有同名的 static final field] [test:t_kt_catalog_api_decision_points]
   WHY:D-4 例外證據樣式收 flatMapConcat 與 flatMapMerge(每一次都要做完的合法寫法),證據樣式只驗作者答的寫法跟那一行程式一致,情境到底是不是「每一次都要做完」交盲判 [出處:代碼審 code-情境決策點窮舉 r2 合約席] [因:不收的話依序或並行上傳這類正確寫法答例外時,證據樣式對不上會誤提醒] [不選:例外樣式不收這兩個操作符——證據樣式只看得到那一行程式,分不出它用在搜尋框還是上傳,不收只會讓正確的上傳寫法被誤提醒] [代價:搜尋框誤用 flatMapConcat 或 flatMapMerge 又答例外時,推送前不提醒,只靠盲判抓] [test:t_kt_situation_evidence_samples]
-  WHY:型錄新增〈選擇點表〉〈乾節點規則〉兩節,每列對應 `configs/ast-grep/kotlin-choice/` 裡 id 等於列號的一條 ast-grep 規則:選擇點表照論文表 1 的 AOR、LCR、ROR、UOI、SBR 外加 Kotlin API 兄弟寫法(每列一組一對一機械壞法,型別前提照 3.2.1 事前擋),乾節點規則照論文 3.1 與附錄 A(這一版收 A.1.1–A.1.5、A.1.10、A.1.11、A.1.15、A.1.20–A.1.22、A.1.24、A.3.2);讀表只有 check.py 的 choice_tables 一套(dt_table 一般化成依節名讀的 section_table,決策表行為不變),樣本用行尾 HIT/MISS 標記、由 choice_sample_problems 拿真的 ast-grep 核,沒裝 ast-grep 報沒檢查到 [出處:論文〈Practical Mutation Testing at Scale〉表 1、3.1、3.2.1、附錄 A https://arxiv.org/pdf/2102.11378 ;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 6] [因:改動選擇點要機械列出「換一種寫法照樣編得過、行為卻不同」的節點,設計審 r1、r2 連兩輪證明文字近似認不準節點範圍,使用者 2026-11-14 裁改用 ast-grep 語法樹] [不選:剝註解字串的文字比對;跟決策表合成一張(決策表每列要看情境判,這張每列是一對一機械壞法)] [test:t_choice_table_missing] [test:t_choice_points_interview]
+  WHY:型錄新增〈選擇點表〉〈乾節點規則〉兩節,每列對應 `configs/ast-grep/kotlin-choice/` 裡 id 等於列號的一條 ast-grep 規則:選擇點表照論文表 1 的 AOR、LCR、ROR、UOI、SBR 外加 Kotlin API 兄弟寫法與第二批的 null-safety 運算子 NUL(每列一組一對一機械壞法,型別前提照 3.2.1 事前擋),乾節點規則照論文 3.1 與附錄 A(這一版收 A.1.1–A.1.5、A.1.10、A.1.11、A.1.15、A.1.20–A.1.22、A.1.24、A.3.2);讀表只有 check.py 的 choice_tables 一套(dt_table 一般化成依節名讀的 section_table,決策表行為不變),樣本用行尾 HIT/MISS 標記、由 choice_sample_problems 拿真的 ast-grep 核,沒裝 ast-grep 報沒檢查到 [出處:論文〈Practical Mutation Testing at Scale〉表 1、3.1、3.2.1、附錄 A https://arxiv.org/pdf/2102.11378 ;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 6] [因:改動選擇點要機械列出「換一種寫法照樣編得過、行為卻不同」的節點,設計審 r1、r2 連兩輪證明文字近似認不準節點範圍,使用者 2026-11-14 裁改用 ast-grep 語法樹] [不選:剝註解字串的文字比對;跟決策表合成一張(決策表每列要看情境判,這張每列是一對一機械壞法)] [test:t_choice_table_missing] [test:t_choice_points_interview]
   PITFALL:SBR 規則用 nthChild 認「最後一個陳述」「唯一陳述」時,行尾註解也是陳述清單的具名子節點,`transform(x) // 註解` 就不再是最後一個、被當成可刪 [出處:2026-11-14 選擇點樣本實測] [根因:tree-sitter-kotlin 的 line_comment 與 multiline_comment 是具名節點,nthChild 預設照具名節點數] [修法:nthChild 帶 ofRule 排除註解] [test:t_choice_points_sbr]
   PITFALL:C-18(刪掉呼叫陳述)規則正面寫 inside: {kind: statements} 時,ast-grep 把整個外層陳述清單當次要標記與 metaVariables.multi.secondary 塞進每個命中,長函式的輸出是命中數乘函式大小(1000 行函式 313MB、1500 條呼叫超過讀取上限) [出處:代碼審 code-改動選擇點 r1 r1;ast-grep 0.51.2 實測] [根因:關聯規則(inside/has)命中的節點會被記成次要標記] [修法:改寫成 not: {any: [inside: {not: {kind: statements}}, …]} 的雙重否定,否定裡的關聯不記;同一份輸出降到 2.4MB,樣本與一個 419 支檔的真實專案逐筆比對命中集合相同] [test:t_choice_scan_per_file]
   WHY:check.py 的 --sg 由 sg_arg 一處解析,主流程與 --catalog-only 共用:--catalog-only 跑選擇點樣本時帶 --sg 用它、沒帶才找 PATH,--sg 後面沒給路徑 rc 2 [出處:代碼審 code-改動選擇點 r1 a3;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 6] [因:原本 --catalog-only 只看 PATH,帶了 --sg 也印沒裝 ast-grep] [test:t_choice_ledger_write_semantics]
+  WHY:選擇點表第二批(C-32 到 C-37,NUL 類 ?: 與 ?.、.let、接收者 combine、LaunchedEffect 與 remember 的 key)只收網上有公開來源點名、一對一換成兄弟寫法照樣編得過、行為不同、單元測試分得出的寫法;不收 runCatching 改寫與 Flow catch 換位置(多節點)、頂層 combine 換 zip(zip 沒有頂層版本)、launch 與 async 這類回傳型別不同的互換、remember 與 rememberSaveable(單元測試分不出)、== 換 ===(論文附錄 A.1.23 只換對應的否定);不收清單的全文在型錄〈選擇點表〉說明段 [出處:[[Projects/選擇點表第二批常見誤用寫法_計劃]]] [因:每列都要能機械產生、單元測試分得出,不然只會累積等價存活與放行] [不選:把 Detekt 規則點名的寫法全收] [test:t_choice_samples_batch2]
+  PITFALL:第二批規則正面寫 inside(父節點是 navigation_expression、帶尾隨 lambda 的 call_suffix)時,ast-grep 把外層整條鏈或整個尾隨 lambda 當次要標記塞進每個命中,巢狀 remember 與長 ?. 鏈的輸出平方成長、撞 64MB 上限整支檔記驗不了 [出處:代碼審 code-選擇點第二批 r1 r1 r2;ast-grep 0.51.2 實測] [根因:關聯規則命中的節點被記成次要標記] [修法:改寫成 not inside not X 的雙重否定,命中集合不變] [同族:C-18 正面寫 inside statements] [repro:巢狀 300 層 remember(k) 正寫 444MB、雙重否定 0.44MB]
 verified_by:
   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
@@ -103,6 +107,7 @@ verified_by:
   - "[[Verification/2026-11-09_Android型錄待查證列逐列核對]]"
   - "[[Verification/2026-11-09_Android型錄出處不全列重查]]"
   - "[[Verification/2026-11-12_情境決策點窮舉實作驗證]]"
+  - "[[Verification/2026-11-17_選擇點第二批上線前實測]]"
 ---
 # kotlin規則包
 
@@ -142,7 +147,7 @@ verified_by:
 
 [[Projects/改動選擇點都要有需求守住_計劃]] 的語法樹掃描設定在 `configs/ast-grep/kotlin-choice/sgconfig.yml`,照 Google 差異式變異測試論文(https://arxiv.org/pdf/2102.11378)分三組:
 
-- 選擇點規則(論文表 1,規則 id 就是型錄〈選擇點表〉的列號):`configs/ast-grep/kotlin-choice/rules-choice/ror.yml`(關係與相等,含附錄 A.1.23)、`configs/ast-grep/kotlin-choice/rules-choice/lcr.yml`、`configs/ast-grep/kotlin-choice/rules-choice/aor.yml`、`configs/ast-grep/kotlin-choice/rules-choice/uoi.yml`、`configs/ast-grep/kotlin-choice/rules-choice/sbr.yml`(不可刪的節點照附錄 A.1.12)、`configs/ast-grep/kotlin-choice/rules-choice/api.yml`(API 兄弟寫法,只命中方法名那一段)。
+- 選擇點規則(論文表 1,規則 id 就是型錄〈選擇點表〉的列號):`configs/ast-grep/kotlin-choice/rules-choice/ror.yml`(關係與相等,含附錄 A.1.23)、`configs/ast-grep/kotlin-choice/rules-choice/lcr.yml`、`configs/ast-grep/kotlin-choice/rules-choice/aor.yml`、`configs/ast-grep/kotlin-choice/rules-choice/uoi.yml`、`configs/ast-grep/kotlin-choice/rules-choice/sbr.yml`(不可刪的節點照附錄 A.1.12)、`configs/ast-grep/kotlin-choice/rules-choice/api.yml`(API 兄弟寫法,多半命中方法名那一段;第二批的 `LaunchedEffect`、`remember` 命中引數清單)、`configs/ast-grep/kotlin-choice/rules-choice/nul.yml`(第二批的 null-safety 運算子 `?:`、`?.`,見 [[Projects/選擇點表第二批常見誤用寫法_計劃]])。
 - 乾節點規則(論文 3.1、附錄 A,id 是〈乾節點規則〉的列號):`configs/ast-grep/kotlin-choice/rules-arid/arid.yml`。
 - 文法不認得的 ERROR 節點:`configs/ast-grep/kotlin-choice/rules-syntax/error.yml`。
-- 樣本(行尾 `// HIT <列號>`、`// MISS <列號>` 標記,check.py 的 choice_sample_problems 用真 ast-grep 核):`configs/ast-grep/kotlin-choice/samples/choice.kt`、`configs/ast-grep/kotlin-choice/samples/arid.kt`、`configs/ast-grep/kotlin-choice/samples/chain.kt`(鏈式另起一行)、`configs/ast-grep/kotlin-choice/samples/nested.kt`(巢狀運算)、`configs/ast-grep/kotlin-choice/samples/error.kt`(ERROR 節點)、`configs/ast-grep/kotlin-choice/samples/multibyte.kt`(多位元組字元)。
+- 樣本(行尾 `// HIT <列號>`、`// MISS <列號>` 標記,check.py 的 choice_sample_problems 用真 ast-grep 核):`configs/ast-grep/kotlin-choice/samples/choice.kt`、`configs/ast-grep/kotlin-choice/samples/arid.kt`、`configs/ast-grep/kotlin-choice/samples/chain.kt`(鏈式另起一行)、`configs/ast-grep/kotlin-choice/samples/nested.kt`(巢狀運算)、`configs/ast-grep/kotlin-choice/samples/error.kt`(ERROR 節點)、`configs/ast-grep/kotlin-choice/samples/multibyte.kt`(多位元組字元)、`configs/ast-grep/kotlin-choice/samples/choice-batch2.kt`(第二批;另開新檔是因為行指紋含前後各兩行,插進既有樣本會改到既有行的指紋)。

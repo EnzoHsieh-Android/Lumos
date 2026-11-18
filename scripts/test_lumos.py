@@ -143762,7 +143762,9 @@ def t_choice_table_missing():
           any(a == "C-3" and "沒有對應規則" in b for a, b in probs) and any(a == "C-3x" for a, _b in probs), str(probs)[:300])
     _t, probs = kp.choice_tables(real.replace("| C-4 | ROR |", "| C-3 | ROR |", 1))
     check("S23 列號重複 → 報列號重複", any(a == "C-3" and "重複" in b for a, b in probs), str(probs)[:300])
-    st = [b for _a, b in kp.stats_problems(real.replace("- 選擇點表:31 列", "- 選擇點表:30 列"), kp.main_rows(real)) if "選擇點表" in b]
+    n_rows = len(tables["choice"])   # 列數從真型錄讀(第二批加列或撤列不用改這裡)
+    st = [b for _a, b in kp.stats_problems(real.replace(f"- 選擇點表:{n_rows} 列", f"- 選擇點表:{n_rows - 1} 列"), kp.main_rows(real))
+          if "選擇點表" in b]
     check("S23 〈統計〉選擇點表列數寫錯 → 報重數不對", st != [], str(st))
     check("S23 沒裝 ast-grep 時樣本那一項報「沒檢查到」", kp.choice_sample_problems(None, tables) == [("<choice-samples>", "選擇點規則樣本沒檢查到(沒裝 ast-grep)")])
     _ckp_table_missing_push(real)   # 推送前那一道那半(第三段)
@@ -145776,6 +145778,473 @@ def t_choice_kill_waive_hint_shell_quote():
                   argv[:3] == ["lumos", "lint-waive", f"choice:{f}:12"] and argv[3:5] == ["--note", "不適用:<理由>"], f"{cmd}\n{argv}")
     finally:
         m._choice_gate_event = saved
+
+
+# ── 選擇點表第二批(Projects/選擇點表第二批常見誤用寫法_計劃)──
+# 判準來源:計劃〈預期值表〉S1–S8 各列(輸入照抄、預期照抄)。S1–S4 測 lumos 這一側(錨點、選行、編輯、型別前提):規則文字寫在測試裡、
+# 列是合成的(不讀真型錄、不讀真規則,撤列不會讓它們紅),ast-grep 照真的跑、輸出交給 lumos 剖(輸入形狀是真的);規則本身該不該命中由 S6
+# 讀真規則與真樣本核對。本機沒裝 ast-grep 時要 ast-grep 的那半印一行跳過,CI 裝了照跑。
+
+_CB2_CATS = ["AOR", "LCR", "ROR", "UOI", "SBR", "API", "NUL"]
+_CB2_RULES = {
+    "elvis": "id: C-32\nlanguage: kotlin\nrule:\n  pattern: '$A ?: $B'\n",
+    "safecall": "id: C-33\nlanguage: kotlin\nrule:\n  kind: navigation_suffix\n  regex: '^\\?\\.'\n  inside: {kind: navigation_expression}\n",
+    "let": "id: C-34\nlanguage: kotlin\nrule:\n  kind: navigation_suffix\n  regex: '^(\\?\\.|\\.)\\s*let$'\n",
+    "combine": "id: C-35\nlanguage: kotlin\nrule:\n  kind: navigation_suffix\n  regex: '^(\\?\\.|\\.)\\s*combine$'\n",
+    "effect": ("id: C-36\nlanguage: kotlin\nrule:\n  kind: value_arguments\n  inside:\n    kind: call_suffix\n    inside:\n      kind: call_expression\n"
+               "      has: {kind: simple_identifier, nthChild: 1, regex: '^LaunchedEffect$'}\n"),
+    "remember": ("id: C-37\nlanguage: kotlin\nrule:\n  kind: value_arguments\n  inside:\n    kind: call_suffix\n    inside:\n      kind: call_expression\n"
+                 "      has: {kind: simple_identifier, nthChild: 1, regex: '^remember$'}\n"),
+}
+
+
+def _cb2_row(rid, cat, anchor, cands=(), special=None, pre="(無)", imp=None):
+    """合成的〈選擇點表〉一列(形狀同 check.py 的 _choice_row 回傳)。"""
+    return {"id": rid, "category": cat, "rule_file": "t.yml", "rule": "", "anchor": anchor, "candidates": list(cands), "special": special,
+            "precondition": pre, "import": imp, "dt": "—", "why": "測試", "source": "測試"}
+
+
+def _cb2_points(src, lines, rows, rule_keys):
+    """真 ast-grep 用測試自帶的規則掃 src → lumos 剖輸出 → _choice_file_points(合成的表)。沒裝 ast-grep 回 None。"""
+    sg = _ktpack_sg()
+    if not sg:
+        return None
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-cb2-"))
+    (d / "rules").mkdir()
+    (d / "rules" / "t.yml").write_text("\n---\n".join(_CB2_RULES[k] for k in rule_keys), encoding="utf-8")
+    (d / "sgconfig.yml").write_text("ruleDirs:\n  - rules\n", encoding="utf-8")
+    (d / "src").mkdir()
+    (d / "src" / "0.kt").write_text(src, encoding="utf-8")
+    r = subprocess.run([sg, "scan", "--config", str(d / "sgconfig.yml"), "--json=stream", "src/0.kt"], cwd=str(d), capture_output=True, text=True)
+    assert r.returncode in (0, 1), r.stderr
+    scan = m._choice_scan_parse(r.stdout, {"0.kt": _CHOICE_MAIN}, {_CHOICE_MAIN: src})[_CHOICE_MAIN]
+    tables = {"choice": rows, "arid": [], "categories": list(_CB2_CATS)}
+    return m._choice_file_points(_CHOICE_MAIN, src, lines, scan, tables)
+
+
+def _cb2_new(points, ln):
+    """那一行挑到的壞法的 new(去頭尾空白);沒有回 None。"""
+    x = next((p for p in points or [] if p["line"] == ln), None)
+    ident = ((x or {}).get("mutant") or {}).get("identity") or {}
+    return ident["new"].strip() if "new" in ident else None
+
+
+def t_choice_points_nul_elvis():
+    """[第二批 S1] `$A ?: $B` → NUL 類壞法 `$A!!`:`$A` 不是單一記號寫成 `($A)!!`;運算元有 null 字面值不產生;`?:` 換行寫在續行、只改續行照樣挑出。
+    判準來源:計劃預期值表 S1 五列。翻紅釘:拿掉 NUL 那一列的字面 `?:` 比對 → 每條都沒有壞法;`$A` 不加括號 → `f((a + b)!!)` 那條紅;
+    拿掉型別前提 → null 那條紅。"""
+    m = _load_lumos_inproc()
+    row = _cb2_row("C-32", "NUL", "運算子", ["$A!!"], pre="運算元有 null 字面值")
+    # 不靠 ast-grep:編輯與錨點(假命中照 ast-grep 的形狀:節點是整個 elvis、$A $B 是兩個運算元)
+    src = _choice_wrap("        f(a + b ?: c)\n")
+    h = _choice_hit(src, "C-32", "a + b ?: c", mv={"A": "a + b", "B": "c"})
+    bb = src.encode("utf-8")
+    anchor, op = m._choice_anchor(bb, h, row)
+    check("S1 NUL 列的運算子錨點比字面 ?:(假命中)", op is not None and bb[op[0]:op[1]] == b"?:", str((anchor, op)))
+    edits = m._choice_edits(bb, h, row, op, "$A!!")
+    check("S1 `$A` 是 a + b → 換成 (a + b)!!(假命中)", edits == [(h["s"], h["e"], b"(a + b)!!")], str(edits))
+    pts = _cb2_points(_choice_wrap("        val n = name ?: \"guest\"\n"), [5], [row], ["elvis"])
+    if pts is None:
+        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑預期值表逐列)")
+        return
+    check("S1 `val n = name ?: \"guest\"` → `val n = name!!`", _cb2_new(pts, 5) == "val n = name!!", str(pts)[:400])
+    pts = _cb2_points(_choice_wrap("        f(a + b ?: c)\n"), [5], [row], ["elvis"])
+    check("S1 `f(a + b ?: c)` → `f((a + b)!!)`", _cb2_new(pts, 5) == "f((a + b)!!)", str(pts)[:400])
+    pts = _cb2_points(_choice_wrap("        val v = repo.load() ?: d\n"), [5], [row], ["elvis"])
+    check("S1 `repo.load()` 是單一記號、不加括號 → `val v = repo.load()!!`", _cb2_new(pts, 5) == "val v = repo.load()!!", str(pts)[:400])
+    pts = _cb2_points(_choice_wrap("        val p = x ?: null\n        val q = null ?: x\n"), [5, 6], [row], ["elvis"])
+    check("S1 `x ?: null` 與 `null ?: x` → 都不產生(運算元有 null 字面值)",
+          [p["status"] for p in pts] == ["none", "none"] and all(p["mutant"] is None for p in pts), str(pts)[:400])
+    pts = _cb2_points(_choice_wrap("        val n = name\n            ?: \"guest\"\n"), [6], [row], ["elvis"])
+    x = next((p for p in pts if p["line"] == 6), None)
+    check("S1 `?:` 換行寫在續行、只改續行 → 第二行照樣挑出 `$A!!`(錨點在 `?:` 那一行)",
+          x is not None and (x["mutant"] or {}).get("row") == "C-32" and x["mutant"]["identity"]["new"].strip() == "val n = name!!", str(pts)[:400])
+
+
+def t_choice_points_nul_safecall():
+    """[第二批 S2] `a?.b?.c` 鏈只把挑中的那一個 `?.` 換成 `!!.`、其餘不動;`?.` 另起一行時 `!!` 接在前一行結尾、續行留 `.`。
+    判準來源:計劃預期值表 S2 兩列(Kotlin 文法:`!!` 前面不能換行)。翻紅釘:`!!` 插在 `?.` 原位置 → 另起一行那條變成 `!!.name` 紅;
+    整條鏈都換 → `user!!.profile!!.name` 紅。"""
+    m = _load_lumos_inproc()
+    row = _cb2_row("C-33", "NUL", "安全呼叫符", ["!!."])
+    src = _choice_wrap("        val n = repo.user()\n            ?.name\n")
+    h = _choice_hit(src, "C-33", "?.name")
+    bb = src.encode("utf-8")
+    _a, op = m._choice_anchor(bb, h, row)
+    edits = m._choice_edits(bb, h, row, op, "!!.")
+    p = bb.index(b"user()") + len(b"user()")
+    check("S2 另起一行的 `?.`:`!!` 插在前一行最後一個非空白字元之後、`?.` 換成 `.`(假命中)",
+          sorted(edits) == sorted([(p, p, b"!!"), (op[0], op[1], b".")]), str(edits))
+    mb = _choice_wrap("        val é = \"價格\"; val u = r\n            ?.n\n")
+    hm = _choice_hit(mb, "C-33", "?.n")
+    bm = mb.encode("utf-8")
+    _a, opm = m._choice_anchor(bm, hm, row)
+    pm = bm.index(b"val u = r") + len(b"val u = r")
+    check("S2 前面有多位元組字元:`!!` 的位置照 UTF-8 位元組算、接在 r 後面(代碼審 r1 c3,假命中)",
+          sorted(m._choice_edits(bm, hm, row, opm, "!!.")) == sorted([(pm, pm, b"!!"), (opm[0], opm[1], b".")]), str(pm))
+    pts = _cb2_points(_choice_wrap("        val s = user?.profile?.name\n"), [5], [row], ["safecall"])
+    if pts is None:
+        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑預期值表逐列)")
+        return
+    check("S2 `user?.profile?.name` 挑中第一個 `?.` → `user!!.profile?.name`", _cb2_new(pts, 5) == "val s = user!!.profile?.name", str(pts)[:400])
+    pts = _cb2_points(src, [6], [row], ["safecall"])
+    x = next((q for q in pts if q["line"] == 6), None)
+    new = (((x or {}).get("mutant") or {}).get("identity") or {}).get("new", "")
+    check("S2 `val n = repo.user()` 換行 `?.name`、只改第二行 → 第一行變 `val n = repo.user()!!`、第二行變 `.name`",
+          new.split("\n") == ["        val n = repo.user()!!", "            .name"], repr(new))
+    pts = _cb2_points(mb, [6], [row], ["safecall"])
+    x = next((q for q in pts if q["line"] == 6), None)
+    new = (((x or {}).get("mutant") or {}).get("identity") or {}).get("new", "")
+    check("S2 真 ast-grep:`val é = \"價格\"; val u = r` 換行 `?.n` → `val u = r!!`、續行 `.n`(多位元組不錯位)",
+          new.split("\n") == ["        val é = \"價格\"; val u = r!!", "            .n"], repr(new))
+
+
+def t_choice_points_batch2_api():
+    """[第二批 S3] `.let {` 與接收者寫法 `.combine(` 照方法名錨點換成 `also`、`zip`;檔頭逐一 import 了 combine 時補 `import kotlinx.coroutines.flow.zip`。
+    判準來源:計劃預期值表 S3 兩列。翻紅釘:API 列的 import 只看列名不看檔頭 → 沒 import 那條紅。"""
+    let = _cb2_row("C-34", "API", "方法名", ["also"])
+    comb = _cb2_row("C-35", "API", "方法名", ["zip"], imp="kotlinx.coroutines.flow.zip")
+    pts = _cb2_points(_choice_wrap("        val y = x.let { it + 1 }\n"), [5], [let], ["let"])
+    if pts is None:
+        raise _SrcOnly("本機沒有 ast-grep,跳過 S3;CI 裝了 0.51.1 會跑預期值表逐列")
+    check("S3 `val y = x.let { it + 1 }` → `val y = x.also { it + 1 }`", _cb2_new(pts, 5) == "val y = x.also { it + 1 }", str(pts)[:400])
+    imp = "import kotlinx.coroutines.flow.combine\n\n"
+    src = _choice_wrap("        val f = a.combine(b) { x, y -> x + y }\n", imp)
+    ln = src.split("\n").index("        val f = a.combine(b) { x, y -> x + y }") + 1
+    pts = _cb2_points(src, [ln], [comb], ["combine"])
+    x = next((q for q in pts if q["line"] == ln), None)
+    mut = (x or {}).get("mutant") or {}
+    also = mut.get("also") or [{}]
+    check("S3 `a.combine(b) { x, y -> x + y }` → `a.zip(b) { x, y -> x + y }`", _cb2_new(pts, ln) == "val f = a.zip(b) { x, y -> x + y }", str(pts)[:400])
+    check("S3 檔頭有 import combine → 補 import kotlinx.coroutines.flow.zip", "import kotlinx.coroutines.flow.zip" in also[0].get("new", ""), str(also)[:300])
+    src = _choice_wrap("        val f = a.combine(b) { x, y -> x + y }\n")
+    pts = _cb2_points(src, [5], [comb], ["combine"])
+    x = next((q for q in pts if q["line"] == 5), None)
+    check("S3 檔頭沒有 import combine → 不補 import(照第一版)", x is not None and not (x["mutant"] or {}).get("also"), str(x)[:300])
+
+
+def t_choice_points_compose():
+    """[第二批 S4] `LaunchedEffect(k1, k2) {` 的引數清單換成 `(Unit)`(不多包括號);`remember(k) {` 刪掉引數清單;引數跨多行、只改中間一行的
+    `remember(` 照樣挑出(錨點「引數」取節點範圍內第一個改動行)。判準來源:計劃預期值表 S4 兩列與範圍 3。翻紅釘:引數錨點用節點開頭 →
+    跨多行那條紅;樣板經「不是單一記號就加括號」→ `((Unit))` 紅。"""
+    m = _load_lumos_inproc()
+    eff = _cb2_row("C-36", "API", "引數", ["(Unit)"])
+    rem = _cb2_row("C-37", "API", "引數", [], special="delete")
+    src = _choice_wrap("        val r = remember(\n            a,\n            b,\n        ) { a + b }\n")
+    h = _choice_hit(src, "C-37", "(\n            a,\n            b,\n        )")
+    bb = src.encode("utf-8")
+    starts = m._choice_line_index(bb)
+    anchor, _op = m._choice_anchor(bb, h, rem, {7}, starts)
+    check("S4 引數錨點:跨多行只改第 7 行 → 錨點落在第 7 行開頭(假命中)", anchor == starts[6], str((anchor, starts[6])))
+    anchor, _op = m._choice_anchor(bb, h, rem, {8}, starts)
+    check("S4 引數錨點:只改右括號那一行(第 8 行)→ 錨點落在第 8 行開頭(範圍含右括號那行;代碼審 r1 b4,假命中)", anchor == starts[7],
+          str((anchor, starts[7])))
+    anchor, _op = m._choice_anchor(bb, h, rem, {99}, starts)
+    check("S4 引數錨點:範圍內沒有改動行 → 回節點開頭(假命中)", anchor == h["s"], str(anchor))
+    pts = _cb2_points(_choice_wrap("        LaunchedEffect(k1, k2) { load() }\n"), [5], [eff], ["effect"])
+    if pts is None:
+        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑預期值表逐列)")
+        return
+    check("S4 `LaunchedEffect(k1, k2) {` → `LaunchedEffect(Unit) {`(不多包括號)", _cb2_new(pts, 5) == "LaunchedEffect(Unit) { load() }", str(pts)[:400])
+    pts = _cb2_points(_choice_wrap("        LaunchedEffect(userId) { load(userId) }\n"), [5], [eff], ["effect"])
+    check("S4 `LaunchedEffect(userId) { load(userId) }` → `LaunchedEffect(Unit) { load(userId) }`",
+          _cb2_new(pts, 5) == "LaunchedEffect(Unit) { load(userId) }", str(pts)[:400])
+    pts = _cb2_points(_choice_wrap("        val r = remember(items) { items.sorted() }\n"), [5], [rem], ["remember"])
+    check("S4 `remember(items) { items.sorted() }` → `remember { items.sorted() }`", _cb2_new(pts, 5) == "val r = remember { items.sorted() }", str(pts)[:400])
+    pts = _cb2_points(src, [7], [rem], ["remember"])
+    x = next((q for q in pts if q["line"] == 7), None)
+    new = (((x or {}).get("mutant") or {}).get("identity") or {}).get("new", "")
+    check("S4 引數跨多行、只改中間一行 → 那一行照樣挑出、引數清單整個刪掉", x is not None and "val r = remember { a + b }" in new, str(pts)[:400])
+
+
+_CB2_SYN_CAT = """# 合成型錄
+
+## 選擇點表
+
+說明。
+
+已撤列號:{retired}
+
+| 列號 | 類別 | ast-grep 規則 | 錨點 | 候選壞法 | 型別前提 | 需補的 import | 對應決策表 | 為什麼行為不同 | 出處 |
+|---|---|---|---|---|---|---|---|---|---|
+| C-1 | NUL | `nul.yml` 安全呼叫符 | 安全呼叫符 | `!!.` | (無) | (無) | — | 當掉 | 測試 |
+| C-2 | API | `api.yml` 引數 | 引數 | `(Unit)` | (無) | (無) | — | 不重跑 | 測試 |
+{extra}
+## 乾節點規則
+
+| 列號 | ast-grep 規則 | 乾的範圍 | 論文對應節 | 為什麼沒用 | 加入日期與依據 |
+|---|---|---|---|---|---|
+| A-1 | `a.yml` x | x | x | x | x |
+"""
+
+
+def t_choice_table_batch2():
+    """[第二批 S5] check.py 認得 NUL 類別、安全呼叫符與引數錨點;類別寫錯擋並指出那一列,lumos 讀表印同一句;`已撤列號:` 那一行裡的號出現在
+    表或規則 id 擋;樣本標記(HIT 或 MISS)指向表裡沒有的列號報出來。判準來源:計劃預期值表 S5 四列。翻紅釘:拿掉已撤列號檢查 → C-40 那條紅;
+    樣本標記不比對列號 → C-99 那條紅。"""
+    import shutil as _sh
+    kp = _ktpack()
+    tables, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="(無)", extra=""), rules_dir=False)
+    got = [(r["id"], r["category"], r["anchor"]) for r in tables["choice"]]
+    check("S5 型錄有 NUL 類、安全呼叫符、引數錨點的列 → 認得、不擋", not probs and got == [("C-1", "NUL", "安全呼叫符"), ("C-2", "API", "引數")],
+          f"{probs} {got}")
+    # 類別寫錯:拿真型錄第一個 API 列改成 NULL(撤列不影響:第一版 API 列一直在)
+    import re as _re
+    real = _choice_real_cat().read_text(encoding="utf-8")
+    mrow = _re.search(r"^\| (C-\d+) \| API \|", real, _re.M)
+    bad = real[:mrow.start()] + f"| {mrow.group(1)} | NULL |" + real[mrow.end():]
+    _t, probs = kp.choice_tables(bad)
+    hit = [b for a, b in probs if a == mrow.group(1) and "NULL" in b]
+    check(f"S5 型錄 {mrow.group(1)} 類別寫成 NULL → check.py 擋、指出那一列", bool(hit), str(probs)[:300])
+    m = _load_lumos_inproc()
+    _tb, why, _miss = m._choice_tables(_sit_catalog(bad))
+    check("S5 lumos 讀表印同一句(列號與類別訊息)", why is not None and mrow.group(1) in why and bool(hit) and hit[0] in why, str(why)[:300])
+    row40 = "| C-40 | API | `api.yml` x | 方法名 | `y` | (無) | (無) | — | 不同 | 測試 |\n"
+    _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=row40), rules_dir=False)
+    check("S5 `已撤列號:C-40`、表裡又有 C-40 → 擋並指出 C-40", any(a == "C-40" and "已撤" in b for a, b in probs), str(probs)[:300])
+    _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40 abc", extra=""), rules_dir=False)
+    check("S5 `已撤列號:` 那一行寫了列號以外的字 → 報看不懂", any("已撤列號" in b for _a, b in probs), str(probs)[:300])
+    _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=row40).replace("已撤列號:C-40", "已撤列號\uff1aC-40"), rules_dir=False)
+    check("S5 全形冒號 `已撤列號：C-40` 照認、表裡又有 C-40 → 擋(代碼審 r1 g1)", any(a == "C-40" and "已撤" in b for a, b in probs), str(probs)[:300])
+    for label, swap in (("前面帶清單符號", "- 已撤列號:C-40"), ("多寫一行", "已撤列號:(無)\n\n已撤列號:C-40"), ("粗體", "**已撤列號:**C-40"),
+                        ("前面縮排(代碼審 r2)", "  已撤列號:C-40")):
+        _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=row40).replace("已撤列號:C-40", swap), rules_dir=False)
+        check(f"S5 已撤列號那行{label} → 報看不懂、不當成沒有(代碼審 r1 b2)", any("恰好一行" in b for _a, b in probs), str(probs)[:300])
+    for label, rid in (("全形數字", "C-４０"), ("前導零", "C-040"), ("全形混半形", "C-４0")):
+        _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired=rid, extra=row40), rules_dir=False)
+        check(f"S5 已撤列號寫成{label}「{rid}」→ 報看不懂,不當成另一個列號(代碼審 r3 b1)",
+              any("已撤列號那一行要寫" in b for _a, b in probs), str(probs)[:300])
+    # 表的那一側:列號寫成前導零或全形數字時字串跟撤號比不上,規則 id 跟著寫成同樣的樣子就整個繞過(代碼審 r4 g1 c3 b1)
+    for label, rid in (("前導零", "C-040"), ("全形數字", "C-４０"), ("全形混半形", "C-4０"), ("零", "C-0")):
+        bad_row = row40.replace("| C-40 |", f"| {rid} |")
+        _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=bad_row), rules_dir=False)
+        check(f"S5 表裡列號寫成{label}「{rid}」→ 報列號寫法不對,不靜默繞過撤號(代碼審 r4 g1)",
+              any(a == rid and "列號要寫成" in b for a, b in probs), str(probs)[:300])
+    for arid in ("A-01", "A-0"):  # A-0:列號不准是零(代碼審 r5 b2)
+        _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="(無)", extra="").replace("| A-1 |", f"| {arid} |"), rules_dir=False)
+        check(f"S5 乾節點表列號寫成「{arid}」→ 同樣報列號寫法不對(代碼審 r4 g1)", any(a == arid and "列號要寫成" in b for a, b in probs),
+              str(probs)[:300])
+    d = Path(tempfile.mkdtemp(prefix="gctl-cb2rules-")) / "kotlin-choice"
+    _sh.copytree(kp.CHOICE, d)
+    (d / "rules-choice" / "zz.yml").write_text("id: C-40\nlanguage: kotlin\nrule:\n  kind: navigation_suffix\n", encoding="utf-8")
+    _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=""), rules_dir=d)
+    check("S5 `已撤列號:C-40`、規則檔裡還有 id C-40 → 擋並指出", any(a == "C-40" and "已撤" in b for a, b in probs), str(probs)[:300])
+    (d / "samples" / "zz.kt").write_text("fun z() {\n    go() // MISS C-99\n}\n", encoding="utf-8")
+    t_real, _p = kp.choice_tables(real)
+    got = kp.choice_sample_mark_problems(t_real, rules_dir=d)
+    check("S5 樣本有 `// MISS C-99`、表裡沒有 C-99 → 報那個標記(不用 ast-grep)", any(a == "C-99" and "zz.kt" in b for a, b in got), str(got)[:300])
+    check("S5 真樣本的標記都指向表裡有的列號", kp.choice_sample_mark_problems(t_real) == [], str(kp.choice_sample_mark_problems(t_real))[:300])
+
+
+# S6 的不命中清單(計劃預期值表 S6):(列號, 樣本裡要有的片段)。只核表裡還在的列(撤列時樣本標記一起拿掉,這裡跳過)。
+_CB2_S6_MISS = (("C-33", "// 取使用者"), ("C-33", "/* 註 */ ?.name"), ("C-34", "x?.let { show(it) }"), ("C-35", "= combine(a, b)"),
+                ("C-35", "kotlinx.coroutines.flow.combine(a, b)"), ("C-36", "LaunchedEffect(Unit)"), ("C-36", "LaunchedEffect(\"init\")"),
+                ("C-36", "LaunchedEffect(key1 = Unit)"), ("C-36", "LaunchedEffect()"), ("C-36", "block = {"), ("C-37", "remember()"),
+                ("C-37", "remember(Unit)"), ("C-37", "val r5 = remember(k)"),
+                # 代碼審 r1:沒大括號的 if/for/while/else/when 分支裡的 .let 值沒人用(c1);負數與字元常數 key(g2 c4)
+                ("C-34", "if (c) x.let"), ("C-34", "for (i in list) x.let"), ("C-34", "while (c) x.let"), ("C-34", "else x.let"),
+                ("C-34", "true -> x.let"), ("C-36", "LaunchedEffect(-1)"), ("C-36", "LaunchedEffect('c')"), ("C-37", "remember(-1)"),
+                # 代碼審 r2:外層 if/when/try 自己掛在另一個分支底下(else if 鏈、巢狀 if、if 裡的 when 或 try)(g1 c1);帶正號的小數(b1 c2)
+                ("C-34", "else if (d) { x.let"), ("C-34", "else if (d) x.let"), ("C-34", "if (c) if (d) x.let"),
+                ("C-34", "for (i in list) if (c) x.let"), ("C-34", "if (c) when (d)"), ("C-34", "if (c) try { x.let"),
+                ("C-34", "val q = if (c) 1 else if (d) x.let"), ("C-36", "LaunchedEffect(+2.5)"))
+
+
+def _cb2_util_block(text, rid, name):
+    """規則檔裡 id 是 rid 那一份文件的 utils 底下 name 那一段(到下一個同層鍵為止)的原文;找不到回 None。"""
+    import re as _re
+    for doc in _re.split(r"^---\s*$", text, flags=_re.M):
+        if _re.search(rf"^id:\s*{_re.escape(rid)}\s*$", doc, _re.M):
+            m = _re.search(rf"^  {_re.escape(name)}:\n(?:(?:    .*|)\n)*", doc, _re.M)
+            return m.group(0).rstrip() if m else None
+    return None
+
+
+def t_choice_samples_batch2():
+    """[第二批 S6] 真規則對第二批樣本檔:每條第二批規則命中該命中的、不命中不該命中的;不命中包含註解前的 `?.`、單獨成陳述的 `.let`、
+    頂層與完整套件名的 `combine`、常數 key 與沒有 key、具名 `block =` 的 LaunchedEffect、`remember()`、`remember(Unit)`、沒有尾隨 lambda 的
+    `remember(k)`。判準來源:計劃預期值表 S6 九列。翻紅釘:nul.yml 拿掉註解排除 → `// 取使用者` 下一行那條紅;C-36 拿掉字面值排除 →
+    `LaunchedEffect(Unit)` 那條紅。"""
+    kp = _ktpack()
+    tables, probs = kp.choice_tables(_choice_real_cat().read_text(encoding="utf-8"))
+    check("S6 真型錄讀得懂", not probs, str(probs)[:300])
+    have = {r["id"] for r in tables["choice"]}
+    lines = (kp.CHOICE / "samples" / "choice-batch2.kt").read_text(encoding="utf-8").split("\n")
+    for rid, snip in _CB2_S6_MISS:
+        if rid not in have:
+            continue
+        nxt = [i for i, ln in enumerate(lines) if snip in ln]
+        # 註解那一筆:標記在註解下一行(`?.` 那一行)
+        ok = any(f"MISS {rid}" in ln for i in nxt for ln in (lines[i], lines[i + 1] if i + 1 < len(lines) else ""))
+        check(f"S6 樣本有 {rid} 的不命中寫法 {snip!r} 並標 MISS", ok, str(nxt))
+    # 照抄的規則片段要一字不差(ast-grep 的 utils 只在同一份規則文件裡有效,只能各抄一份;代碼審 r1 g3)
+    api = (kp.CHOICE / "rules-choice" / "api.yml").read_text(encoding="utf-8")
+    sbr = (kp.CHOICE / "rules-choice" / "sbr.yml").read_text(encoding="utf-8")
+    pairs = [("C-36 與 C-37 的 literal-arg", _cb2_util_block(api, "C-36", "literal-arg"), _cb2_util_block(api, "C-37", "literal-arg"), {"C-36", "C-37"}),
+             ("C-34 與 sbr.yml(C-18)的 value-pos", _cb2_util_block(api, "C-34", "value-pos"), _cb2_util_block(sbr, "C-18", "value-pos"), {"C-34"})]
+    for label, a, b, need in pairs:
+        if need <= have:
+            check(f"S6 照抄的規則片段一致:{label}", a is not None and a == b, f"{a!r}\n{b!r}"[:400])
+    sg = _ktpack_sg()
+    if not sg:
+        print("  (本機沒有 ast-grep,樣本只核了標記;CI 裝了 0.51.1 會跑真規則)")
+        return
+    bad = [x for x in kp.choice_sample_problems(sg, tables) if "choice-batch2.kt" in x[1] or x[0] in have - {f"C-{i}" for i in range(1, 32)}]
+    check("S6 第二批樣本:每個 HIT 都中、每個 MISS 都沒中,第二批每列都有 HIT", bad == [], str(bad)[:400])
+
+
+# 加入第二批列之前(2026-11-17,實作第一步)跑出來的既有樣本挑法:(檔, 行, 狀態, 列, 樣板, new_sha);含第二批語法的 2 行不收
+_CB2_S7_PIN = (
+    ('arid.kt', 6, 'arid', None, None, None), ('arid.kt', 7, 'arid', None, None, None), ('arid.kt', 8, 'arid', None, None, None),
+    ('arid.kt', 9, 'arid', None, None, None), ('arid.kt', 10, 'mutant', 'C-18', 'delete', 'f284f804e6fd94bb'),
+    ('arid.kt', 11, 'mutant', 'C-18', 'delete', 'f284f804e6fd94bb'), ('arid.kt', 15, 'arid', None, None, None),
+    ('arid.kt', 16, 'arid', None, None, None), ('arid.kt', 17, 'arid', None, None, None),
+    ('arid.kt', 18, 'mutant', 'C-1', '$A < $B', '6a3208f17a30773b'), ('arid.kt', 22, 'arid', None, None, None),
+    ('arid.kt', 23, 'mutant', 'C-1', 'false', '290b1b565b4ce109'), ('arid.kt', 24, 'mutant', 'C-17', '!$X', 'a3880b1dd21ab976'),
+    ('arid.kt', 28, 'arid', None, None, None), ('arid.kt', 29, 'arid', None, None, None),
+    ('arid.kt', 30, 'mutant', 'C-18', 'delete', '14401973c90e1c6a'), ('arid.kt', 34, 'arid', None, None, None),
+    ('arid.kt', 35, 'arid', None, None, None), ('arid.kt', 36, 'mutant', 'C-18', 'delete', 'c34bb3f648063a4b'),
+    ('arid.kt', 40, 'arid', None, None, None), ('arid.kt', 46, 'arid', None, None, None), ('arid.kt', 48, 'arid', None, None, None),
+    ('arid.kt', 50, 'none', None, None, None), ('arid.kt', 54, 'arid', None, None, None),
+    ('arid.kt', 55, 'mutant', 'C-5', '$A != $B', 'a3d25a1d8259a76e'), ('arid.kt', 59, 'arid', None, None, None),
+    ('arid.kt', 60, 'arid', None, None, None), ('arid.kt', 61, 'mutant', 'C-1', '$A < $B', '26937e3fdd47bf66'),
+    ('arid.kt', 65, 'arid', None, None, None), ('arid.kt', 66, 'mutant', 'C-17', '!$X', '4b4d234e06a99dc8'),
+    ('arid.kt', 71, 'arid', None, None, None), ('arid.kt', 72, 'arid', None, None, None), ('arid.kt', 77, 'arid', None, None, None),
+    ('arid.kt', 78, 'mutant', 'C-1', '$A <= $B', '3e601cde16f6024c'), ('arid.kt', 82, 'arid', None, None, None),
+    ('arid.kt', 83, 'arid', None, None, None), ('arid.kt', 84, 'mutant', 'C-18', 'delete', '523055d822ce9ca3'),
+    ('chain.kt', 7, 'mutant', 'C-28', 'flatMapConcat', '7038478586a7ab21'), ('choice.kt', 6, 'mutant', 'C-17', '!$X', '1f747aed0b89030a'),
+    ('choice.kt', 7, 'mutant', 'C-2', '$A <= $B', '2e415586d7c4802d'), ('choice.kt', 8, 'mutant', 'C-10', 'true', '1ac02f643f17725f'),
+    ('choice.kt', 9, 'mutant', 'C-4', 'true', '8930709a5adb1399'), ('choice.kt', 10, 'mutant', 'C-5', '$A != $B', '7c33a0528f9588ab'),
+    ('choice.kt', 11, 'mutant', 'C-6', '$A == $B', '309c01a7d784e226'), ('choice.kt', 12, 'mutant', 'C-7', '$A !== $B', '4b52b5d1a51d4884'),
+    ('choice.kt', 13, 'mutant', 'C-8', '$A === $B', 'ddbaeb4589148e51'), ('choice.kt', 17, 'mutant', 'C-11', '$A / $B', '3e01b98fd8a6230a'),
+    ('choice.kt', 18, 'mutant', 'C-12', '$A + $B', 'bde4e328c8e68e38'), ('choice.kt', 19, 'mutant', 'C-13', '$A', 'c4044b83522480c9'),
+    ('choice.kt', 20, 'mutant', 'C-14', '$A % $B', '01ac464470d1f6a0'), ('choice.kt', 21, 'mutant', 'C-15', '$A * $B', 'ce083080c5259b87'),
+    ('choice.kt', 22, 'mutant', 'C-11', '$A - $B', 'c3f8abcf69147881'), ('choice.kt', 26, 'mutant', 'C-16', '$B', '1e9630ca9f7a6153'),
+    ('choice.kt', 27, 'mutant', 'C-17', '!$X', '59d6d24f8fb73269'), ('choice.kt', 28, 'mutant', 'C-17', '!$X', '90484b88ab88be7d'),
+    ('choice.kt', 35, 'mutant', 'C-18', 'delete', 'd0f42b819ace9778'), ('choice.kt', 36, 'mutant', 'C-18', 'delete', 'd0f42b819ace9778'),
+    ('choice.kt', 44, 'mutant', 'C-18', 'delete', '1a0f564ddc603945'), ('choice.kt', 47, 'mutant', 'C-17', '!$X', 'd8c1dd16e79d3ab4'),
+    ('choice.kt', 50, 'mutant', 'C-18', 'delete', '1a0f564ddc603945'), ('choice.kt', 51, 'mutant', 'C-18', 'delete', '06bb2f5b47e565c3'),
+    ('choice.kt', 57, 'mutant', 'C-19', 'filterNot', '9463d4fdf56a7494'), ('choice.kt', 58, 'mutant', 'C-1', 'false', 'a6b1e3ba519c1a03'),
+    ('choice.kt', 59, 'mutant', 'C-21', 'none', '48c3cb5126f1ca54'), ('choice.kt', 60, 'mutant', 'C-1', '$A < $B', '4d8e5b9868fb3f10'),
+    ('choice.kt', 61, 'mutant', 'C-18', 'delete', 'f0bc4b67681a436a'),
+    ('choice.kt', 62, 'mutant', 'C-24', 'sortedByDescending', '493460ed9077a568'),
+    ('choice.kt', 63, 'mutant', 'C-25', 'sortedBy', 'b5b0d0a748edf7bd'),
+    ('choice.kt', 64, 'mutant', 'C-26', 'maxByOrNull', 'eb2e82e89a887478'),
+    ('choice.kt', 65, 'mutant', 'C-27', 'minByOrNull', '7dddf43d4dd1417a'), ('choice.kt', 66, 'mutant', 'C-18', 'delete', '9739c15e1528ba87'),
+    ('choice.kt', 67, 'mutant', 'C-18', 'delete', 'dd23cb4388a1fa23'), ('choice.kt', 68, 'mutant', 'C-18', 'delete', '53a6d9dce1fa3432'),
+    ('choice.kt', 69, 'mutant', 'C-18', 'delete', 'c58a14074655af66'), ('error.kt', 5, 'mutant', 'C-1', '$A <= $B', '696f0de1909a2b27'),
+    ('multibyte.kt', 5, 'mutant', 'C-1', 'false', '8012e547698b0064'), ('nested.kt', 5, 'mutant', 'C-11', '$B', 'ed2fae34e0fe8a6a'),
+    ('nested.kt', 6, 'mutant', 'C-11', '$A * $B', '4d9955c22834299a'), ('nested.kt', 7, 'mutant', 'C-1', '$A <= $B', '4fbb231294aa0064'),
+    ('nested.kt', 8, 'mutant', 'C-2', '$A <= $B', '4cf02c05a3a78fca'), ('nested.kt', 9, 'mutant', 'C-2', '$A >= $B', '4f83a9e7d383650a'),
+    ('nested.kt', 10, 'none', None, None, None),
+)
+
+
+def t_choice_points_batch2_stable():
+    """[第二批 S7] 第二批列加入後,只含第一版語法的既有樣本行挑出跟加入前相同的壞法(行指紋相同、壞法相同;加入前的結果在實作第一步跑一次、
+    釘在 _CB2_S7_PIN);第一版運算子列的運算元頂層含 `?:` 時照常產生、把那個運算元整個加括號,不當掉。判準來源:計劃預期值表 S7 兩列。
+    翻紅釘:第一版類別的相對順序改了(LCR 與 ROR 對調,洗牌前基準變了)→ 釘值那條紅(2026-11-17 實跑);`?:` 加進 _CHOICE_OP_RE →
+    `flag ?: false` 那條 KeyError 紅。"""
+    m, tables = _choice_tables_ip()
+    check("S7 `flag ?: false` 的頂層優先層級算得出來(表外運算子回 0,不當掉)", m._choice_top_prec("flag ?: false") == 0)
+    src = _choice_wrap("        val ok = flag ?: false && ready\n")
+    h = _choice_hit(src, "C-9", "flag ?: false && ready", mv={"A": "flag ?: false", "B": "ready"})
+    bb = src.encode("utf-8")
+    rows = {r["id"]: r for r in tables["choice"]}
+    _a, op = m._choice_anchor(bb, h, rows["C-9"])
+    edits = m._choice_edits(bb, h, rows["C-9"], op, "$A || $B")
+    out = bb
+    for s, e, rep in sorted(edits or [], reverse=True):
+        out = out[:s] + rep + out[e:]
+    check("S7 `val ok = flag ?: false && ready` 第一版 LCR 換 || → `(flag ?: false) || ready`",
+          b"val ok = (flag ?: false) || ready" in out, out.decode("utf-8")[-80:])
+    sg = _ktpack_sg()
+    if not sg:
+        print("  (本機沒有 ast-grep,釘值那半跳過;CI 裝了 0.51.1 會跑)")
+        return
+    import re as _re
+    smp = Path(GRAPHCTL).resolve().parents[1] / "configs" / "ast-grep" / "kotlin-choice" / "samples"
+    names = ["arid.kt", "chain.kt", "choice.kt", "error.kt", "multibyte.kt", "nested.kt"]
+    texts = {n: (smp / n).read_text(encoding="utf-8") for n in names}
+    scan, _v, bad = m._choice_scan(Path(GRAPHCTL).resolve().parents[1], texts, 120)
+    check("S7 既有樣本掃得完", not bad, str(bad))
+    got = []
+    for n in names:
+        lines = texts[n].split("\n")
+        for ent in m._choice_file_points(n, texts[n], list(range(1, len(lines) + 1)), scan.get(n, {"choice": [], "arid": [], "error": []}), tables):
+            if _re.search(r"\?\.|\?:|\blet\b|combine|LaunchedEffect|remember", lines[ent["line"] - 1]):
+                continue
+            mu = ent["mutant"] or {}
+            got.append((n, ent["line"], ent["status"], mu.get("row"), mu.get("template"), (mu.get("identity") or {}).get("new_sha")))
+    diff = [x for x in got if x not in _CB2_S7_PIN] + [x for x in _CB2_S7_PIN if x not in got]
+    check(f"S7 只含第一版語法的既有樣本行 {len(_CB2_S7_PIN)} 行:挑法跟加入前釘下的相同", not diff and len(got) == len(_CB2_S7_PIN), str(diff)[:500])
+
+
+def t_gov_stats_choice_by_row():
+    """[第二批 S8] gov --stats 選擇點段「依列號」:壞法以 (檔, 行指紋, 列號) 計,曾殺掉算殺掉、否則曾存活算存活、否則跑不出結果;
+    基準不綠沒跑的不算;同一行多筆放行只算最後一筆(照 UTC 秒數比,混時區偏移也對);沒有列號的放行另計;列號照數字排序、怪列號不讓整段當掉。
+    判準來源:計劃預期值表 S8 列(C-32 那一列數字照抄);C-9 那一列與時區、怪列號是代碼審 r1(a1、b1、b3、c2)補的。
+    翻紅釘:放行取第一筆或直接比字串 → C-32 放行變「不適用」紅;終態取最後一筆 → C-9 先殺掉後存活變存活、紅;不排除基準不綠 → 壞法 5 紅;
+    排序照字串 → C-32 排在 C-9 前面、紅;isdigit 擋不住上標數字 → `C-²` 那條例外紅。"""
+    import io
+    import contextlib
+    import json as _j
+    import shutil
+
+    def ev(commit, ts, row="C-32", **kw):
+        return _j.dumps({"ts": ts, "commit": commit, "gate": "choice-kill", "kind": "choice-kill", "hard": False, "nodes": [], "note": "x",
+                         "token": _os_mod.urandom(8).hex(), "file": _CHOICE_MAIN, "row": row, "attempt": 1, "via": "run", **kw},
+                        ensure_ascii=False) + "\n"
+
+    def wv(commit, ts, fp, label, **kw):
+        d = {"ts": ts, "commit": commit, "gate": "lint-new", "kind": "waived", "hard": False, "nodes": [], "note": "放行", "origin": "human",
+             "scope": "choice-kill", "label": label, "file": _CHOICE_MAIN, "fp": fp, "decl": "fun load() {", **kw}
+        return _j.dumps(d, ensure_ascii=False) + "\n"
+    t1, t2 = "2026-11-17T10:00:00+08:00", "2026-11-18T10:00:00+08:00"
+    # 丙的兩筆放行:字串較大的那筆其實較早(UTC 17 日 18:00,標「不適用」),字串較小的那筆較晚(UTC 17 日 20:00,標「等價」)
+    w_early, w_late = "2026-11-18T02:00:00+08:00", "2026-11-17T20:00:00+00:00"
+    rows = [ev("c1", t1, fp="甲", verdict="killed", killing_test="kotlin-junit:a"),
+            ev("c1", t1, fp="乙", verdict="survived"), ev("c1", t1, fp="乙", verdict="killed", killing_test="kotlin-junit:a"),
+            ev("c1", t1, fp="丙", verdict="survived"), wv("c1", w_early, "丙", "不適用", row="C-32"), wv("c2", w_late, "丙", "等價", row="C-32"),
+            ev("c1", t1, fp="丁", verdict="no_result", reason="編不過:Unresolved reference"),
+            ev("c1", t1, fp="戊", verdict="no_result", reason="基準不綠沒跑"), wv("c1", t1, "己", "不適用"),
+            ev("c1", t1, row="C-9", fp="庚", verdict="killed", killing_test="kotlin-junit:a"), ev("c2", t2, row="C-9", fp="庚", verdict="survived"),
+            # 辛:字串順序與實際先後一致的兩筆放行(先「不是需求」、後「等價」)→ 取最後一筆是「等價」;放行取第一筆會變「不是需求」
+            wv("c1", t1, "辛", "不是需求", row="C-9"), wv("c2", t2, "辛", "等價", row="C-9")]
+    root, vault = _stats_fixture("gctl-ckrow-", rows)
+    try:
+        seg = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        seg = seg[seg.find("依列號"):]
+        check("S8 依列號 C-32:壞法 4、殺掉 2、存活 1、跑不出結果 1、放行 等價 1(放行照 UTC 取最後一筆)",
+              "C-32:壞法 4、殺掉 2、存活 1、跑不出結果 1;放行 等價 1" in seg, seg[:600])
+        check("S8 沒有列號的放行另計 1", "沒有列號的放行 1" in seg, seg[:600])
+        check("S8 先殺掉、後存活的壞法仍算殺掉(C-9:殺掉 1、存活 0);同一行先後兩筆放行只算後面那筆「等價」",
+              "C-9:壞法 1、殺掉 1、存活 0、跑不出結果 0;放行 等價 1" in seg, seg[:600])
+        check("S8 列號照數字排序:C-9 在 C-32 前面", 0 <= seg.find("C-9:") < seg.find("C-32:"), seg[:600])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    m = _load_lumos_inproc()
+    odd = [{"gate": m._CHOICE_KILL_GATE, "kind": m._CHOICE_KILL_GATE, "row": "C-\u00b2", "verdict": "killed", "ck": {"file": "a.kt", "fp": "f"},
+            "attempt": 1, "via": "run", "ts": "t"}]
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            m._render_gov_choice(odd)
+        ok = "C-\u00b2:壞法 1" in out.getvalue()
+    except ValueError as e:
+        ok = f"ValueError {e}"
+    check("S8 帳上列號是 `C-²`(上標數字)→ 照印、排最後,不讓整段當掉(代碼審 r1 b3)", ok is True, str(ok) + out.getvalue()[-200:])
+    huge = [dict(odd[0], row="C-" + "9" * 5000), dict(odd[0], row="C-7")]
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            m._render_gov_choice(huge)
+        seg = out.getvalue()
+        ok = 0 <= seg.find("C-7:") < seg.find("C-999")
+    except ValueError as e:
+        ok = f"ValueError {str(e)[:80]}"
+    check("S8 帳上列號是 C- 加 5000 位數字 → 照印、排在 C-7 後面,不讓整段當掉(代碼審 r2 b2)", ok is True, str(ok))
 
 
 def _ckp_no_ast_grep_push():

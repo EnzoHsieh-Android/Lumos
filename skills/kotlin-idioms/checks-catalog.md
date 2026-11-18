@@ -1648,16 +1648,20 @@
 - 逐列查證(來源欄有〔查證 日期:網址〕):534 列;沒有的 1 列都是查不到權威原文、已標出處不全(2026-11-07 逐列查證,卷證見 [[Projects/Android寫法型錄逐列查證_計劃]];2026-11-08 使用者裁 API-14、TEST-31 標出處不全、DATA-12 照官方改寫並改成人裁列;同日再查,ARCH-3 等 6 列找到直接講到規則判定寫法的官方原文、拿掉出處不全;API-14、API-36、UI-103、TEST-31 查不到或跟官方相反,維持出處不全,五條規則移出規則包(其中 API-36 於 2026-11-09 依 CERT ERR51-J 拿掉出處不全,規則仍不在規則包),見 [[Projects/Android不接閘資安規則重量_計劃]])
 - 情境決策表列數:60(證據樣式:主寫 `(無)` 的 19 列、例外寫 `(無)` 的 37 列、兩段都 `(無)` 的 15 列;2026-11-09 補 D-58 到 D-60、D-38 停用;2026-11-08 用 check.py 的 dt_table 重數,先前寫的 8、31、5 已過期)
 - API 決策點:公開名稱 434(每列每個歸屬項各算一筆:D-n 62、撞名 4、決策不問主表列 18、決策不問代碼審 95、無決策 266;母體 kotlinx-coroutines-core 1.10.2,2026-11-12 用 check.py 的 _api_names 抽,含 jvm-only.txt 手列的 19 個)
-- 選擇點表:31 列;乾節點規則:14 列(2026-11-14 第一版,用 check.py 的 choice_tables 重數)
+- 選擇點表:37 列;乾節點規則:14 列(2026-11-14 第一版 31 列,2026-11-17 第二批加 6 列;用 check.py 的 choice_tables 重數)
 - 叫不出的壞寫法:111 個(改由:規則 5、範本 0、代碼審 104、不是寫法 2;2026-11-12 用 check.py 的反查重數,補了 D-4、D-5、D-8、D-9 的觸發字之後)
 
 ## 選擇點表
 
-改動選擇點([[Projects/改動選擇點都要有需求守住_計劃]])的壞法來源:每列一個語法節點(ast-grep 規則,`configs/ast-grep/kotlin-choice/rules-choice/` 裡 id 等於列號的那條)對應一組一對一機械壞法,照 Google 差異式變異測試(論文〈Practical Mutation Testing at Scale〉https://arxiv.org/pdf/2102.11378 ,以下稱「論文」)表 1 的五個運算子,外加 Kotlin API 兄弟寫法(MutApi 形狀)。`lumos choice-points` 讀這張表與下一張〈乾節點規則〉,改到的每一行最多挑一個壞法(論文 4.1 Listing 2)。
+改動選擇點([[Projects/改動選擇點都要有需求守住_計劃]])的壞法來源:每列一個語法節點(ast-grep 規則,`configs/ast-grep/kotlin-choice/rules-choice/` 裡 id 等於列號的那條)對應一組一對一機械壞法,照 Google 差異式變異測試(論文〈Practical Mutation Testing at Scale〉https://arxiv.org/pdf/2102.11378 ,以下稱「論文」)表 1 的五個運算子,外加 Kotlin API 兄弟寫法(MutApi 形狀)與 null-safety 運算子(NUL 類:`?:`、`?.`;第二批,[[Projects/選擇點表第二批常見誤用寫法_計劃]])。`lumos choice-points` 讀這張表與下一張〈乾節點規則〉,改到的每一行最多挑一個壞法(論文 4.1 Listing 2)。
 
-欄位:ast-grep 規則寫「`規則檔` 樣式或說明」,規則檔在 `rules-choice/` 底下、裡面要有 id 等於列號的規則;錨點只用「運算子」「運算元起始」「陳述起始」「方法名」四種,決定這一列用哪個記號的所在行判「在改到的行上」;候選壞法是反引號包住的樣板(`$A`、`$B` 是規則的後設變數、`$X` 是命中的節點本身;API 列是換成的方法名),或「(刪掉)」「(拿掉呼叫)」;型別前提只用「(無)」「運算元有 null 字面值」「運算元是字串」三種(論文 3.2.1:編不過的壞法事前擋);需補的 import 是兄弟寫法的完整名稱,檔頭逐一 import 了原寫法時自動補那一行;對應決策表寫〈情境決策表〉的列號,沒有寫 —。跟決策表的分工:決策表每列是「要看情境判」的題目,這張每列是一對一機械壞法;重疊的成員用列號互指,壞法只有這張表一個來源。
+欄位:ast-grep 規則寫「`規則檔` 樣式或說明」,規則檔在 `rules-choice/` 底下、裡面要有 id 等於列號的規則;錨點只用「運算子」「運算元起始」「陳述起始」「方法名」「安全呼叫符」「引數」六種,決定這一列用哪個記號的所在行判「在改到的行上」(安全呼叫符是 `?.` 那兩個字元所在行;引數是規則命中的引數清單裡第一個改到的行,引數跨多行、只改中間某個 key 也算);候選壞法是反引號包住的樣板(`$A`、`$B` 是規則的後設變數、`$X` 是命中的節點本身;API 列是換成的方法名;安全呼叫符列的 `!!.` 是把 `?.` 換成 `.`、在它前面最後一個非空白字元之後接 `!!`;引數列的樣板直接蓋掉整個引數清單、(刪掉)刪掉整個引數清單;`$A!!` 的 `$A` 不是單一記號時先包括號),或「(刪掉)」「(拿掉呼叫)」;型別前提只用「(無)」「運算元有 null 字面值」「運算元是字串」三種(論文 3.2.1:編不過的壞法事前擋);需補的 import 是兄弟寫法的完整名稱,檔頭逐一 import 了原寫法時自動補那一行;對應決策表寫〈情境決策表〉的列號,沒有寫 —。跟決策表的分工:決策表每列是「要看情境判」的題目,這張每列是一對一機械壞法;重疊的成員用列號互指,壞法只有這張表一個來源。
 
 不收(單元測試分不出或常掛住):`first`/`last`、`take`/`takeLast`、`drop`/`dropLast`、`collectLatest`/`collect`、`coroutineScope`/`supervisorScope`、`Dispatchers.*`、`SharingStarted.*`、`flowOn`、`buffer`、`conflate`(論文附錄 A.1.4 時間類、A.3.2 被假實作換掉)。
+
+第二批(C-32 起,2026-11-17,[[Projects/選擇點表第二批常見誤用寫法_計劃]]):網上有公開來源點名「常被誤用、換成兄弟寫法照樣編得過、行為卻不同、單元測試分得出」的空值處理、範圍函式、Flow 合併與 Compose 副作用寫法。不收:`runCatching` 改寫與 Flow `catch` 換位置(多節點)、頂層 `combine(a, b)` 換 `zip`(`zip` 沒有頂層版本,換了必定編不過)、`launch`↔`async` 這類回傳型別不同的互換、`remember`↔`rememberSaveable`(單元測試分不出)、`==`→`===`(論文附錄 A.1.23 只換對應的否定)。
+
+已撤列號:(無)
 
 | 列號 | 類別 | ast-grep 規則 | 錨點 | 候選壞法 | 型別前提 | 需補的 import | 對應決策表 | 為什麼行為不同 | 出處 |
 |---|---|---|---|---|---|---|---|---|---|
@@ -1692,6 +1696,12 @@
 | C-29 | API | `api.yml` `$R.flatMapConcat` 後接呼叫 | 方法名 | `flatMapMerge` | (無) | `kotlinx.coroutines.flow.flatMapMerge` | D-4 | 依序做完對上同時做、結果交錯 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
 | C-30 | API | `api.yml` `$R.flatMapMerge` 後接呼叫 | 方法名 | `flatMapConcat` | (無) | `kotlinx.coroutines.flow.flatMapConcat` | D-4 | 同時做對上依序做 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
 | C-31 | API | `api.yml` `$R.distinctUntilChanged` 後接呼叫 | 方法名 | (拿掉呼叫) | (無) | (無) | — | 連續相同的值會再送一次 | MutApi(API 兄弟寫法改寫表);論文2.2 |
+| C-32 | NUL | `nul.yml` `$A ?: $B` | 運算子 | `$A!!` | 運算元有 null 字面值 | (無) | — | 遇到 null 從用預設值變成當掉 | Kotlin 官方 null safety https://kotlinlang.org/docs/null-safety.html ;Detekt UnsafeCallOnNullableType https://detekt.dev/docs/rules/potential-bugs ;論文表 1 形狀 |
+| C-33 | NUL | `nul.yml` navigation_suffix 開頭的 `?.`(前一個兄弟節點是註解時不收) | 安全呼叫符 | `!!.` | (無) | (無) | — | 遇到 null 從略過變成當掉 | Kotlin 官方 null safety https://kotlinlang.org/docs/null-safety.html ;Detekt UnsafeCallOnNullableType https://detekt.dev/docs/rules/potential-bugs |
+| C-34 | API | `api.yml` `$R.let` 後接呼叫、回傳值確定被用到(`sbr.yml` 的 value-pos,再排除外層 if/when/try 自己掛在另一個分支底下的位置) | 方法名 | `also` | (無) | (無) | — | 回傳值從區塊結果變成接收者本身 | Kotlin 官方範圍函式 https://kotlinlang.org/docs/scope-functions.html ;MutApi(API 兄弟寫法改寫表) |
+| C-35 | API | `api.yml` 接收者寫法 `$R.combine` 後接呼叫(完整套件名的頂層呼叫不收) | 方法名 | `zip` | (無) | `kotlinx.coroutines.flow.zip` | D-5、D-6 | 任一邊有新值就輸出對上兩邊成對才輸出 | Kotlin 官方 Flow https://kotlinlang.org/docs/flow.html ;MutApi(API 兄弟寫法改寫表) |
+| C-36 | API | `api.yml` `LaunchedEffect(…)` 帶尾隨 lambda、引數不全是字面值的引數清單 | 引數 | `(Unit)` | (無) | (無) | D-32 | key 變了不重跑 | Android 官方 Compose 副作用 https://developer.android.com/develop/ui/compose/side-effects |
+| C-37 | API | `api.yml` `remember(…)` 帶尾隨 lambda、引數不全是字面值的引數清單 | 引數 | (刪掉) | (無) | (無) | — | 參數變了還顯示舊值 | Android 官方 Compose 狀態 https://developer.android.com/develop/ui/compose/state |
 
 ## 乾節點規則
 

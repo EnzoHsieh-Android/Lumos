@@ -1,0 +1,177 @@
+diff --git a/configs/ast-grep/kotlin-choice/rules-choice/api.yml b/configs/ast-grep/kotlin-choice/rules-choice/api.yml
+index 7089bb0f7..36e96d850 100644
+--- a/configs/ast-grep/kotlin-choice/rules-choice/api.yml
++++ b/configs/ast-grep/kotlin-choice/rules-choice/api.yml
+@@ -228,22 +228,23 @@ utils:
+         - kind: boolean_literal
+         - kind: null_literal
+         - kind: integer_literal
+         - kind: real_literal
+         - kind: long_literal
+         - kind: hex_literal
+         - kind: bin_literal
+         - kind: unsigned_literal
+         - kind: character_literal
+         - all:
+-            # 帶正負號的數字:看結構不看文字開頭,運算元本身要是數字常數(-1.coerceAtLeast(k) 的運算元是呼叫,不算;代碼審 r2 b1 c2)
+-            - {kind: prefix_expression, regex: '^[-+]'}
++            # 帶正負號的數字:看結構不看文字開頭,運算元本身要是數字常數(-1.coerceAtLeast(k) 的運算元是呼叫,不算;代碼審 r2 b1 c2)。
++            # 不比對開頭的 -、+:數字常數前面能接的前綴只有正負號與標註,標註加常數(@Suppress("x") 1)仍是常數(代碼審 r5 c3)
++            - kind: prefix_expression
+             - has: {nthChild: {position: 1, reverse: true}, any: [{kind: integer_literal}, {kind: real_literal}, {kind: long_literal}, {kind: hex_literal}, {kind: bin_literal}, {kind: unsigned_literal}]}
+         - all:
+             - kind: string_literal
+             - not: {has: {any: [{kind: interpolated_identifier}, {kind: interpolated_expression}], stopBy: end}}
+ rule:
+   kind: value_arguments
+   has: {kind: value_argument, not: {matches: literal-arg}}
+   # 父節點是帶尾隨 lambda 的 call_suffix、祖父是呼叫 LaunchedEffect 的 call_expression。寫成雙重否定:正面寫 inside 時外層呼叫連同整個
+   # 尾隨 lambda 被當次要標記塞進每個命中,巢狀 LaunchedEffect 的輸出平方成長(代碼審 code-選擇點第二批 r1 r2:巢狀 150 層 57MB → 0.1MB)
+   not:
+@@ -273,22 +274,23 @@ utils:
+         - kind: boolean_literal
+         - kind: null_literal
+         - kind: integer_literal
+         - kind: real_literal
+         - kind: long_literal
+         - kind: hex_literal
+         - kind: bin_literal
+         - kind: unsigned_literal
+         - kind: character_literal
+         - all:
+-            # 帶正負號的數字:看結構不看文字開頭,運算元本身要是數字常數(-1.coerceAtLeast(k) 的運算元是呼叫,不算;代碼審 r2 b1 c2)
+-            - {kind: prefix_expression, regex: '^[-+]'}
++            # 帶正負號的數字:看結構不看文字開頭,運算元本身要是數字常數(-1.coerceAtLeast(k) 的運算元是呼叫,不算;代碼審 r2 b1 c2)。
++            # 不比對開頭的 -、+:數字常數前面能接的前綴只有正負號與標註,標註加常數(@Suppress("x") 1)仍是常數(代碼審 r5 c3)
++            - kind: prefix_expression
+             - has: {nthChild: {position: 1, reverse: true}, any: [{kind: integer_literal}, {kind: real_literal}, {kind: long_literal}, {kind: hex_literal}, {kind: bin_literal}, {kind: unsigned_literal}]}
+         - all:
+             - kind: string_literal
+             - not: {has: {any: [{kind: interpolated_identifier}, {kind: interpolated_expression}], stopBy: end}}
+ rule:
+   kind: value_arguments
+   has: {kind: value_argument, not: {matches: literal-arg}}
+   # 父節點是帶尾隨 lambda 的 call_suffix、祖父是呼叫 remember 的 call_expression。寫成雙重否定:正面寫 inside 時外層呼叫連同整個
+   # 尾隨 lambda 被當次要標記塞進每個命中,巢狀 remember 的輸出平方成長(代碼審 code-選擇點第二批 r1 r2:巢狀 150 層 57MB → 0.1MB)
+   not:
+diff --git a/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt b/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
+index f604fb47c..9742449a7 100644
+--- a/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
++++ b/configs/ast-grep/kotlin-choice/samples/choice-batch2.kt
+@@ -45,30 +45,45 @@ fun scope(x: Int?, list: List<Int?>, c: Boolean) {
+     val lc = list.map {
+         x.let { it + 1 } // HIT C-34
+     }
+     val mc = list.map {
+         x.let { it + 1 } /* 註 */ // HIT C-34
+     }
+     val ys = list.map { x.let { go(it) }; 1 } // MISS C-34
+     val v2 = if (c) { x.let { go(it) }; 5 } else 0 // MISS C-34
+     if (c) when (d) { true -> { go(); x.let { show(it) } }; else -> go() } // MISS C-34
+     val al = x.also { it + 1 } // MISS C-34
++    // 第五輪補齊:if 區塊最後一個陳述後接註解、finally 不是值、方法名頭尾、點號前後空白、沒有呼叫(代碼審 r5 b1 c1 c2)
++    val v3 = if (c) {
++        go(); x.let { it + 1 } // HIT C-34
++    } else 0
++    val t3 = try { go() } finally { x.let { it + 1 } } // MISS C-34
++    val lx = x.letX { it } // MISS C-34
++    val sp = x . let { it + 1 } // HIT C-34
++    run { x.let } // MISS C-34
+     done()
+ }
+ 
+ fun flows(a: Flow<Int>, b: Flow<Int>) {
+     val f = a.combine(b) { x, y -> x + y } // HIT C-35
+     val g = combine(a, b) { x, y -> x + y } // MISS C-35
+     val h = kotlinx.coroutines.flow.combine(a, b) { x, y -> x + y } // MISS C-35
+     val z = a.zip(b) { x, y -> x + y } // MISS C-35
+     // 沒有呼叫的屬性存取不收(代碼審 r4)
+     val p = a.combine // MISS C-35
++    // 安全呼叫、點號前後空白、名字頭尾、完整套件名只認整串(代碼審 r5 c1 c4)
++    val f1 = a?.combine(b) { x, y -> x + y } // HIT C-35
++    val f3 = a.combineLatest(b) { x, y -> x + y } // MISS C-35
++    val f5 = a . combine(b) { x, y -> x + y } // HIT C-35
++    val f7 = kotlinx.coroutines
++        .flow.combine(a, b) { x, y -> x + y } // MISS C-35
++    val f8 = my.kotlinx.coroutines.flow.combine(a, b) { x, y -> x + y } // HIT C-35
+ }
+ 
+ @Composable
+ fun effects(userId: String, id: Int, k: Int, items: List<Int>) {
+     LaunchedEffect(userId, id) { load(userId, id) } // HIT C-36
+     LaunchedEffect("user_$id") { load() } // HIT C-36
+     LaunchedEffect(Unit) { load() } // MISS C-36
+     LaunchedEffect("init") { load() } // MISS C-36
+     LaunchedEffect(key1 = Unit) { load() } // MISS C-36
+     LaunchedEffect() { load() } // MISS C-36
+@@ -89,24 +104,32 @@ fun effects(userId: String, id: Int, k: Int, items: List<Int>) {
+     LaunchedEffect(1u) { load() } // MISS C-36
+     LaunchedEffect(-1L) { load() } // MISS C-36
+     LaunchedEffect(-0x1F) { load() } // MISS C-36
+     LaunchedEffect(-0b1) { load() } // MISS C-36
+     LaunchedEffect(-1u) { load() } // MISS C-36
+     // 字串插值兩種寫法與方法名比對各一行(代碼審 r4 c2)
+     LaunchedEffect("k${id}") { load() } // HIT C-36
+     LaunchedEffectCompat(k) { load() } // MISS C-36
+     LaunchedEffect(k + 1) { load() } // HIT C-36
+     run(k) { load() } // MISS C-36 C-37
++    // 名字頭尾錨點、Unit 只認整個名字、帶號的是運算式不是常數、標註加常數仍是常數(代碼審 r5 c1 c3)
++    MyLaunchedEffect(k) { load() } // MISS C-36
++    LaunchedEffect(distanceUnit) { load() } // HIT C-36
++    LaunchedEffect(UnitX) { load() } // HIT C-36
++    LaunchedEffect(-k + 1) { load() } // HIT C-36
++    LaunchedEffect(@Suppress("x") 1) { load() } // MISS C-36
+     val r1 = remember(k) { items.sorted() } // HIT C-37
+     val r2 = remember<Int>(k) { 3 } // HIT C-37
+     val r3 = remember() { 3 } // MISS C-37
+     val r4 = remember(Unit) { 3 } // MISS C-37
+     val r7 = remember(-1) { 3 } // MISS C-37
+     val r8 = remember(-1.0.coerceAtLeast(k)) { 3 } // HIT C-37
+     val r5 = remember(k) // MISS C-37
+     val r9 = remember("k${id}") { 3 } // HIT C-37
+     val r10 = rememberSaveable(k) { 3 } // MISS C-37
++    val r11 = myremember(k) { 3 } // MISS C-37
++    val r12 = remember(distanceUnit) { 3 } // HIT C-37
+     val r6 = remember( // HIT C-37
+         items,
+         k,
+     ) { items.size + k }
+ }
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 89cb74e59..f0978f436 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -146010,28 +146010,29 @@ def t_choice_table_batch2():
+     check("S5 全形冒號 `已撤列號：C-40` 照認、表裡又有 C-40 → 擋(代碼審 r1 g1)", any(a == "C-40" and "已撤" in b for a, b in probs), str(probs)[:300])
+     for label, swap in (("前面帶清單符號", "- 已撤列號:C-40"), ("多寫一行", "已撤列號:(無)\n\n已撤列號:C-40"), ("粗體", "**已撤列號:**C-40"),
+                         ("前面縮排(代碼審 r2)", "  已撤列號:C-40")):
+         _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=row40).replace("已撤列號:C-40", swap), rules_dir=False)
+         check(f"S5 已撤列號那行{label} → 報看不懂、不當成沒有(代碼審 r1 b2)", any("恰好一行" in b for _a, b in probs), str(probs)[:300])
+     for label, rid in (("全形數字", "C-４０"), ("前導零", "C-040"), ("全形混半形", "C-４0")):
+         _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired=rid, extra=row40), rules_dir=False)
+         check(f"S5 已撤列號寫成{label}「{rid}」→ 報看不懂,不當成另一個列號(代碼審 r3 b1)",
+               any("已撤列號那一行要寫" in b for _a, b in probs), str(probs)[:300])
+     # 表的那一側:列號寫成前導零或全形數字時字串跟撤號比不上,規則 id 跟著寫成同樣的樣子就整個繞過(代碼審 r4 g1 c3 b1)
+-    for label, rid in (("前導零", "C-040"), ("全形數字", "C-４０"), ("全形混半形", "C-4０")):
++    for label, rid in (("前導零", "C-040"), ("全形數字", "C-４０"), ("全形混半形", "C-4０"), ("零", "C-0")):
+         bad_row = row40.replace("| C-40 |", f"| {rid} |")
+         _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=bad_row), rules_dir=False)
+         check(f"S5 表裡列號寫成{label}「{rid}」→ 報列號寫法不對,不靜默繞過撤號(代碼審 r4 g1)",
+               any(a == rid and "列號要寫成" in b for a, b in probs), str(probs)[:300])
+-    _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="(無)", extra="").replace("| A-1 |", "| A-01 |"), rules_dir=False)
+-    check("S5 乾節點表列號寫成前導零「A-01」→ 同樣報列號寫法不對(代碼審 r4 g1)", any(a == "A-01" and "列號要寫成" in b for a, b in probs),
+-          str(probs)[:300])
++    for arid in ("A-01", "A-0"):  # A-0:列號不准是零(代碼審 r5 b2)
++        _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="(無)", extra="").replace("| A-1 |", f"| {arid} |"), rules_dir=False)
++        check(f"S5 乾節點表列號寫成「{arid}」→ 同樣報列號寫法不對(代碼審 r4 g1)", any(a == arid and "列號要寫成" in b for a, b in probs),
++              str(probs)[:300])
+     d = Path(tempfile.mkdtemp(prefix="gctl-cb2rules-")) / "kotlin-choice"
+     _sh.copytree(kp.CHOICE, d)
+     (d / "rules-choice" / "zz.yml").write_text("id: C-40\nlanguage: kotlin\nrule:\n  kind: navigation_suffix\n", encoding="utf-8")
+     _t, probs = kp.choice_tables(_CB2_SYN_CAT.format(retired="C-40", extra=""), rules_dir=d)
+     check("S5 `已撤列號:C-40`、規則檔裡還有 id C-40 → 擋並指出", any(a == "C-40" and "已撤" in b for a, b in probs), str(probs)[:300])
+     (d / "samples" / "zz.kt").write_text("fun z() {\n    go() // MISS C-99\n}\n", encoding="utf-8")
+     t_real, _p = kp.choice_tables(real)
+     got = kp.choice_sample_mark_problems(t_real, rules_dir=d)
+     check("S5 樣本有 `// MISS C-99`、表裡沒有 C-99 → 報那個標記(不用 ast-grep)", any(a == "C-99" and "zz.kt" in b for a, b in got), str(got)[:300])
+     check("S5 真樣本的標記都指向表裡有的列號", kp.choice_sample_mark_problems(t_real) == [], str(kp.choice_sample_mark_problems(t_real))[:300])
