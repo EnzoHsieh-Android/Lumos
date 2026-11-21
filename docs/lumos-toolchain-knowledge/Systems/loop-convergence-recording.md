@@ -216,3 +216,15 @@ WHY:分級 standard/high 的迴圈每筆記帳都帶 `--round`;寫進去會讓�
 - 記帳成功後,帶了 `--report`/`--snapshot`/`--intake` 的,stderr 提醒一行「指紋已經寫進帳,更正另開一份檔」;超過範圍軟上限的提醒多一句拆包審時填該席那一包。
 - 「載體最後記」([[Projects/代碼審minor解綁_計劃]]):同一輪已經有帶 `--finding-source` 的載體之後,再記同輪任何一席都擋——新報告會讓逐條放行的核對失效;要補只能記下一輪。被擋的是資安席時多印一句「記到下一輪(例如 r2),已到上限先 cap-decision」,判斷不動。
 - REVISIT:2026-12-15 數這段期間新增的 scope_oversize 帳列裡同輪派工單是拆包(各席材料不同)的有幾筆;還有就另開計劃擴 _roster_dispatch_entries 回每席材料,在記帳當下核對
+
+## 發現出自哪一席(2026-11-21,[[Projects/代碼審發現記出處席位_計劃]])
+
+WHY:載體記帳多一欄 `finding_seats`(`--finding-seat <id>=<席名>`,可重複),生效日後新開的代碼審迴圈必填,處置閘與任何推送前閘都不讀它 [出處:[[Projects/代碼審發現記出處席位_計劃]] 設計審 r1] [因:審查帳記得住每條發現的去向、記不住是誰報的,逐席沒用率只能靠「只有一席報東西的輪」猜] [不選:沿用 `--finding-source`;規定編號字首等於席位;只提醒不擋] [test:t_canary_record_finding_seat]
+
+- 寫側兩段:形式與涵蓋在 `cmd_canary` 的處置集合區呼叫 `_finding_seat_parse`(跟 `--finding-kind` 同規矩,給了就要涵蓋發現清單加重現不到清單);必填與席名比對在讀同迴圈帳之後的 `_finding_seat_write_block`(必填那半拆在 `_finding_seat_required_block`)。必填=迴圈不是設計審(`_roster_kind`,`code` 開頭看不出的從嚴)、首筆帳(沒有帳就看本筆)不早於 `_FINDING_SEAT_SINCE`;帳上有時間讀不動的列時判不了生效前後,不放行。席名去空白、NFC 後比同輪帳上的 `auditor`,帳上存比中那筆的原字串。沒帶 `--loop` 卻帶 `--finding-seat` 直接擋(沒有同輪帳可對)。三種擋下留 canary blocked 事件 `finding-seat-missing`、`finding-seat-unknown`、`finding-seat-badts`,在擋下處直接呼叫 `_gate_event_or_warn`(跟 `refuted-set-missing` 同寫法),迴圈名與席名過一次既有的 `_esc_clean`;本筆時間早於生效日就直接不必填,帳上有壞時間的列也不擋(生效日退回 9999 時才真的變回選填),本筆不早於生效日才看首筆與壞列;席名比不中時列出的同輪席名用 repr 印。派工與記帳的席名不帶輪次(寫 `正確性-sonnet`)。
+- 生效日常數比帳上時間,寫法同 `_SECURITY_SEAT_SINCE`;另有 `LUMOS_FINDING_SEAT_SINCE` 覆寫(收純日期或帶時區時間,純日期當台北 00:00,跟其他 `*_SINCE` 一樣),測試總檔預設 `9999-12-31`,既有造帳測試停在生效前。覆寫把照常數本來要填的那筆推遲時,stderr 提醒一行並留 canary warned 事件 `finding-seat-since-overridden`(殘留在 shell 的覆寫不能靜默關掉必填,事後也查得到)。覆寫收純日期又比帳上時間,是兩種既有生效日寫法的組合:帳上時間要跨時區比得對(`_SECURITY_SEAT_SINCE` 那套),測試又要能推到未來(`_choice_since` 那套)。
+- 讀側:`_GOV_FIELD_TYPES` 與 canary mapper 都收這欄,型別檢查共用 `_finding_sources_typed`(值是字串清單)。`gov --stats` 的「逐席沒用率」段(`_render_seat_noise`,窗口、取載體、計數各拆一支 `_seat_noise_window_start`/`_seat_noise_carriers`/`_seat_noise_counts`):近 56 天(跟 `--since` 取較短)、每筆載體列各算一次(id 每輪重編,不跨列去重)、同一 (迴圈, 輪) 只取最後一筆、折入=有用、放行或重現不到=沒用、席名先去前後空白與 NFC,再只去夾在角色與模型尾碼之間的輪次記號(`_seat_noise_name`,線性、不用會回溯的尾端正規式;尾碼開頭的 `r2-`、中文角色尾巴緊跟的 `r2`/`2`;數字自成一段的 `正確性-2`、`外家codex-5`、模型名裡的數字與英文字尾的 r 不動;舊帳裡 `鏡頭1`、`鏡頭2` 這種鏡頭編號跟輪次分不出來,會併成同一列,新席名照規定不帶編號)、不併模型、沒有迴圈的列不算、不到 10 條標樣本少、沒資料整段不印。
+- `loop next` 的載體範本在不是設計審時多印 ` --finding-seat <id=席名>`;派工階段的提示清單對每個分級的代碼審都加一條「載體最後記、席名不帶輪次」(所以 high 代碼審現在印三條,[[Projects/記帳與迴圈工具小修_計劃]] S27 寫的「兩條」是它當時的範圍)。
+- 逐席段自帶 56 天窗口(其他統計段只吃 `--since`):使用者 2026-11-21 裁「只看近期」,模型換代才不會跟舊數字混在一起;窗口從 gov 傳入的起算點與現在往前 56 天取較晚的。
+- [[Systems/canary-audit]] d4 否決的「跨期統計/席位信譽」不涵蓋這一欄(使用者 2026-11-21 裁,差別寫在計劃〈舊否決比對〉)。
+

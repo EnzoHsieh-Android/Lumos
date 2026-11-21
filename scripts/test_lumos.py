@@ -159,6 +159,7 @@ _os_mod.environ.setdefault("LUMOS_PANEL_RETIRE_CUTOFF", "9999-12-31")   # probe�
 _os_mod.environ.setdefault("LUMOS_HIGH_RISK_EVIDENCE_SINCE", "9999-12-31")   # 高風險測試證據加嚴:既有規格閘測試停在生效前(不要求預期值表與簽);新測試用 _hre_since 改
 _os_mod.environ.setdefault("LUMOS_PLAN_SOURCES_SINCE", "9999-12-31")   # 計劃依據來源必填:既有規格閘、推送前與健檢測試停在生效前(不要求〈依據來源〉);新測試用 _psrc_since 改
 _os_mod.environ.setdefault("LUMOS_KT_SIT_SPEC_SINCE", "9999-12-31")   # 情境題引出處:既有情境題測試停在生效前(不要求 spec/quote);新測試用 _ksp_since 改
+_os_mod.environ.setdefault("LUMOS_FINDING_SEAT_SINCE", "9999-12-31")   # 代碼審發現記出處席位:既有造帳測試停在生效前(載體不必填 --finding-seat);新測試用 _fs_since 改
 
 
 def run(vault, *args, expect_rc=None):
@@ -12109,6 +12110,273 @@ def t_finding_kind_ledger_and_stats():
             "--spec", str(spec), "--reviewed", h, "--tier", "standard", "--finding-kind", "f1=code")
     check("finding-kind 缺 findings-set → rc2(不再靜默丟失)", r.returncode == 2 and "findings-set" in r.stderr, r.stderr)
     print("  ✓ t_finding_kind_ledger_and_stats")
+
+
+class _fs_since:
+    """暫時改 LUMOS_FINDING_SEAT_SINCE(代碼審發現記出處席位_計劃 〈做法〉生效日);離開時還原測試總檔的預設。"""
+    def __init__(self, val):
+        self.val = val
+
+    def __enter__(self):
+        self.old = _os_mod.environ.get("LUMOS_FINDING_SEAT_SINCE")
+        _os_mod.environ["LUMOS_FINDING_SEAT_SINCE"] = self.val
+        return self
+
+    def __exit__(self, *a):
+        if self.old is None:
+            _os_mod.environ.pop("LUMOS_FINDING_SEAT_SINCE", None)
+        else:
+            _os_mod.environ["LUMOS_FINDING_SEAT_SINCE"] = self.old
+
+
+def _fs_blocked_n(root, why):
+    """治理帳(臨時專案的 docs/.governance-log.jsonl)裡原因是 why 的 canary blocked 事件有幾筆。"""
+    p = Path(root) / "docs" / ".governance-log.jsonl"
+    if not p.exists():
+        return 0
+    return sum(1 for ln in p.read_text(encoding="utf-8").splitlines() if why in ln and '"blocked"' in ln)
+
+
+def t_canary_record_finding_seat():
+    """[代碼審發現記出處席位 S1 到 S7、S10、S11] 載體記帳的 --finding-seat:必填條件(照生效日與迴圈種類)、
+    涵蓋全集(發現清單加重現不到清單)、席名要是同輪帳上的 auditor、擋下不寫帳且留 blocked 事件;處置閘判定不受這欄影響;
+    loop next 的代碼審載體範本帶上這個旗標、設計審不帶。判準來源:計劃〈預期值表〉各列。"""
+    import shutil as _sh, json as _j
+    root, v, rr, snap = _mr_project("gctl-fseat-")
+    try:
+        f = _mr_files(rr, "fs", A=("minor", "minor"), B=("minor",))
+        A, B = f["A"], f["B"]
+        intake = rr / "r1-intake.md"
+        intake.write_text("# 收貨\n\n| id | 重現 |\n|---|---|\n| g1 | MISS 照報告步驟跑不出來 |\n", encoding="utf-8")
+        led = root / "docs" / ".canary-log.jsonl"
+
+        def carrier(lid, fset, *seats, folded=None, refuted="none", extra=()):
+            ex = list(extra)
+            for s_ in seats:
+                ex += ["--finding-seat", s_]
+            if refuted != "none":
+                ex += ["--intake", str(intake)]
+            return _mr_carrier(v, lid, B, snap, "minor", fset, folded=folded if folded is not None else fset,
+                               refuted=refuted, extra=ex)
+
+        def blocked(tag, r, n0, *want):
+            check(f"{tag}:rc2 且帳本不變" + (f"、訊息含 {want}" if want else ""),
+                  r.returncode == 2 and _mr_ledger_n(root) == n0 and all(w in r.stderr for w in want), r.stderr[-500:])
+
+        with _fs_since("2000-01-01T00:00:00+08:00"):
+            lid = "code-fs"
+            check("前置:正確性席帳寫得進(席位列不必填)", _mr_seat(v, lid, "正確性-sonnet", "minor", A, snap).returncode == 0)
+            # S1:必填卻沒帶
+            n0, b0 = _mr_ledger_n(root), _fs_blocked_n(root, "finding-seat-missing")
+            r = carrier(lid, "c1")
+            blocked("S1 生效後代碼審載體沒帶", r, n0, "--finding-seat")
+            check("S1 治理帳多一筆 finding-seat-missing", _fs_blocked_n(root, "finding-seat-missing") == b0 + 1)
+            # S2:缺 id(含只在重現不到清單裡的)
+            n0 = _mr_ledger_n(root)
+            r = carrier(lid, "c1,a1", "c1=正確性-sonnet", "a1=正確性-sonnet", refuted="g1=照報告步驟跑不出來")
+            blocked("S2 重現不到的 g1 沒席位", r, n0, "g1")
+            # S3:席名不在同輪帳上
+            n0, b0 = _mr_ledger_n(root), _fs_blocked_n(root, "finding-seat-unknown")
+            r = carrier(lid, "c1", "c1=資安-sonnet")
+            blocked("S3 席名不在同輪帳上", r, n0, "資安-sonnet", "正確性-sonnet", "載體最後記")
+            check("S3 治理帳多一筆 finding-seat-unknown", _fs_blocked_n(root, "finding-seat-unknown") == b0 + 1)
+            check("前置:別的迴圈有邊界席", _mr_seat(v, "code-fs-other", "邊界-sonnet", "minor", A, snap).returncode == 0)
+            n0 = _mr_ledger_n(root)
+            blocked("S3 那一席只在別的迴圈帳上也不算", carrier(lid, "c1", "c1=邊界-sonnet"), n0, "邊界-sonnet")
+            # S4:鍵在全集外、寫法不對
+            for tag, s_ in (("鍵在全集外", "z9=正確性-sonnet"), ("沒有等號", "c1"), ("id 空白", "=正確性-sonnet"), ("席名空白", "c1= ")):
+                n0 = _mr_ledger_n(root)
+                if tag == "鍵在全集外":
+                    blocked(f"S4 {tag}", carrier(lid, "c1", "c1=正確性-sonnet", s_), n0, "不在發現清單")
+                else:
+                    blocked(f"S4 {tag}", carrier(lid, "c1", s_), n0, "id=<席名>")
+            # S7:沒帶 --findings-set
+            n0 = _mr_ledger_n(root)
+            r = run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "載體-sonnet", "--severity", "minor",
+                    "--report", str(B), "--snapshot", str(snap), "--spec", str(snap), "--reviewed", _sha256_of(snap),
+                    "--finding-seat", "c1=正確性-sonnet")
+            blocked("S7 沒帶 --findings-set", r, n0, "--findings-set")
+            # S5:合法——一條兩席、同席重複、前面多空白;存帳上 auditor 原字串
+            r = carrier(lid, "c1,a1", "c1=正確性-sonnet", "c1= 載體-sonnet", "a1=正確性-sonnet", "a1=正確性-sonnet ")
+            check("S5 合法 → rc0", r.returncode == 0, r.stderr[-400:])
+            last = [x for x in _mr_rows(root, lid) if "findings_set" in x][-1]
+            check("S5 帳上 finding_seats 照順序、去重、存原字串",
+                  last.get("finding_seats") == {"c1": ["正確性-sonnet", "載體-sonnet"], "a1": ["正確性-sonnet"]}, str(last.get("finding_seats")))
+            # S3:那一席只在同迴圈的上一輪帳上,這一輪不能用(席名只認同輪)
+            n0 = _mr_ledger_n(root)
+            r = _mr_carrier(v, lid, B, snap, "minor", "c5", folded="c5", extra=["--round", "r2", "--finding-seat", "c5=正確性-sonnet"])
+            blocked("S3 那一席只在上一輪帳上也不算", r, n0, "正確性-sonnet", "r2")
+            # S5:NFC 不同形的席名比得上,帳上存的是那一席記帳時的原字串
+            check("前置:帶組合字元席名的席位列", _mr_seat(v, "code-fs-nfc", "Caf\u00e9-sonnet", "minor", A, snap).returncode == 0)
+            r = carrier("code-fs-nfc", "c1", "c1=Cafe\u0301-sonnet")
+            last = [x for x in _mr_rows(root, "code-fs-nfc") if "findings_set" in x][-1] if r.returncode == 0 else {}
+            check("S5 NFC 不同形也比得上、存帳上原字串", r.returncode == 0 and last.get("finding_seats") == {"c1": ["Caf\u00e9-sonnet"]},
+                  r.stderr[-300:] + str(last.get("finding_seats")))
+            # S6:設計審不必填;但給了不全照擋(S2 後半)
+            r = carrier("fs-design", "c1")
+            check("S6 設計審載體不帶 → rc0", r.returncode == 0, r.stderr[-300:])
+            n0 = _mr_ledger_n(root)
+            blocked("S2 設計審給了不全也擋", carrier("fs-design2", "c1,c2", "c1=載體-sonnet"), n0, "c2")
+            # S6:code 開頭沒連字號的照代碼審從嚴
+            n0 = _mr_ledger_n(root)
+            blocked("S6 codexfs 從嚴必填", carrier("codexfs", "c1"), n0, "--finding-seat")
+            # 沒帶 --loop 的載體帶了席位:核對不了同輪席名,擋(代碼審 r1 邊界 1)
+            n0 = _mr_ledger_n(root)
+            r = run(v, "canary", "record", "none", "--auditor", "載體-sonnet", "--severity", "minor", "--report", str(B),
+                    "--snapshot", str(snap), "--spec", str(snap), "--reviewed", _sha256_of(snap), "--findings-set", "c1",
+                    "--folded-set", "c1", "--accepted-set", "none", "--refuted-set", "none", "--finding-seat", "c1=亂寫")
+            blocked("沒帶 --loop 卻帶席位", r, n0, "--loop")
+            # 首筆帳時間讀不動:壞資料不放行
+            check("前置:壞時間迴圈的席位列", _mr_seat(v, "code-fs-badts", "正確性-sonnet", "minor", A, snap).returncode == 0)
+            _ledger_patch_last(led, "code-fs-badts", ts="不是時間")
+            n0 = _mr_ledger_n(root)
+            b0 = _fs_blocked_n(root, "finding-seat-badts")
+            blocked("首筆帳時間讀不動、沒帶席位 → 擋(判不了生效前後)", carrier("code-fs-badts", "c1"), n0, "時間讀不動", "補帶 --finding-seat")
+            check("時間讀不動那種擋下也留事件", _fs_blocked_n(root, "finding-seat-badts") == b0 + 1)
+        # S6:首筆帳早於生效日 → 不必填
+        check("前置:舊迴圈的席位列", _mr_seat(v, "code-fs-old", "正確性-sonnet", "minor", A, snap).returncode == 0)
+        _ledger_patch_last(led, "code-fs-old", ts="2020-01-01T09:00:00+08:00")
+        with _fs_since("2025-01-01T00:00:00+08:00"):
+            r = carrier("code-fs-old", "c1")
+            check("S6 首筆帳早於生效日 → 不帶也 rc0", r.returncode == 0, r.stderr[-300:])
+        # S6:同一迴圈首筆在生效前、後面輪次在生效後 → 照首筆算,不必填(代碼審 r1 正確性 2:取最早那筆)
+        check("前置:混合迴圈首筆", _mr_seat(v, "code-fs-mix", "正確性-sonnet", "minor", A, snap).returncode == 0)
+        _ledger_patch_last(led, "code-fs-mix", ts="2020-01-01T09:00:00+08:00")
+        check("前置:混合迴圈第二筆(生效後)", _mr_seat(v, "code-fs-mix", "邊界-sonnet", "minor", A, snap).returncode == 0)
+        with _fs_since("2025-01-01T00:00:00+08:00"):
+            r = carrier("code-fs-mix", "c1")
+            check("S6 首筆在生效前、後面在生效後 → 不帶也 rc0", r.returncode == 0, r.stderr[-300:])
+        # 生效日覆寫寫成純日期也認(跟其他 *_SINCE 一樣)
+        with _fs_since("2000-01-01"):
+            n0 = _mr_ledger_n(root)
+            blocked("覆寫寫純日期也生效", carrier("code-fs-date", "c1"), n0, "--finding-seat")
+        # 覆寫把本來要填的推遲時,stderr 提一行(代碼審 r1 資安 2:殘留的覆寫不能靜默關掉必填)
+        check("前置:未來迴圈首筆", _mr_seat(v, "code-fs-future", "正確性-sonnet", "minor", A, snap).returncode == 0)
+        _ledger_patch_last(led, "code-fs-future", ts="2030-01-01T09:00:00+08:00")
+        r = carrier("code-fs-future", "c1")
+        check("覆寫推遲必填:rc0 且 stderr 提醒覆寫中", r.returncode == 0 and "LUMOS_FINDING_SEAT_SINCE" in r.stderr, r.stderr[-300:])
+        gl = root / "docs" / ".governance-log.jsonl"
+        check("覆寫推遲必填:治理帳留一筆 finding-seat-since-overridden(代碼審 r2 資安 1)",
+              gl.exists() and "finding-seat-since-overridden" in gl.read_text(encoding="utf-8"))
+        # 覆寫寫成遠期純日期:生效日前後都要放行(代碼審 r2 正確性 1:只測 2000-01-01 的話,過了常數生效日就分不出修前修後)
+        with _fs_since("2999-01-01"):
+            r = carrier("code-fs-date2", "c1")
+            check("覆寫寫遠期純日期 → 不帶也 rc0", r.returncode == 0, r.stderr[-300:])
+        # 本筆早於生效日(測試預設 9999)時,帳上壞時間的列不擋(代碼審 r2 整合 4:回退成 9999 時要真的變回選填)
+        check("前置:壞時間迴圈二", _mr_seat(v, "code-fs-badts2", "正確性-sonnet", "minor", A, snap).returncode == 0)
+        _ledger_patch_last(led, "code-fs-badts2", ts="不是時間")
+        r = carrier("code-fs-badts2", "c1")
+        check("本筆早於生效日:帳上有壞時間也不擋", r.returncode == 0, r.stderr[-300:])
+        # S6:空帳、本筆時間早於生效日(測試總檔預設 9999)→ 不必填
+        r = carrier("code-fs-empty", "c1")
+        check("S6 空帳、本筆早於生效日 → rc0", r.returncode == 0, r.stderr[-300:])
+        # S10:處置閘判定不受這欄影響(好的、型別壞掉的、不帶)
+        with _fs_since("2000-01-01T00:00:00+08:00"):
+            check("前置:g 迴圈席位", _mr_seat(v, "code-fs-g", "正確性-sonnet", "minor", A, snap).returncode == 0)
+            check("前置:g 迴圈載體帶好的席位", carrier("code-fs-g", "c1", "c1=正確性-sonnet").returncode == 0)
+        check("前置:g2 迴圈席位", _mr_seat(v, "code-fs-g2", "正確性-sonnet", "minor", A, snap).returncode == 0)
+        check("前置:g2 迴圈載體不帶", carrier("code-fs-g2", "c1").returncode == 0)
+        _mr_append(root, "code-fs-g", "code-fs-g3", False)
+        _mr_append(root, "code-fs-g", "code-fs-g3", True, finding_seats={"c1": "正確性"})
+        gs = [_mr_gate(v, root, x, snap) for x in ("code-fs-g", "code-fs-g2", "code-fs-g3")]
+        check("S10 三份處置閘判定相同", len({g.returncode for g in gs}) == 1 and len({("PASS" in g.stdout) for g in gs}) == 1,
+              " | ".join(f"{g.returncode}:{g.stdout[-120:]}" for g in gs))
+        check("S10 壞型別不噴例外", all("Traceback" not in g.stderr for g in gs), gs[2].stderr[-300:])
+        # S11:loop next 範本
+        def tpl(lid_, tier):
+            r_ = run(v, "loop", "next", lid_, "--tier", tier, "--orchestrator", "claude", "--spec", str(snap), "--json")
+            try:
+                return _j.loads(r_.stdout.strip().splitlines()[-1]).get("disposal_cmd") or ""
+            except (ValueError, IndexError):
+                return "解析不了:" + r_.stdout[-200:] + r_.stderr[-200:]
+        dc, dd = tpl("code-fs-next", "high"), tpl("fs-next-design", "standard")
+        check("S11 代碼審範本含 --finding-seat", "--finding-seat <id=席名>" in dc, dc)
+        rh = run(v, "loop", "next", "code-fs-next2", "--tier", "standard", "--orchestrator", "claude", "--spec", str(snap), "--json")
+        try:
+            hints = _j.loads(rh.stdout.strip().splitlines()[-1]).get("hints") or []
+        except (ValueError, IndexError):
+            hints = []
+        check("S11 standard 代碼審也提示載體最後記與 --finding-seat", any("--finding-seat" in h and "載體最後記" in h for h in hints), str(hints)[:300])
+        check("S11 設計審範本不含", "--finding-seat" not in dd and "--findings-set" in dd, dd)
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+
+
+def t_finding_seat_docs_match_since():
+    """[代碼審發現記出處席位 S12] 手冊、參考手冊、命令速查寫的「目前 YYYY-MM-DD」要等於程式常數 _FINDING_SEAT_SINCE 的日期
+    (代碼審 r2 整合 5、通才 2:日期手抄在三處,改常數漏改就會說不同的日期)。"""
+    import re as _re
+    root = Path(GRAPHCTL).resolve().parent.parent
+    src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    m = _re.search(r'^_FINDING_SEAT_SINCE = "(\d{4}-\d{2}-\d{2})', src, _re.M)
+    check("程式裡讀得到生效日常數", bool(m))
+    day = m.group(1) if m else "?"
+    for rel in ("skills/lumos-code-loop/SKILL.md", "skills/lumos-code-loop/reference.md",
+                "skills/lumos-project-notes/commands/06-代碼審與推送.md"):
+        txt = (root / rel).read_text(encoding="utf-8")
+        days = set(_re.findall(r"_FINDING_SEAT_SINCE`?[,,]目前 (\d{4}-\d{2}-\d{2})", txt))
+        check(f"{rel} 寫的生效日跟常數一致", days == {day}, f"文件 {sorted(days)},常數 {day}")
+
+
+def t_gov_stats_finding_seat():
+    """[代碼審發現記出處席位 S8、S9] gov --stats 的逐席沒用率:只算近 56 天、每筆載體列各算一次(兩輪都用 a1 算兩條)、
+    輪次記號併回同一席、不同模型分開、樣本少標示、同數依席名排;壞型別整列略過不噴例外;窗口內沒資料就整段不印。
+    判準來源:計劃〈預期值表〉S8、S9 各列(Tricorder 逐條顯示的發現各算一次、沒採取行動=沒用)。"""
+    import json as _j, datetime as _dt
+    def ts(days_ago):
+        return (_dt.datetime.now().astimezone() - _dt.timedelta(days=days_ago)).isoformat(timespec="seconds")
+
+    def row(loop, rnd, when, fs, fo, ac, rf, seats):
+        return {"ts": when, "kind": "none", "auditor": "載體-sonnet", "token": f"CANARY-{loop}-{rnd}", "loop": loop, "round": rnd,
+                "severity": "minor", "findings": len(fs), "findings_set": fs, "folded_set": fo, "accepted_set": ac,
+                "refuted_set": rf, "finding_seats": seats}
+    import time as _t
+    v = mkvault()
+    rows = [
+        row("code-s", "r1", ts(4), ["c1"], [], ["c1"], [], {"c1": ["舊載體-sonnet"]}),   # 同輪較早那筆:只取最後一筆,不算
+        row("code-s", "r1", ts(3), ["c1", "a1"], ["c1"], ["a1"], [], {"c1": ["正確性-sonnet"], "a1": ["架構對齊-sonnet"]}),
+        row("code-s", "r2", ts(2), ["c2", "c3", "c4"], ["c2", "c3", "c4"], [], ["a1"],
+            {"a1": ["架構對齊r2-sonnet"], "c2": ["正確性-sonnet", "通才-opus"], "c3": ["通才-opus"], "c4": ["通才-opus"]}),
+        row("code-s", "r3", ts(57), ["c9"], [], ["c9"], [], {"c9": ["正確性-sonnet"]}),
+        row("code-t", "r1", ts(55), ["x1"], ["x1"], [], [], {"x1": ["資源-sonnet"]}),
+        dict(row("code-u", "r1", ts(1), ["y1"], [], ["y1"], [], {"y1": "壞席-sonnet"}), auditor="壞列-sonnet"),
+        dict(row("code-w", "r1", ts(1), ["w1"], ["w1"], [], [], {"w1": ["好席-sonnet"]}), auditor="好列-sonnet"),
+        row("code-v", "r1", ts(1), ["v1", "v2", "v3", "v4"], ["v1", "v2", "v3", "v4"], [], [],
+            {"v1": ["外家-gemini-2-flash"], "v2": ["外家-gemini-3-flash"], "v3": ["外家codex-gpt-5.6-terra"], "v4": ["外家finder2-codex"]}),
+        row("code-x", "r1", ts(1), ["x1", "x2", "x3", "x4", "x5"], ["x1", "x2", "x3", "x4", "x5"], [], [],
+            {"x1": ["正確性-2-sonnet"], "x2": ["外家codex-5-mini"], "x3": ["外家codex-6-mini"], "x4": [" 空白席-sonnet "], "x5": ["空白席-sonnet"]}),
+        row("code-y", "r1", ts(1), ["y9"], ["y9"], [], [], {"y9": ["長" + "1" * 100000 + "_-x"]}),
+    ]
+    (v.parent / ".canary-log.jsonl").write_text("".join(_j.dumps(x, ensure_ascii=False) + "\n" for x in rows), encoding="utf-8")
+    t0 = _t.time()
+    r = run(v, "gov", "--stats", "--since", "9999")
+    took = _t.time() - t0
+    out = r.stdout
+    check("S8 帶十萬字元席名的統計 10 秒內跑完(代碼審 r2 資源 1:去尾數字要線性)", took < 10, f"{took:.1f}s")
+    check("S9 壞型別不噴例外", r.returncode == 0 and "Traceback" not in r.stderr, r.stderr[-300:])
+    check("S8 有逐席沒用率段", "逐席沒用率" in out, out[-800:])
+    seg = out[out.find("逐席沒用率"):] if "逐席沒用率" in out else ""
+    lines = [ln.strip() for ln in seg.splitlines()[1:16] if ln.strip().startswith(("正確性-sonnet", "架構對齊", "通才", "資源", "壞席"))]
+    check("S8 模型版本號不被當輪次記號去掉(不同模型分開列)",
+          all(x in seg for x in ("外家-gemini-2-flash:1 條", "外家-gemini-3-flash:1 條", "外家codex-gpt-5.6-terra:1 條")), seg[:600])
+    check("S8 數字前是連字號時不去(不產生雙連字號、不併不同模型版本)",
+          "--sonnet" not in seg and "--mini" not in seg and "外家codex-5-mini:1 條" in seg and "外家codex-6-mini:1 條" in seg, seg[:900])
+    check("S8 席名前後空白先去掉再併(代碼審 r2 邊界 2)", "空白席-sonnet:2 條" in seg, seg[:900])
+    check("S8 英文字尾的 r 不當輪次記號(外家finder2-codex 併成 外家finder-codex)", "外家finder-codex:1 條" in seg and "外家finde-" not in seg, seg[:600])
+    want = ["架構對齊-sonnet:2 條,沒用 2(100%,樣本少)", "正確性-sonnet:2 條,沒用 0(0%,樣本少)",
+            "資源-sonnet:1 條,沒用 0(0%,樣本少)", "通才-opus:3 條,沒用 0(0%,樣本少)"]
+    check("S8 逐席數字跟手算一致、輪次記號併回、同數依席名排、57 天前不算、55 天前算", lines == sorted(want, key=lambda s_: (-int(s_.split(":")[1].split(" ")[0]), s_)),
+          str(lines))
+    check("S9 壞型別那列不計", "壞席" not in seg, seg[:400])
+    check("S8 同輪較早那筆載體不算", "舊載體" not in seg, seg[:400])
+    check("S8 條數多的排前面(通才-opus 3 條排第一)", lines[:1] == ["通才-opus:3 條,沒用 0(0%,樣本少)"], str(lines))
+    rg = run(v, "gov", "--since", "9999", "--full")
+    check("S9 lumos gov 略過壞型別那列、照收好的", "壞列-sonnet" not in rg.stdout + rg.stderr and "好列-sonnet" in rg.stdout, rg.stdout[-600:])
+    check("S8 段尾印口徑", "放行不一定是雜訊" in seg, seg[-300:])
+    v2 = mkvault()
+    (v2.parent / ".canary-log.jsonl").write_text(_j.dumps(row("code-z", "r1", ts(1), ["c1"], ["c1"], [], [], None), ensure_ascii=False) + "\n", encoding="utf-8")
+    r = run(v2, "gov", "--stats", "--since", "9999")
+    check("S9 窗口內沒有帶這欄的載體 → 整段不印", r.returncode == 0 and "逐席沒用率" not in r.stdout, r.stdout[-300:])
 
 
 def t_intake_guard_t1_t3():
@@ -103228,7 +103496,8 @@ def t_loop_next_fix_check_reminder():
               .replace("--findings-set <id串>", "--findings-set z1").replace("--folded-set <id串>", "--folded-set z1")
               .replace("--accepted-set <id串>", "").replace("--accept-reason <id=理由>", "")
               .replace("<席報告.md>", str(root / "docs" / "rep-r1.md")).replace("<這一席審的那份凍結材料(拆包審時填該席那一包)>", str(root / "docs" / "snap-r1.patch")).replace("<這一席那份的行數(拆包審時填該席那一包)>", "10")
-              .replace("--spec <計劃節點.md>", "").replace("--reviewed <sha256>", ""))
+              .replace("--spec <計劃節點.md>", "").replace("--reviewed <sha256>", "")
+              .replace("--finding-seat <id=席名>", "--finding-seat z1=s2-sonnet"))   # 代碼審發現記出處席位_計劃 範圍⑤:範本多的那段照填
     argv = shlex.split(filled)
     rr = _fc_lum(root, v, *argv[1:])
     check("⑬第 2 輪範本填 none 真跑成功", rr.returncode == 0, f"{filled}\n{rr.stderr[-300:]}")
