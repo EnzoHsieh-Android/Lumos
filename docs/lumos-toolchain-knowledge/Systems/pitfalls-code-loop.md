@@ -341,3 +341,11 @@ WHY:`pitfalls` 的人可讀輸出在 `tier:` 那行下面多印「這級仍要�
 - 擋下時每道印推送前同一段擋下訊息(含放行指令與補表態指令),再多印一段「代碼審還不能記通過」與重跑 pass 的指令;治理帳的閘名是 `code-loop-pass`、種類 `blocked`(`extra.blocks` 帶這次擋下的種類),撤除條件數的是這一種。`code-loop skip` 不跑這兩道。
 - 用法上要知道:pass 之後又提交程式、再 pass 一次時,舊表態綁的是舊提交,會被表態那道擋下;照擋下訊息重答表態再 pass(推送前閘本來就會在這裡擋)。
 - `lint-new` 的輸出:擋下逐條印「檔:行、規則訊息」與填好指紋的放行指令,最多 20 條,其餘提示加 `--all` 全部列出(不指去會寫治理帳、真跑合約測試的 `code-loop check`,代碼審 r1 正確性席);沒檢查到時印哪條命令沒跑,命令第一個詞找不到執行檔就寫「沒裝 <工具>」,結尾一句「這次沒有被檢查,不算乾淨」;只給一個版本時提醒要給兩端。--diff 與 --worktree 這兩條檢查路徑不記帳(--record-stop-block 例外,只記收工擋停),所以環境不可用時不沿用判定函式「已自動放行並記帳」那句話。
+
+## 代碼審記通過前的選擇點預判(2026-11-21,[[Projects/代碼審通過前自動跑選擇點_計劃]])
+
+WHY:`code-loop pass` 在新增告警與表態兩道之後、留痕驗證之前,多一道選擇點預判(`_codeloop_pass_choice`),只讀帳與掃語法樹、不跑測試 [出處:[[Projects/代碼審通過前自動跑選擇點_計劃]];使用者 2026-11-21 裁「pass 只預判不跑測試」] [因:選擇點的處置會改非簿記檔,必須在記通過之前做;受波及合約測試那條方針「跑測試的閘掛 check 不掛 pass」照守] [不選:pass 內自動跑 choice-kill(最壞 20 分鐘以上、違反方針)] [test:t_codeloop_pass_choice_blocks] [test:t_codeloop_pass_choice_skips]
+
+- 呼叫關係:`_codeloop_pass_choice` 跟推送前的 `_spec_gate_push_check` 一樣直接呼叫 `_choice_push_round`(多傳 `site="pass"`),不經 `_codeloop_guard_verdict`;那一圈本來就是推送前規格閘的一段,`site` 參數就是為這個呼叫端加的(代碼審 r1 架構對齊席標 ⚠,判為不是跨層直呼)。
+- 分支名用共用的 `_redbase_branch_name`。範圍照推送前掛鉤的輸入模擬一次推送:遠端舊值=本機追蹤的 `refs/remotes/<遠端>/<分支>`(沒有就全零),交給推送前那一圈 `_choice_push_round(..., site="pass")`;不是 Kotlin 專案直接放行不印字,detached HEAD、沒有遠端,或有多個遠端卻沒有 origin、分支也沒設上游(判不出要比對哪個遠端,訊息教 `git config branch.<分支>.remote`),都印一行、留給推送前判。
+- 擋下:照推送前原文印原因,再印 `_CHOICE_PASS_TAIL` 那句出口(同新增告警與表態兩道的做法),記 `code-loop-pass` 擋下(`blocks` 帶 `choice`);判定本身見 [[Systems/規格閘]]〈選擇點的 pass 預判〉。

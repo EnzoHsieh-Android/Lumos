@@ -17901,7 +17901,7 @@ def _gov_choice_counts(rows):
     原因含「過期」的筆數;unverified 筆數。整數一律 type(x) is int(排除 bool)。"""
     from collections import Counter
     c = {"ever": set(), "changed": [], "mutant_lines": [], "secs": [], "first": Counter(), "after": Counter(), "waive": Counter(),
-         "nores": Counter(), "shape": Counter(), "test_files": {}, "blocked": 0, "stale_blocked": 0, "unverified": 0,
+         "nores": Counter(), "shape": Counter(), "test_files": {}, "blocked": 0, "pass_blocked": 0, "stale_blocked": 0, "unverified": 0,
          "row_mut": {}, "row_waive": {}}
     for r in rows:
         if r.get("gate") == "lint-new" and r.get("ck_waive"):
@@ -17948,6 +17948,7 @@ def _gov_choice_count_one(c, r, ck, kind):
                 c[k].append(ck[k])
     elif kind == "blocked":
         c["blocked"] += 1
+        c["pass_blocked"] += ck.get("site") == "pass"   # 代碼審通過前自動跑選擇點_計劃:pass 預判擋下的那幾筆帶 site
         c["stale_blocked"] += any(isinstance(x, dict) and x.get("reason") == "過期" for x in ck.get("reasons") or [])
     elif kind == "unverified":
         c["unverified"] += 1
@@ -18000,7 +18001,7 @@ def _render_gov_choice(rows):
     many = sorted((t, len(fs)) for t, fs in c["test_files"].items() if len(fs) >= 3)
     if many:
         print("    單一測試殺掉 3 支以上不同檔的壞法(看是不是太粗的測試在撐):" + "、".join(f"{_kill_esc(t)} {n} 檔" for t, n in many))
-    print(f"    推送被擋 {c['blocked']} 筆(過期 {c['stale_blocked']}/{c['blocked']});算不出來(unverified){c['unverified']} 筆")
+    print(f"    被擋 {c['blocked']} 筆(推送 {c['blocked'] - c['pass_blocked']}、pass 預判 {c['pass_blocked']};過期 {c['stale_blocked']}/{c['blocked']});算不出來(unverified){c['unverified']} 筆")
     by_row, norow = _gov_choice_by_row(c)
     if by_row or norow:
         print("    依列號(Projects/選擇點表第二批常見誤用寫法_計劃 範圍 5;壞法以 (檔, 行指紋, 列號) 計,曾殺掉算殺掉、否則曾存活算存活、"
@@ -18549,7 +18550,7 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
          **({"point": d.get("point")} if d.get("gate") == "situation-rule" and d.get("point") else {}),
          **({k: d.get(k) for k in ("verdict", "row", "attempt", "reason", "via", "run_id")} if d.get("gate") == "choice-kill" else {}),
          # gov --stats 的選擇點段(_render_gov_choice)要的欄位:每個壞法、run、blocked 各自的數;選擇點放行(lint-new waived 帶 scope choice-kill)的理由標籤與形狀
-         **({"ck": {k: d.get(k) for k in ("file", "fp", "killing_test", "changed", "mutant_lines", "secs", "reasons")}} if d.get("gate") == "choice-kill" else {}),
+         **({"ck": {k: d.get(k) for k in ("file", "fp", "killing_test", "changed", "mutant_lines", "secs", "reasons", "site")}} if d.get("gate") == "choice-kill" else {}),
          **({"ck_waive": {k: d.get(k) for k in ("label", "row", "decl", "file", "fp")}}
             if (d.get("kind"), d.get("scope")) == ("waived", "choice-kill") else {}),
          "loop": d.get("loop") if d.get("gate") == "fix-check" else None,
@@ -73393,10 +73394,49 @@ def _codeloop_pass_mech(repo_root, head_sha, branch):
     return False
 
 
+def _codeloop_pass_choice(repo_root, head_sha, branch):
+    """code-loop pass 記通過之前的選擇點預判(Projects/代碼審通過前自動跑選擇點_計劃)→ 放不放行。不跑測試:照推送前掛鉤會給的輸入
+    (遠端舊值=本機追蹤的遠端分支,沒有就當新分支首推)模擬一次推送,交給推送前那一圈同一支判定(site="pass":帳讀工作目錄、事件帶 site)。
+    訊息照推送前原樣(同 _codeloop_pass_mech),最後補 pass 自己的出口。不是 Kotlin 專案直接放行不印字;
+    detached HEAD、沒有遠端、多個遠端判不出哪個 → 印一行、留給推送前判。擋下:記 code-loop-pass 擋下(blocks 帶 choice)。"""
+    rr = Path(repo_root)
+    if not _choice_push_has_kotlin(rr):
+        return True
+    P = "[code-loop pass 選擇點]"
+    name, tip = _redbase_branch_name(rr), _lens_full_sha(rr, "HEAD")
+    if not name or not tip:
+        print(f"{P} 沒有分支(detached HEAD),選擇點留給推送前判")
+        return True
+    remote = _lens_default_remote(rr, None, None)
+    if not remote:   # 共用取法只認分支上游、origin、或唯一一個遠端;多個遠端又都不是時要講清楚(代碼審 code-pass選擇點預判 r2 c2)
+        r = _lens_git(rr, "remote")
+        n = len(r.stdout.split()) if r is not None and r.returncode == 0 else 0
+        if not n:
+            print(f"{P} 沒有遠端,選擇點留給推送前判")
+        else:
+            print(f"{P} 有 {n} 個遠端、沒有 origin、分支也沒設上游,判不出要比對哪個遠端,選擇點留給推送前判"
+                  f"(要在 pass 就預判:git config branch.{name}.remote <遠端名>)")
+        return True
+    old = _lens_full_sha(rr, f"refs/remotes/{remote}/{name}") or "0" * len(tip)
+    bad = _choice_push_round(None, rr, f"{old}..{tip}", (remote, f"refs/heads/{name}"), site="pass")
+    if not bad:
+        return True
+    for x in bad:
+        print(f"    • {x}")
+    print(f"{P} {_CHOICE_PASS_TAIL}")
+    print("代碼審還不能記通過:選擇點有行沒有有效處置(跟推送前同一份判定;不跑測試)。照上面處置後重跑:", file=sys.stderr)
+    print('    lumos code-loop pass --loop <編號> --note "<審了什麼>"', file=sys.stderr)
+    _gate_event_or_warn(repo_root, "code-loop-pass", "blocked", ("選擇點預判:" + "；".join(str(x).splitlines()[0][:80] for x in bad))[:300],
+                        hard=True, head_sha=head_sha, ref=branch, extra={"blocks": ["choice"]})
+    return False
+
+
 def _codeloop_pass_gate(repo_root, loop, head_sha, branch):
     """跑判定、印訊息、擋下就落帳 → (放不放行, 要寫進 nodes 的編號或 None)。
     ★機械檢查排在留痕驗證之前★:驗證那支有「沒有審查帳」與 light 兩條提早返回,排在後面會被它們跳過。"""
     if not _codeloop_pass_mech(repo_root, head_sha, branch):
+        return False, None
+    if not _codeloop_pass_choice(repo_root, head_sha, branch):   # 選擇點預判,排在那兩道之後、留痕驗證之前(代碼審通過前自動跑選擇點_計劃)
         return False, None
     refused, node, say = _codeloop_pass_verify(repo_root, loop)
     if refused:
@@ -78656,12 +78696,13 @@ def _choice_push_files(rr, rng):
     return sum(1 for f in files if (f[1] > 0 or f[3]) and f[0] != _LINT_NEW_WAIVERS_REL)
 
 
-def _choice_push_ledger(rr, at_sha):
+def _choice_push_ledger(rr, at_sha, site="push"):
     """B 版治理帳的 choice-kill 事件(_gov_rows_at,讀帳另給 _CHOICE_GOV_BUDGET 時限)→ (事件清單(檔內順序), None) 或
     (None, ("block" | "unverified", 原因)):帳在 B 不存在 → 擋「帳不在」;時限用完 → 算不出來;其餘 git 讀不出 → 擋「帳讀不了」。"""
     import json as _j
     deadline = time.monotonic() + _CHOICE_GOV_BUDGET
-    st, rows = _gov_rows_at(rr, at_sha, b'"' + _CHOICE_KILL_GATE.encode() + b'"',
+    # pass 預判讀工作目錄那份(rev=None):編排者剛跑的 choice-kill 紀錄是簿記檔,pass 時還沒提交(代碼審通過前自動跑選擇點_計劃)
+    st, rows = _gov_rows_at(rr, None if site == "pass" else at_sha, b'"' + _CHOICE_KILL_GATE.encode() + b'"',
                             lambda d: isinstance(d, dict) and d.get("gate") == _CHOICE_KILL_GATE, deadline=deadline)
     if st == "missing":
         return None, ("block", "帳不在")
@@ -78753,7 +78794,7 @@ def _choice_push_show(xs):
     return out
 
 
-def _choice_push_event(rr, at_sha, kind, reasons, note):
+def _choice_push_event(rr, at_sha, kind, reasons, note, site="push"):
     """擋下(blocked,hard)或算不出來(unverified)記一筆 gate choice-kill;同一個 B 同一組 reason 已記過就不重記(讀工作目錄的版控帳)。
     reasons:[(原因, 行數)…]。寫不進去只在 stderr 講一句,不改判定(_gate_event 的約定)。"""
     import secrets
@@ -78761,19 +78802,29 @@ def _choice_push_event(rr, at_sha, kind, reasons, note):
     evs, _gerr = _gov_vc_gate_events(rr, _CHOICE_KILL_GATE)
     for e in evs:
         got = sorted(str(x.get("reason")) for x in e.get("reasons") or [] if isinstance(x, dict))
-        if e.get("kind") == kind and e.get("head_sha") == at_sha and got == names:
+        # 去重鍵含場合(代碼審通過前自動跑選擇點_計劃):pass 預判與推送在同一頂端各擋一次就各記一筆;舊帳沒有 site 的算推送
+        if e.get("kind") == kind and e.get("head_sha") == at_sha and got == names and (e.get("site") or "push") == site:
             return
     extra = {"reasons": [{"reason": r, "lines": n} for r, n in reasons], "token": secrets.token_hex(8)}
+    if site != "push":
+        extra["site"] = site
     _choice_gate_event(rr, kind, note[:400], f"選擇點 {kind} 那筆", hard=(kind == "blocked"), head_sha=at_sha, nodes=[], extra=extra)
 
 
-def _choice_push_unverified(rr, at_sha, why, hint="", part=False):
+# 代碼審通過前自動跑選擇點_計劃:pass 預判沿用推送前同一段擋下訊息(同 _codeloop_pass_mech 的做法),最後補 pass 自己的出口
+_CHOICE_PASS_TAIL = ("這是 code-loop pass 記通過前的選擇點預判(不跑測試,跟推送前同一份判定;上面的訊息是推送前那道的原文):"
+                     "缺紀錄或帳不在 → 先跑 lumos choice-kill(可放背景,可能要幾分鐘;紀錄寫在工作目錄的治理帳,不用先提交)後再 pass;"
+                     "存活等其他原因照上面處置,放行檔、計劃與補的測試要先提交才算(預判從頂端提交讀它們);"
+                     "提交後表態那道若擋下,照它的指示用 --carry 重答表態;choice-kill 的紀錄在代碼審通過後跟帳本一起提交")
+
+
+def _choice_push_unverified(rr, at_sha, why, hint="", part=False, site="push"):
     """這一圈算不出來:只提醒、不擋,記一筆 unverified(規格閘「算不出來就放行」)→ 空的擋下清單。
     part=True:只有幾支檔算不出來(那幾支只提醒,其他檔照判)。"""
     what = "選擇點有檔算不出來" if part else "選擇點這一圈算不出來"
     tail = "那幾支檔只提醒不擋,其他檔照判" if part else "只提醒不擋"
     print(f"[spec-gate 推送前] {what}({_kill_esc(why)[:200]}),{tail}" + (f";{hint}" if hint else ""))
-    _choice_push_event(rr, at_sha, "unverified", [(why[:80], 0)], f"選擇點推送前算不出來:{why}")
+    _choice_push_event(rr, at_sha, "unverified", [(why[:80], 0)], f"選擇點推送前算不出來:{why}", site=site)
     return []
 
 
@@ -78804,7 +78855,7 @@ def _choice_push_has_kotlin(rr):
         return False
 
 
-def _choice_push_scan(rr, at_sha, rng):
+def _choice_push_scan(rr, at_sha, rng, site="push"):
     """判定順序與掃描(〈範圍〉4 判定順序):不需要 ast-grep 的條件先判(_choice_requirement),再讀表、掃描(判要不要求、讀檔、掃描共用
     _KT_SIT_BUDGET 時限);挑壞法另給 _CHOICE_PICK_BUDGET,從掃描結束起算(代碼審 code-改動選擇點 r2 H3)。
     → ("skip", None) 不要求;("bad", [原因]) 型錄表壞(擋);("unverified", None) 已提醒並記帳;("ok", (掃描結果, 快取))——
@@ -78814,7 +78865,7 @@ def _choice_push_scan(rr, at_sha, rng):
     try:
         need, _why = _choice_requirement(rr, rng, at_sha, deadline=deadline, cache=cache)
     except (_KtSitUnverifiable, ValueError, OSError, subprocess.TimeoutExpired) as e:
-        return "unverified", _choice_push_unverified(rr, at_sha, f"判不了要不要求:{e}")
+        return "unverified", _choice_push_unverified(rr, at_sha, f"判不了要不要求:{e}", site=site)
     if not need:
         return "skip", None
     tables, why, missing = _choice_tables()
@@ -78823,23 +78874,24 @@ def _choice_push_scan(rr, at_sha, rng):
         return "skip", None
     if why:
         bad = _choice_bad(f"Kotlin 型錄的選擇點表{why}——修好型錄或 configs/ast-grep/kotlin-choice/ 的規則再推", 0)
-        _choice_push_event(rr, at_sha, "blocked", [("表壞", 0)], "選擇點推送前擋下:型錄表壞")
+        _choice_push_event(rr, at_sha, "blocked", [("表壞", 0)], "選擇點推送前擋下:型錄表壞", site=site)
         return "bad", [bad]
     try:
         res = _choice_compute(rr, rng, at_sha, tables, deadline=deadline, scan_timeout=max(1.0, deadline - time.monotonic()), cache=cache,
                               pick_timeout=_CHOICE_PICK_BUDGET)
     except _ChoiceNoTool as e:
-        return "unverified", _choice_push_unverified(rr, at_sha, f"ast-grep 不在({e})", hint=f"裝 ast-grep 後再推:{_CHOICE_INSTALL}")
+        return "unverified", _choice_push_unverified(rr, at_sha, f"ast-grep 不在({e})", hint=f"裝 ast-grep 後再推:{_CHOICE_INSTALL}", site=site)
     except (_ChoiceUnverifiable, _KtSitUnverifiable, OSError, subprocess.TimeoutExpired) as e:
-        return "unverified", _choice_push_unverified(rr, at_sha, f"語法樹掃描或讀檔:{e or e.__class__.__name__}")
+        return "unverified", _choice_push_unverified(rr, at_sha, f"語法樹掃描或讀檔:{e or e.__class__.__name__}", site=site)
     return "ok", (res, cache)
 
 
-def _choice_push_round(env, rr, git_range, push=None):
+def _choice_push_round(env, rr, git_range, push=None, site="push"):
     """推送前那一道(〈範圍〉4):_spec_gate_push_scan 之後另起一圈(沒有候選計劃也跑)→ 擋下原因清單(_ChoiceBad,每種原因一條);只提醒的自己印。
     範圍 _choice_push_range;判定順序與掃描 _choice_push_scan;碰到的計劃與守的測試 _choice_guard(B 版樹);B 版帳 _choice_push_ledger、B 版放行檔
     _choice_push_waivers;判定 _choice_push_judge(回報上限論文 2.3);擋下記 blocked(同一個 B 同一組原因不重記)。
-    生效日比今天晚時整圈不跑(環境變數覆寫的印一行「被環境變數關掉」)。"""
+    生效日比今天晚時整圈不跑(環境變數覆寫的印一行「被環境變數關掉」)。site="pass" 是 code-loop pass 的預判(代碼審通過前自動跑選擇點_計劃):
+    帳讀工作目錄、事件帶 site;判定與訊息照推送前原樣。"""
     P = "[spec-gate 推送前]"
     since = _choice_since()
     if since > time.strftime("%Y-%m-%d"):
@@ -78850,53 +78902,53 @@ def _choice_push_round(env, rr, git_range, push=None):
     if rng is None:
         print(f"{P} 選擇點:{how},這一圈放行")
         return []
-    state, got = _choice_push_scan(rr, at_sha, rng)
+    state, got = _choice_push_scan(rr, at_sha, rng, site=site)
     if state != "ok":
         return got or []
     res, cache = got
-    _choice_push_part_unverified(rr, at_sha, res["unverified"])
+    _choice_push_part_unverified(rr, at_sha, res["unverified"], site=site)
     if not _choice_needs_disposition(res["lines"]):
         return []
     n_need = sum(1 for x in res["lines"] if x["status"] in ("mutant", "not_unique"))
     guard, why = _choice_guard(rr, rng, at_sha, cache=cache)   # 碰到的計劃吃判要不要求時的快取(_choice_push_scan)
     if why:
-        return _choice_push_unverified(rr, at_sha, f"碰到的計劃算不出來:{why}")
+        return _choice_push_unverified(rr, at_sha, f"碰到的計劃算不出來:{why}", site=site)
     if not guard["live"]:
-        _choice_push_event(rr, at_sha, "blocked", [("無規格", n_need)], f"選擇點推送前擋下:無規格({n_need} 行)")
+        _choice_push_event(rr, at_sha, "blocked", [("無規格", n_need)], f"選擇點推送前擋下:無規格({n_need} 行)", site=site)
         return [_choice_bad(f"無規格 {n_need} 行:這次改動有選擇點,但範圍沒碰到任何進行中計劃——沒規格就判不了選擇點要哪條需求守;"
                             "若計劃存在但沒連到被改檔的家,補 lands_in 或連結", n_need)]
     if not guard["tests"]:
         print(f"{P} 選擇點:這次的選擇點沒有測試守,只能人驗(碰到的計劃條款都是 [manual:]、[keeps],或綁的測試不在 kotlin-junit 平台)")
         return []
-    got = _choice_push_read(rr, at_sha, n_need)
+    got = _choice_push_read(rr, at_sha, n_need, site=site)
     if isinstance(got, list):
         return got
     idx, waived = got
-    return _choice_push_verdict(rr, at_sha, rng, how, res, guard, idx, waived)
+    return _choice_push_verdict(rr, at_sha, rng, how, res, guard, idx, waived, site=site)
 
 
-def _choice_push_part_unverified(rr, at_sha, bad):
+def _choice_push_part_unverified(rr, at_sha, bad, site="push"):
     """幾支檔算不出來:只提醒、記 unverified;其他檔照常判擋(代碼審 code-改動選擇點 r1 r1)。bad 是 [(檔, 原因)…],空的什麼都不做。"""
     if bad:
         _choice_push_unverified(rr, at_sha, "語法樹掃描算不出來的檔:" + "、".join(f"{f}({w})" for f, w in bad[:5])
-                                + (f" 另 {len(bad) - 5} 支" if len(bad) > 5 else ""), part=True)
+                                + (f" 另 {len(bad) - 5} 支" if len(bad) > 5 else ""), part=True, site=site)
 
 
-def _choice_push_read(rr, at_sha, n_need):
+def _choice_push_read(rr, at_sha, n_need, site="push"):
     """B 版治理帳與放行檔 → (帳索引, 放行的 (檔, 行指紋)) 或擋下/提醒的結果清單:時限用完只提醒、記 unverified;帳不在、讀不出擋。"""
-    evs, err = _choice_push_ledger(rr, at_sha)
+    evs, err = _choice_push_ledger(rr, at_sha, site=site)
     waived, werr = (None, None) if err else _choice_push_waivers(rr, at_sha)
     err = err or werr
     if err and err[0] == "unverified":
-        return _choice_push_unverified(rr, at_sha, err[1])
+        return _choice_push_unverified(rr, at_sha, err[1], site=site)
     if err:
-        _choice_push_event(rr, at_sha, "blocked", [(err[1], n_need)], f"選擇點推送前擋下:{err[1]}")
+        _choice_push_event(rr, at_sha, "blocked", [(err[1], n_need)], f"選擇點推送前擋下:{err[1]}", site=site)
         return [_choice_bad(f"{err[1]}:被推版本 {at_sha[:12]} 的{'治理帳' if '帳' in err[1] else '放行檔'}"
                             f"{'不存在' if err[1] == '帳不在' else '讀不出來'},判不了 {n_need} 行選擇點有沒有處置——修好再推(帳要提交)", n_need)]
     return _choice_ledger_index(evs), waived
 
 
-def _choice_push_verdict(rr, at_sha, rng, how, res, guard, idx, waived):
+def _choice_push_verdict(rr, at_sha, rng, how, res, guard, idx, waived, site="push"):
     """判定與回報(〈範圍〉4 判定、〈用詞〉回報上限與排版)→ 擋下原因清單;沒抽中的存活與 tests_sha 不同只提醒。"""
     P = "[spec-gate 推送前]"
     n_files = _choice_push_files(rr, rng)
@@ -78921,7 +78973,7 @@ def _choice_push_verdict(rr, at_sha, rng, how, res, guard, idx, waived):
         body = "\n".join([f"{r} {len(xs)} 行({how}):", *_choice_push_show(xs), f"        → {_CHOICE_PUSH_FIX[r]}"])
         bad.append(_choice_bad(body, len(xs)))
     if bad:
-        _choice_push_event(rr, at_sha, "blocked", reasons, "選擇點推送前擋下:" + "、".join(f"{r} {n} 行" for r, n in reasons))
+        _choice_push_event(rr, at_sha, "blocked", reasons, "選擇點推送前擋下:" + "、".join(f"{r} {n} 行" for r, n in reasons), site=site)
     return bad
 
 
