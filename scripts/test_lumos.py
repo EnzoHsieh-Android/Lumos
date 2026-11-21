@@ -12303,7 +12303,7 @@ def t_canary_record_finding_seat():
 
 
 def t_finding_seat_docs_match_since():
-    """[代碼審發現記出處席位 S12] 手冊、參考手冊、命令速查寫的「目前 YYYY-MM-DD」要等於程式常數 _FINDING_SEAT_SINCE 的日期
+    """[代碼審發現記出處席位 S12] 參考手冊、命令速查寫的「目前 YYYY-MM-DD」要等於程式常數 _FINDING_SEAT_SINCE 的日期
     (代碼審 r2 整合 5、通才 2:日期手抄在三處,改常數漏改就會說不同的日期)。"""
     import re as _re
     root = Path(GRAPHCTL).resolve().parent.parent
@@ -12311,8 +12311,8 @@ def t_finding_seat_docs_match_since():
     m = _re.search(r'^_FINDING_SEAT_SINCE = "(\d{4}-\d{2}-\d{2})', src, _re.M)
     check("程式裡讀得到生效日常數", bool(m))
     day = m.group(1) if m else "?"
-    for rel in ("skills/lumos-code-loop/SKILL.md", "skills/lumos-code-loop/reference.md",
-                "skills/lumos-project-notes/commands/06-代碼審與推送.md"):
+    # 入口頁 SKILL.md 不寫日期(t_skill_entry_pages_no_dated_history 限入口頁日期 ≤3),只寫「見程式常數」;日期只留在這兩份
+    for rel in ("skills/lumos-code-loop/reference.md", "skills/lumos-project-notes/commands/06-代碼審與推送.md"):
         txt = (root / rel).read_text(encoding="utf-8")
         days = set(_re.findall(r"_FINDING_SEAT_SINCE`?[,,]目前 (\d{4}-\d{2}-\d{2})", txt))
         check(f"{rel} 寫的生效日跟常數一致", days == {day}, f"文件 {sorted(days)},常數 {day}")
