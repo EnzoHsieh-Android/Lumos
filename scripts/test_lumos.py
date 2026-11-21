@@ -144823,6 +144823,189 @@ def t_spec_gate_push_choice():
         _ck_cleanup(*roots)
 
 
+def _cpc_pass(root, fake, since="2000-01-01", path=None, runlog=None):
+    """code-loop pass(子行程);生效日預設 2000-01-01(打開選擇點),PATH 前面接假 ast-grep;runlog 記假 runner 有沒有被叫到。"""
+    e = _ck_env(fake, runlog, LUMOS_CHOICE_SINCE=since)
+    if path is not None:
+        e["PATH"] = str(path)
+    return subprocess.run([sys.executable, GRAPHCTL, "code-loop", "pass", "--note", "預判測試", "--repo", str(root)], cwd=root,
+                          capture_output=True, text=True, env=e, stdin=subprocess.DEVNULL, timeout=300)
+
+
+def _cpc_git(root, *a):
+    return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True).stdout.strip()
+
+
+def _cpc_repo(n, beh, tmp, **kw):
+    """_ck_repo 加一個遠端名(不用真的連)、本機追蹤的遠端主線指到 main、先提交一份空治理帳(第一次預判判到缺紀錄,不是帳不在)。"""
+    root, fake = _ck_repo(n, beh, **kw)
+    _cpc_git(root, "remote", "add", "origin", str(Path(tmp) / "no-remote"))
+    _cpc_git(root, "update-ref", "refs/remotes/origin/main", _cpc_git(root, "rev-parse", "main"))
+    _ckp_commit(root, evs=[], msg="空帳")
+    return root, fake
+
+
+def t_codeloop_pass_choice_blocks():
+    """[代碼審通過前自動跑選擇點 S1、S2、S9] code-loop pass 記通過前的選擇點預判:不跑測試,只用推送前那一圈判一次(帳讀工作目錄);
+    缺紀錄 → rc 2、印推送前同一段訊息再補 pass 的出口、記 code-loop-pass 擋下與帶 site 的 choice-kill blocked;照指示跑 choice-kill(不提交)後 pass 判過,
+    推送前那道照舊只讀已提交的帳;同一頂端 pass 與推送各記一筆、同場合不重記;gov --stats 分出 pass 預判筆數。判準來源:計劃〈預期值表〉S1、S2、S9。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-cpc-"))
+    root = fake = None
+    try:
+        root, fake = _cpc_repo(1, {"alphaCase": {"kill": [1]}}, tmp)
+        main_sha = _cpc_git(root, "rev-parse", "main")
+        runlog = tmp / "run.log"
+        r = _cpc_pass(root, fake, runlog=runlog)
+        out = r.stdout + r.stderr
+        check("S1 缺紀錄 → rc 2 不記通過、印推送前那段(缺紀錄 1 行)與 pass 的出口(先跑 choice-kill、紀錄不用先提交、要先提交才算)",
+              r.returncode == 2 and _ckp_block_lines(out, "缺紀錄") == 1 and "[code-loop pass 選擇點]" in out and "先跑 lumos choice-kill" in out
+              and "不用先提交" in out and "要先提交才算" in out, f"rc={r.returncode}\n{out[-1500:]}")
+        check("S1 pass 預判不跑任何測試(假 runner 沒被叫到)", not runlog.exists() or not runlog.read_text(encoding="utf-8").strip(),
+              runlog.read_text(encoding="utf-8")[-300:] if runlog.exists() else "")
+        clp = [x for x in _ck_gov(root, gate="code-loop-pass") if x.get("kind") == "blocked"]
+        check("S1 記一筆 code-loop-pass 擋下、blocks 含 choice", len(clp) == 1 and "choice" in (clp[0].get("blocks") or []), str(clp)[:300])
+        cb = _ck_gov(root, kind="blocked")
+        check("S1 記一筆 choice-kill blocked、site 是 pass", len(cb) == 1 and cb[0].get("site") == "pass", str(cb)[:300])
+        _cpc_pass(root, fake)
+        check("S9 同一頂端、同一場合再擋一次 → choice-kill blocked 不重記", len(_ck_gov(root, kind="blocked")) == 1, str(_ck_gov(root, kind="blocked"))[:300])
+        k = _ck_run(root, fake)
+        check("前置:choice-kill 判 killed", k.returncode == 0, k.stdout[-400:] + k.stderr[-300:])
+        r = _cpc_pass(root, fake)
+        check("S2 紀錄沒提交、pass 讀工作目錄帳 → rc 0 記通過", r.returncode == 0, (r.stdout + r.stderr)[-1200:])
+        tip = _cpc_git(root, "rev-parse", "HEAD")
+        pr = _ckp_push(root, fake, rng=f"{main_sha}..{tip}", push=("origin", "refs/heads/feat/sit"))
+        check("S2 同一頂端推送前那道(紀錄沒提交)→ 照舊擋缺紀錄", pr.returncode == 1 and _ckp_block_lines(pr.stdout, "缺紀錄") == 1, pr.stdout[-800:])
+        cb = _ck_gov(root, kind="blocked")
+        check("S9 同一頂端 pass 與推送各擋一次 → 各一筆(一筆 site pass、一筆沒有)",
+              sorted(str(x.get("site")) for x in cb) == ["None", "pass"], str(cb)[:400])
+        st = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "gov", "--stats", "--since", "9999"], cwd=root,
+                            capture_output=True, text=True, env=_ck_env(fake))
+        check("S9 gov --stats 印「被擋 2 筆(推送 1、pass 預判 1」", "被擋 2 筆(推送 1、pass 預判 1" in st.stdout,
+              " | ".join(ln.strip() for ln in st.stdout.splitlines() if "被擋" in ln)[:400] + st.stderr[-300:])
+    finally:
+        _ck_cleanup(tmp, root, fake)
+
+
+def t_codeloop_pass_choice_survived():
+    """[代碼審通過前自動跑選擇點 S3、S7] 存活沒處置 → rc 2、印三種處置;放行寫了沒提交 → 照擋、提醒要先提交;帳不在 → 指路先跑 choice-kill。"""
+    import json as _j
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-cpc-"))
+    r2 = f2 = None
+    try:
+        r2, f2 = _ck_repo(1, {})
+        _cpc_git(r2, "remote", "add", "origin", str(tmp / "no-remote"))
+        _cpc_git(r2, "update-ref", "refs/remotes/origin/main", _cpc_git(r2, "rev-parse", "main"))
+        r = _cpc_pass(r2, f2)
+        out = r.stdout + r.stderr
+        check("帳不在 → rc 2、pass 的出口指路先跑 choice-kill", r.returncode == 2 and "帳不在" in out and "先跑 lumos choice-kill" in out, out[-600:])
+        _ck_run(r2, f2)
+        _ckp_commit(r2)
+        r = _cpc_pass(r2, f2)
+        out = r.stdout + r.stderr
+        check("S3 存活沒處置 → rc 2、印 situation-rule --point、lint-waive choice:、補測試", r.returncode == 2 and "situation-rule --point" in out
+              and "lint-waive choice:" in out and "補測試" in out, f"rc={r.returncode}\n{out[-1200:]}")
+        ev = [x for x in _ck_gov(r2, kind="choice-kill") if x.get("verdict") == "survived"]
+        wp = Path(r2) / ".lumos" / "lint-waivers.json"
+        wp.parent.mkdir(parents=True, exist_ok=True)
+        wp.write_text(_j.dumps({"waivers": [{"key": f"choice:{ev[0]['file']}:{ev[0]['fp']}", "rule": "choice-kill", "file": "", "reason": "不適用:型別不合換了編不過不是需求",
+                                             "by": "t", "ts": "", "origin": "human", "acked": True}]}) if ev else "{}", encoding="utf-8")
+        r = _cpc_pass(r2, f2)
+        out = r.stdout + r.stderr
+        check("S7 放行寫了沒提交 → 照擋存活、訊息含「要先提交才算」", bool(ev) and r.returncode == 2 and "要先提交才算" in out, f"rc={r.returncode}\n{out[-800:]}")
+    finally:
+        _ck_cleanup(tmp, r2, f2)
+
+
+def t_codeloop_pass_choice_skips():
+    """[代碼審通過前自動跑選擇點 S4、S5、S6、S8、S12] 生效日前、ast-grep 不在、沒有圖譜資料夾、detached、不是 Kotlin 專案 → 照常記通過;
+    新增告警或表態那道擋下時不跑預判。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-cpc-"))
+    roots = []
+    try:
+        r3, f3 = _cpc_repo(1, {}, tmp)
+        roots += [r3, f3]
+        n0 = len(_ck_gov(r3))
+        r = _cpc_pass(r3, f3, since="9999-12-31")
+        check("S4 生效日還沒到 → rc 0、沒有新的 choice-kill 事件", r.returncode == 0 and len(_ck_gov(r3)) == n0, (r.stdout + r.stderr)[-600:])
+        r = _cpc_pass(r3, f3, path="/usr/bin:/bin")
+        check("S5 ast-grep 不在 → 只提醒、rc 0", r.returncode == 0 and "ast-grep" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-600:])
+        uv = _ck_gov(r3, kind="unverified")
+        check("S5 記一筆 choice-kill unverified、site 是 pass", bool(uv) and uv[-1].get("site") == "pass", str(uv)[:300])
+        _cpc_git(r3, "checkout", "-q", "--detach")
+        r = _cpc_pass(r3, f3)
+        check("S12 detached HEAD → rc 0、印「沒有分支」", r.returncode == 0 and "沒有分支" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-600:])
+        _cpc_git(r3, "checkout", "-q", "-")
+        _cpc_git(r3, "remote", "remove", "origin")
+        r = _cpc_pass(r3, f3)
+        out = r.stdout + r.stderr
+        check("S12 沒有遠端 → rc 0、印「沒有遠端」、不寫擋下", r.returncode == 0 and "沒有遠端,選擇點留給推送前判" in out, out[-600:])
+        _cpc_git(r3, "remote", "add", "fork", str(f3))
+        _cpc_git(r3, "remote", "add", "upstream", str(f3))
+        r = _cpc_pass(r3, f3)
+        out = r.stdout + r.stderr
+        check("S12 兩個遠端、沒有 origin、沒設上游 → rc 0、講判不出哪個遠端並教設上游,不說沒有遠端",
+              r.returncode == 0 and "判不出要比對哪個遠端" in out and "branch." in out and "沒有遠端" not in out, out[-600:])
+        r4, f4 = _cpc_repo(1, {}, tmp, config={"test_profile": "pytest", "test": {"run_cmd": "{python} tests/run.py {method}"}})
+        roots += [r4, f4]
+        r = _cpc_pass(r4, f4)
+        check("S12 沒有 kotlin-junit 平台 → rc 0、不印選擇點字樣", r.returncode == 0 and "選擇點" not in (r.stdout + r.stderr), (r.stdout + r.stderr)[-600:])
+        r5, f5 = _cpc_repo(1, {}, tmp)
+        roots += [r5, f5]
+        _cpc_git(r5, "rm", "-rq", _KSP_V)
+        _cpc_git(r5, "commit", "-qm", "拿掉圖譜")
+        r = _cpc_pass(r5, f5)
+        check("S6 沒有圖譜資料夾 → rc 0、沒有 Traceback", r.returncode == 0 and "Traceback" not in r.stderr, (r.stdout + r.stderr)[-800:])
+        m = _load_lumos_inproc()
+        calls = []
+        saved = (m._codeloop_pass_mech, m._codeloop_pass_choice)
+        try:
+            m._codeloop_pass_mech = lambda *a, **k: calls.append("mech") or False
+            m._codeloop_pass_choice = lambda *a, **k: calls.append("choice") or True
+            ok, _node = m._codeloop_pass_gate(Path(r3), None, "a" * 40, "feat/sit")
+            check("S8 新增告警或表態那道擋下 → 不跑選擇點預判", ok is False and calls == ["mech"], str(calls))
+            calls.clear()
+            m._codeloop_pass_mech = lambda *a, **k: calls.append("mech") or True
+            m._codeloop_pass_choice = lambda *a, **k: calls.append("choice") or False
+            ok, _node = m._codeloop_pass_gate(Path(r3), None, "a" * 40, "feat/sit")
+            check("S8 那兩道過了 → 跑選擇點預判,擋下就不放行", ok is False and calls == ["mech", "choice"], str(calls))
+        finally:
+            m._codeloop_pass_mech, m._codeloop_pass_choice = saved
+    finally:
+        _ck_cleanup(tmp, *roots)
+
+
+def t_codeloop_pass_choice_range():
+    """[代碼審通過前自動跑選擇點 S10] 範圍照推送前掛鉤的輸入模擬:主線上提交沒推 → 擋;本機追蹤的遠端主線已等於頂端 → 範圍空、通過;
+    分支(名稱帶斜線)已推過、再加一個提交 → 只看新提交改到的那一行(增量,跟推送前同一段)。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-cpc-"))
+    roots = []
+    try:
+        r6, f6 = _cpc_repo(1, {}, tmp)
+        roots += [r6, f6]
+        _cpc_git(r6, "checkout", "-q", "main")
+        _cpc_git(r6, "merge", "-q", "--ff-only", "feat/sit")
+        r = _cpc_pass(r6, f6)
+        check("S10 主線上提交沒推 → rc 2 擋缺紀錄", r.returncode == 2 and _ckp_block_lines(r.stdout + r.stderr, "缺紀錄") == 1, (r.stdout + r.stderr)[-800:])
+        _cpc_git(r6, "update-ref", "refs/remotes/origin/main", _cpc_git(r6, "rev-parse", "HEAD"))
+        r = _cpc_pass(r6, f6)
+        check("S10 本機追蹤的遠端主線已等於頂端 → rc 0(範圍是空的)", r.returncode == 0, (r.stdout + r.stderr)[-800:])
+        r7, f7 = _cpc_repo(1, {}, tmp)
+        roots += [r7, f7]
+        _cpc_git(r7, "update-ref", "refs/remotes/origin/feat/sit", _cpc_git(r7, "rev-parse", "HEAD"))
+        src1, hits1 = _ck_hits(1)
+        src2, hits2 = _ck_hits(2)
+        (Path(r7) / _CHOICE_MAIN).write_text(src2, encoding="utf-8")
+        _cpc_git(r7, "commit", "-qam", "加一行")
+        f7b = _choice_fake_sg({src1: hits1, src2: hits2})
+        roots.append(f7b)
+        r = _cpc_pass(r7, f7b)
+        out = r.stdout + r.stderr
+        check("S10 分支已推過、再加一個提交 → 只看新提交那一行(缺紀錄 1 行是第 2 行)", r.returncode == 2 and _ckp_block_lines(out, "缺紀錄") == 1
+              and _ck_loc(2) in out and f"{_ck_loc(1)} " not in out, out[-1000:])
+    finally:
+        _ck_cleanup(tmp, *roots)
+
+
 def t_spec_gate_push_choice_cap():
     """[改動選擇點 S16] 存活行超過「有增行的檔數 × 7」:只擋用「曾經存活的行」指紋集合當種子抽中的那些;提交帳本或 rebase 改行號不改變抽中的那批。
     判準來源:計劃預期值表 S16 兩列(論文 2.3)。翻紅釘:種子帶行號 → rebase 那條紅;不設上限 → 抽 14 那條紅;帳本算進檔數 → 提交帳本那條紅。"""
@@ -145065,7 +145248,7 @@ def t_gov_stats_choice_kill():
         check("S22 第一次跑殺掉率 3/5", "第一次跑殺掉率 3/5" in seg, seg[:900])
         check("S22 存活處置寫回規格 1、放行 1(不適用)", "寫回規格 1" in seg and "放行 1(不適用 1)" in seg, seg[:900])
         check("S22 no_result 原因前 5 列出測試掛住", "跑不出結果原因前 5:測試掛住 1" in seg, seg[:900])
-        check("S22 被擋 4(過期 1/4)", "推送被擋 4 筆(過期 1/4)" in seg, seg[:900])
+        check("S22 被擋 4(過期 1/4;舊帳沒有 site 都算推送)", "被擋 4 筆(推送 4、pass 預判 0;過期 1/4)" in seg, seg[:900])
     finally:
         shutil.rmtree(root, ignore_errors=True)
     rows2 = [_j.dumps({"ts": "2026-11-14T10:00:00", "commit": "c", "gate": "lint-new", "kind": "waived", "hard": False, "nodes": [], "note": f"放行{i}",
