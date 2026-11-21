@@ -18063,6 +18063,85 @@ def _render_gov_situation(rows):
     print()
 
 
+_SEAT_NOISE_DAYS = 56
+_SEAT_NOISE_FEW = 10
+_SEAT_SPLIT_RE = re.compile(r"^(.*?)-(?=[A-Za-z])(.*)$")
+
+
+def _seat_noise_name(name):
+    """逐席段的席名:先去前後空白、NFC,再只去夾在角色與模型尾碼之間的輪次記號,模型名裡的數字不動。
+    角色=第一個後面接英文字母的連字號之前;尾碼開頭的 r2- 才去;角色尾巴的數字只在緊跟的不是連字號、而且角色含中文時才去
+    (前一字是中文時連那個 r 一起去,所以 finder2 不會切成 finde;正確性-2、外家codex-5 這種數字自成一段的不去)。
+    全程線性,不用會回溯的尾端正規式(代碼審 r2 資源 1:十萬字元的席名原本要跑 40 秒)。"""
+    name = nfc(str(name).strip())
+    m = _SEAT_SPLIT_RE.match(name)
+    if not m:
+        return name
+    role, rest = m.groups()
+    rest = re.sub(r"^r\d+-(?=[A-Za-z])", "", rest)
+    bare = role.rstrip("0123456789")
+    if bare != role and bare and bare[-1] != "-":
+        if bare[-1] == "r" and len(bare) >= 2 and ord(bare[-2]) > 127:
+            bare = bare[:-1]
+        if any(ord(ch) > 127 for ch in bare):
+            role = bare
+    return f"{role}-{rest}"
+
+
+def _seat_noise_window_start(cutoff):
+    """逐席段的起算點(UTC 秒):gov 已算好的起算日(本地午夜)與「現在往前 56 天」取較晚的。"""
+    import datetime as _dtm
+    floor = _dtm.datetime.now().astimezone().timestamp() - _SEAT_NOISE_DAYS * 86400
+    try:
+        return max(_dtm.datetime.fromisoformat(str(cutoff)).astimezone().timestamp(), floor)
+    except ValueError:
+        return floor
+
+
+def _seat_noise_carriers(rows, start):
+    """窗口內帶好型別 finding_seats 的載體列;同一 (迴圈, 輪) 只留帳上最後一筆。"""
+    last = {}
+    for r in rows:
+        if r.get("gate") != "canary" or not isinstance(r.get("finding_seats"), dict) or not _finding_sources_typed(r["finding_seats"]):
+            continue
+        k = _loop_ts_key(str(r.get("ts") or ""))
+        if k is not None and k >= start and r.get("loop"):   # 沒有迴圈的列寫側已擋;舊帳若有也不併成同一鍵
+            last[(r.get("loop"), r.get("round"))] = r
+    return list(last.values())
+
+
+def _seat_noise_counts(carriers):
+    """{席名(去輪次記號): [條數, 沒用條數]}:每筆載體列各算一次;折入=有用、放行或重現不到=沒用、都不在的不算。"""
+    def _ids(x):
+        return set(x) if isinstance(x, (list, dict)) else set()
+    cnt = {}
+    for r in carriers:
+        fo, bad = _ids(r.get("folded_set")), _ids(r.get("accepted_set")) | _ids(r.get("refuted_set"))
+        for i, names in r["finding_seats"].items():
+            if i not in fo and i not in bad:
+                continue
+            for nm in dict.fromkeys(_seat_noise_name(n) for n in names):
+                c = cnt.setdefault(nm, [0, 0])
+                c[0] += 1
+                c[1] += i not in fo
+    return cnt
+
+
+def _render_seat_noise(rows, since_days, cutoff):
+    """gov --stats 的逐席沒用率(Projects/代碼審發現記出處席位_計劃 〈做法〉統計):近 56 天(跟 --since 取較短)、帶 finding_seats 的載體;
+    席名只去輪次記號、不併模型;不到 10 條標樣本少;沒資料整段不印。"""
+    carriers = _seat_noise_carriers(rows, _seat_noise_window_start(cutoff))
+    cnt = _seat_noise_counts(carriers)
+    if not cnt:
+        return
+    days = min(int(since_days), _SEAT_NOISE_DAYS) if str(since_days).isdigit() else _SEAT_NOISE_DAYS
+    print(f"  逐席沒用率(近 {days} 天、只算有標 --finding-seat 的 {len(carriers)} 筆載體;沒用=放行或重現不到,有用=折入):")
+    for nm, (n, b) in sorted(cnt.items(), key=lambda kv: (-kv[1][0], kv[0])):
+        print(f"    {nm}:{n} 條,沒用 {b}({b / n:.0%}" + (",樣本少)" if n < _SEAT_NOISE_FEW else ")"))
+    print("  (放行不一定是雜訊、折入不一定有用,只供人裁;同一席不同模型分開列)")
+    print()
+
+
 def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node, repo_root, escapes=None):
     """gov --stats:純數字報表 + 未出現清單。恆不影響 rc、不改既有輸出。
     repo_root=hook 事件檔所在的 repo 根,由呼叫端從 vault 反推(_vault_repo_root),必填、漏傳直接炸(r1 架構席:鄰居慣例不給預設);★不准用 cwd 的 git 根★——
@@ -18122,6 +18201,7 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node, repo_root, es
         print(f"  發現在修什麼(只算有標 --finding-kind 的 {fk_rounds} 輪,共 {tot} 條):程式缺陷 {fk['code']}({fk['code']/tot:.0%})、被審文件缺陷 {fk['spec']}({fk['spec']/tot:.0%})、流程自己要求的文件/留痕 {fk['process']}({fk['process']/tot:.0%})")
         print("  (process 佔比就是「流程自產工作量」;2026-08-22 起才有標,之前的輪沒資料)")
         print()
+    _render_seat_noise(rows, since_days, cutoff)
     # 辯方明確表態分布(2026-08-27,Systems/finding-refute):agree/evidence/concern 三態計數。
     # evidence(辯方降級的)是 2026-08-22「辯方三分類先不做」裁定重啟條件的候選池——
     # 抽驗這批有沒有「降錯、後來證明 finding 是真的」,有實例才用證據翻案。
@@ -18362,7 +18442,7 @@ _GOV_FIELD_TYPES = {
     "nodes": (list,),
     **dict.fromkeys(("findings", "reported"), (int, type(None))),
     **dict.fromkeys(("pairs", "findings_set", "refuted_set", "folded_set", "accepted_set"), (list, type(None))),
-    **dict.fromkeys(("finding_kinds", "refute_verdicts", "dispositions", "finding_sources", "blind_judge"), (dict, type(None))),
+    **dict.fromkeys(("finding_kinds", "refute_verdicts", "dispositions", "finding_sources", "finding_seats", "blind_judge"), (dict, type(None))),
     # 情境題盲判與提醒(代碼審 r1 架構對齊 F4):seg/row 下游當集合元素與字典鍵、keys 逐項拆,型別錯會讓整個 gov 當掉
     **dict.fromkeys(("role", "seg", "row"), (str, type(None))),
     "keys": (list, type(None)),
@@ -18396,6 +18476,8 @@ def _gov_event_types_ok(d):
         if any(not isinstance(v, str) for v in (d.get(k) or {}).values()):
             return False
     if not _finding_sources_typed(d.get("finding_sources") or {}):   # 值要是字串清單(代碼審minor解綁),不能併進上面那組
+        return False
+    if not _finding_sources_typed(d.get("finding_seats") or {}):   # 同形狀(代碼審發現記出處席位_計劃 範圍⑥)
         return False
     return True
 
@@ -18513,6 +18595,7 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
          "loop": d.get("loop"), "round": d.get("round"), "reported": d.get("reported"),
          "findings_set": d.get("findings_set"), "refuted_set": d.get("refuted_set"),
          "folded_set": d.get("folded_set"), "accepted_set": d.get("accepted_set"),
+         "finding_seats": d.get("finding_seats"),   # 逐席沒用率(代碼審發現記出處席位_計劃)
          "report_sha256": d.get("report_sha256"),
          # [S2] second 行的 verdict/ref 併進 detail(否則分歧訊號在治理帳全程隱形)
          "detail": ((f"verdict={d.get('verdict','?')} ref={d.get('ref','')} · "
@@ -19482,7 +19565,105 @@ def _round_format_write_block(loop, rows, lerr, rec, tier, whole_ledger_bad=Fals
     return None
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None, orchestrator=None, refuted_set=None, finding_severities=None, regression_set=None, finding_sources=None):
+# 代碼審發現記出處席位_計劃:生效日(合進主線的隔天 00:00);寫法同 _SECURITY_SEAT_SINCE(帶時區、用 _loop_ts_key 比)。
+# 另留 LUMOS_FINDING_SEAT_SINCE 覆寫:既有 87 處造帳測試用當下時間記載體,測試總檔預設推到 9999 年讓它們停在生效前。
+_FINDING_SEAT_SINCE = "2026-11-22T00:00:00+08:00"
+
+
+def _finding_seat_since_key():
+    """生效日的可比鍵:環境變數是純日期(跟其他 *_SINCE 一樣,當台北 00:00)或帶時區的時間就用它,否則用常數。"""
+    v = os.environ.get("LUMOS_FINDING_SEAT_SINCE", "").strip()
+    if _DAY_RE.fullmatch(v):
+        v += "T00:00:00+08:00"
+    k = _loop_ts_key(v)
+    return k if k is not None else _loop_ts_key(_FINDING_SEAT_SINCE)
+
+
+def _finding_seat_parse(items, all_ids):
+    """--finding-seat 的形式與涵蓋(給了就要涵蓋 all_ids=發現清單加重現不到清單):回 {id: [席名…]};擋下印原因回 None。"""
+    seats = {}
+    for item in items:
+        k, sep, val = item.partition("=")
+        k, val = k.strip(), val.strip()
+        if not sep or not k or not val:
+            print(f"擋下:--finding-seat 要寫成 id=<席名>(席名照帳上那一席的 --auditor 抄),你給的是 {item!r}", file=sys.stderr)
+            return None
+        if k not in all_ids:
+            print(f"擋下:--finding-seat 的 {k} 不在發現清單(--findings-set)也不在重現不到清單(--refuted-set)裡", file=sys.stderr)
+            return None
+        if val not in seats.setdefault(k, []):
+            seats[k].append(val)
+    if set(seats) != all_ids:
+        print(f"擋下:--finding-seat 要每條發現各標至少一席,重現不到的也算(還沒標的:{sorted(all_ids - set(seats))})", file=sys.stderr)
+        return None
+    return seats
+
+
+def _finding_seat_required_block(root, loop, auditor, rec, rows):
+    """必填:迴圈不是設計審、首筆帳(沒有帳就看本筆)不早於生效日,載體卻沒帶 → 擋下回 2。其餘回 None。
+    本筆時間早於生效日時直接不必填(帳上有壞時間的列也一樣),生效日退回 9999 時才真的變回選填(代碼審 r2 整合 4);
+    本筆不早於生效日、帳上卻有時間讀不動的列,判不了首筆,擋。環境變數把照常數本來要填的推遲時,提醒並留事件。"""
+    if _roster_kind(str(loop)) == "design" or "finding_seats" in rec:
+        return None
+    since, const = _finding_seat_since_key(), _loop_ts_key(_FINDING_SEAT_SINCE)
+    rec_k = _loop_ts_key(str(rec.get("ts") or ""))
+    keys = [_loop_ts_key(str(r.get("ts") or "")) for r in rows]
+    good = [k for k in keys if k is not None]
+    first = min(good) if good else (rec_k if not keys else None)   # 首筆=帳上時間最早那筆;帳上沒有任何一筆才看本筆
+    if (rec_k is not None and rec_k < since) or (None not in keys and first is not None and first < since):
+        if first is not None and first >= const:   # 照常數本來要填,是環境變數把它推遲了:不靜默(代碼審 r1 資安 2、r2 資安 1)
+            _gate_event_or_warn(root, "canary", "warned", f"finding-seat-since-overridden loop={_esc_clean(loop)} auditor={_esc_clean(auditor)} id={uuid.uuid4().hex[:8]}")
+            print("提醒:環境變數 LUMOS_FINDING_SEAT_SINCE 把 --finding-seat 的生效日推遲了,這筆照常數本來要帶;"
+                  "不是刻意設的就 unset 它再記", file=sys.stderr)
+        return None
+    if None in keys:
+        _gate_event_or_warn(root, "canary", "blocked", f"finding-seat-badts loop={_esc_clean(loop)} auditor={_esc_clean(auditor)} id={uuid.uuid4().hex[:8]}", hard=True)
+        print("擋下:這個迴圈帳上有一筆時間讀不動或沒帶時區,判不了是不是生效日後開的迴圈,不能判定可以免帶 --finding-seat", file=sys.stderr)
+        print("  脫困:補帶 --finding-seat(每條發現各標一席)再記;帳只往後加、改不了那一筆", file=sys.stderr)
+        return 2
+    _gate_event_or_warn(root, "canary", "blocked", f"finding-seat-missing loop={_esc_clean(loop)} auditor={_esc_clean(auditor)} id={uuid.uuid4().hex[:8]}", hard=True)
+    ids = sorted(set(rec.get("findings_set") or []) | set(rec.get("refuted_set") or []))
+    print(f"擋下:代碼審載體要帶 --finding-seat(生效日 {_FINDING_SEAT_SINCE[:10]} 起新開的代碼審迴圈):"
+          "每條發現(含 --refuted-set 那幾條)各標是哪一席報的,好算逐席沒用率", file=sys.stderr)
+    print(f"  這輪要標的 id:{', '.join(ids)}", file=sys.stderr)
+    print(f"  寫法:--finding-seat {ids[0] if ids else 'c1'}=<那一席的 --auditor>(每條一個,同一條多席報就給多次);"
+          "席名要是這一輪已經入帳那一席的 --auditor,所以其他席先記、載體最後記;細節見 lumos-code-loop 手冊第 6 步", file=sys.stderr)
+    return 2
+
+
+def _finding_seat_write_block(env, loop, round_id, auditor, rec, rows, rows_err):
+    """載體記帳的 --finding-seat:①必填(_finding_seat_required_block);②席名(去空白、NFC)要等於同輪帳上某一筆或本筆的 auditor,
+    帳上存比中的那筆原字串。擋下回 2、不寫帳;過了回 None(可能改寫 rec)。"""
+    root = _vault_repo_root(env)
+    blk = _finding_seat_required_block(root, loop, auditor, rec, rows)
+    if blk is not None or not rec.get("finding_seats"):
+        return blk
+    if rows_err is not None:
+        print(f"擋下:讀不到這個迴圈的審查帳({rows_err}),沒辦法核對 --finding-seat 的席名", file=sys.stderr)
+        return 2
+    known = {}
+    for r in rows:
+        if r.get("round") == round_id and isinstance(r.get("auditor"), str) and r["auditor"].strip():
+            known.setdefault(nfc(r["auditor"].strip()), r["auditor"])
+    if auditor and str(auditor).strip():
+        known.setdefault(nfc(str(auditor).strip()), str(auditor))
+    out = {}
+    for k, names in rec["finding_seats"].items():
+        for nm in names:
+            hit = known.get(nfc(nm))
+            if hit is None:
+                _gate_event_or_warn(root, "canary", "blocked", f"finding-seat-unknown loop={_esc_clean(loop)} auditor={_esc_clean(auditor)} id={uuid.uuid4().hex[:8]}", hard=True)
+                print(f"擋下:--finding-seat 的席名 {nm!r}({k})不是這一輪({round_id})帳上任何一席的 --auditor,也不是本筆", file=sys.stderr)
+                print(f"  這一輪帳上現有:{', '.join(repr(x) for x in sorted(known.values())) or '(還沒有)'}", file=sys.stderr)
+                print("  那一席還沒記的話先記它,載體最後記;已經記了就照上面那份席名抄", file=sys.stderr)
+                return 2
+            if hit not in out.setdefault(k, []):
+                out[k].append(hit)
+    rec["finding_seats"] = out
+    return None
+
+
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None, orchestrator=None, refuted_set=None, finding_severities=None, regression_set=None, finding_sources=None, finding_seats=None):
     """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
     僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
     停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
@@ -19633,8 +19814,8 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             return []
         return items
     f_set, fo_set, ac_set = _ids(findings_set), _set_or_none(folded_set), _set_or_none(accepted_set)
-    if any(x is not None for x in (fo_set, ac_set, accept_reasons, refute_verdicts, finding_kinds, regression_set, finding_sources)) and f_set is None:
-        print("擋下:--folded-set/--accepted-set/--accept-reason/--refute-verdict/--finding-kind/--regression-set/--finding-source 要跟 --findings-set 一起給(先列出發現了什麼,才能說各自怎麼處置)", file=sys.stderr)
+    if any(x is not None for x in (fo_set, ac_set, accept_reasons, refute_verdicts, finding_kinds, regression_set, finding_sources, finding_seats)) and f_set is None:
+        print("擋下:--folded-set/--accepted-set/--accept-reason/--refute-verdict/--finding-kind/--regression-set/--finding-source/--finding-seat 要跟 --findings-set 一起給(先列出發現了什麼,才能說各自怎麼處置)", file=sys.stderr)
         return 2
     if f_set is not None:
         if not f_set:
@@ -19752,6 +19933,16 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
                 print(f"擋下:--finding-kind 要每條發現各標一個(發現有 {sorted(F)},標了 {sorted(kinds)})", file=sys.stderr)
                 return 2
             rec["finding_kinds"] = kinds
+        # 發現出自哪一席(Projects/代碼審發現記出處席位_計劃):給了就要涵蓋全集(發現清單加重現不到清單),跟 --finding-kind 同規矩;
+        # 這裡只驗形式與涵蓋,席名對不對得上同輪帳、生效日後要不要必填,要讀帳,排到讀帳那一次之後
+        if finding_seats:
+            if not loop:   # 沒有迴圈就沒有「同輪帳」可對席名(代碼審 r1 邊界 1:不擋的話亂寫的席名直接進帳)
+                print("擋下:--finding-seat 要跟 --loop、--round 一起給——席名要對同一輪帳上的 --auditor", file=sys.stderr)
+                return 2
+            seats = _finding_seat_parse(finding_seats, F | set(rreasons))
+            if seats is None:
+                return 2
+            rec["finding_seats"] = seats
         # 逐條嚴重度(r2 回滾席,2026-09-17):輪級 severity 是整輪最高值,分不出「造成 major 的是哪一條」;
         # 逃逸自動記要判「code 型那條自己是不是 major 以上」就得逐條給。選填;給了鍵要 ⊆ 全集。
         if finding_severities:
@@ -20041,6 +20232,9 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         elif rec.get("finding_sources"):
             print(f"擋下:讀不到這個迴圈的審查帳({_lerr}),沒辦法核對逐條來源", file=sys.stderr)
             return 2
+    _fsb = _finding_seat_write_block(env, loop, round_id, auditor, rec, _lrows, _lerr) if (loop and outcome is None and "findings_set" in rec) else None
+    if _fsb is not None:
+        return _fsb
     path = env.vault.parent / ".canary-log.jsonl"
     # ── 代碼審從第一筆就要留痕(2026-09-22 rtb-production-agent-demo 回報)──
     # 下面那道「定錨後才強制」對代碼審太晚:代碼審的慣例是先記非載體席、再記載體席,
@@ -24721,6 +24915,8 @@ def _loop_next_hints(loop_id, eff_tier, n_next):
     高風險代碼審:資安包與記帳順序;設計審:先排乾再凍結(首輪多一句前掃)。看不出種類的編號照最嚴當代碼審。"""
     kind = _roster_kind(str(loop_id))
     out = []
+    if kind != "design":   # 代碼審發現記出處席位_計劃(代碼審 r1 整合 4):每個分級都提醒,standard 也會因為先記載體被擋
+        out.append("載體最後記:--finding-seat 的席名要是這一輪已經入帳那一席的 --auditor,其他席先記、載體最後記;席名不帶輪次(寫 正確性-sonnet)")
     if kind != "design" and eff_tier == "high":
         out.append("資安包要含這輪凍結 patch 改到的全部檔(含筆記與文件),不要拆掉;最後一次修補之後要對最新的凍結 patch 再派一次資安")
         out.append("記帳順序:資安與其他席先記,載體最後記;載體帶了 --finding-source(major 輪逐條放行 minor)的話,記完以後同輪任何一席都不能再補,"
@@ -24861,6 +25057,8 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                    f" --scope-lines {_SCOPE_PLACEHOLDER}")
             if _rm and n_next >= 2 and str(loop_id).startswith("code-"):
                 cmd += " --regression-set <id串|none>"
+            if _roster_kind(str(loop_id)) != "design":   # 代碼審發現記出處席位_計劃 範圍⑤:設計審不必填、不印
+                cmd += " --finding-seat <id=席名>"
             return cmd
         # 代碼審第 2 輪起 loop next 多半停在 gate-pending(沒帶 --spec),範本也要給,不然 --regression-set 永遠看不到
         if phase == "gate-pending" and not light and eff_tier in LOOP_TIERS and n_next >= 2 and str(loop_id).startswith("code-"):
@@ -37049,7 +37247,7 @@ _FINDING_SOURCE_NO_RE = re.compile(r"[1-9][0-9]*")   # 逐條來源的序號:不
 
 
 def _finding_sources_typed(fs):
-    """帳上 finding_sources 的型別對不對:dict,每個值是字串清單。寫側、處置閘、gov 讀帳共用這一支。"""
+    """帳上 finding_sources(與同形狀的 finding_seats)型別對不對:dict,每個值是字串清單。寫側、處置閘、gov 讀帳共用這一支。"""
     return isinstance(fs, dict) and all(isinstance(v, list) and all(isinstance(x, str) for x in v) for v in fs.values())
 
 
@@ -81543,6 +81741,10 @@ def main():
 
     cr.add_argument("--regression-set", dest="regression_set",
                     help="這輪的發現裡,編排者判斷是上一輪修補造成的:id 逗號串,或 none(判過、沒有);選填,只能跟 --findings-set 一起給、id 要在裡面;迴圈第一輪只能 none;只收 code- 開頭的編號(Projects/代碼審修正關卡第0步_計劃、記帳與迴圈工具小修_計劃 d2)")
+    cr.add_argument("--finding-seat", dest="finding_seats", action="append",
+                    help="[代碼審發現記出處席位] 每條發現是哪一席報的:id=<席名>(可重複;同一條多席報就給多次;重現不到的也要標);"
+                         "要跟 --loop、--round、--findings-set 一起給;席名要是同輪帳上某一席或本筆的 --auditor(載體最後記)。"
+                         "給了就要涵蓋全集;生效日(_FINDING_SEAT_SINCE)起新開的代碼審迴圈載體必填")
     cr.add_argument("--finding-source", dest="finding_sources", action="append",
                     help="[代碼審minor解綁] 代碼審 major 輪要放行原報 minor 時,每個 id 指回席報告原條:id=<報告路徑>#<序號>(可重複;序號用 report-normalize --items 列);"
                          "記帳當下就核對:放行的都要指原報 minor、每條原報 major 都只被折入的 id 指到,錯了 rc2 不寫帳。載體最後記")
@@ -82982,7 +83184,8 @@ def main():
                           refute_verdicts=getattr(args, 'refute_verdicts', None),
                           refuted_set=getattr(args, 'refuted_set', None),
                           regression_set=getattr(args, 'regression_set', None),
-                          finding_sources=getattr(args, 'finding_sources', None))
+                          finding_sources=getattr(args, 'finding_sources', None),
+                          finding_seats=getattr(args, 'finding_seats', None))
 
 
     if args.cmd == "handoff":
