@@ -301,3 +301,402 @@ rule:
         inside:
           kind: call_expression
           has: {kind: simple_identifier, nthChild: 1, regex: '^remember$'}
+---
+# 第三批([[Projects/選擇點表第三批業務情境寫法_計劃]]):業務情境寫法——兩種寫法都合法、哪一個對看需求。形狀照一條判準選(Systems/kotlin規則包
+# 那條 WHY,t_choice_rule_shape_batch3 守):規則用到往下找(has/precedes)或 inside 往上超過兩層的,整條關聯規則外包一層 not: {not: …}
+# (C-38、C-39 往下 has 加 precedes,C-48、C-49 往上三層再看外層呼叫,C-50、C-53 往上多層,C-51、C-52 往下看第一個子節點):正面寫的關聯規則
+# 會把外層整段節點當次要標記塞進每個命中、輸出平方成長(Systems/kotlin規則包 的 PITFALL),多層鏈逐層把 not 塞進去不等價,整條外包命中集合
+# 不變(S9 用合成輸入守住);其餘(C-40~C-47 只往上兩層)照第一版 C-19~C-31 一字不差正面寫,不包雙重否定。
+# C-38、C-39 協程作用域:命中 call_expression 第一個子節點的 supervisorScope/coroutineScope 識別字(錨點「運算元起始」),而且這個作用域
+# 有兩個以上子協程(計劃〈用詞〉):子協程是單一識別字 async/launch 的呼叫,往外最近一層 lambda 是作用域自己的大括號(或迴圈呼叫的大括號、
+# 迴圈呼叫往外最近一層是作用域的大括號)。ast-grep 沒有計數:「兩個」用配對(含子協程的節點 X precedes 另一個含子協程的節點 Y);從作用域
+# 大括號 L 往下找一律 stopBy 下一層 lambda_literal(停下那一層也算命中);沿固定鏈 call_suffix → annotated_lambda → lambda_literal 拿 L,
+# 不用 stopBy: end(會越過內層作用域,外層被內層的 async 誤命中;設計審 r1 邊界席、r2 正確性席實跑)。
+# utils 只在同一份規則文件裡有效,C-38 與 C-39 各一份,兩份要一字不差(t_choice_samples_batch3 比對)。
+id: C-38
+language: kotlin
+severity: hint
+message: 協程作用域 supervisorScope(換成 coroutineScope,一支失敗時兄弟一起取消)
+utils:
+  child-co:
+    # 子協程:呼叫名稱是單一識別字 async 或 launch(帶接收者的 scope.launch、this.async 開在別的作用域,不算)。建立後立刻 .await()/.join()
+    # 的照算:不看先後的排除會把同時跑的兄弟一起排掉、又讓長方法鏈的掃描時間三次方成長,不收(計劃〈天花板〉第 3 條;代碼審 r2 c1 b1 g1 r1)
+    kind: call_expression
+    has: {kind: simple_identifier, nthChild: 1, regex: '^(async|launch)$'}
+  has-co:
+    # 本身是子協程,或往下(不越過下一層 lambda)有子協程
+    any:
+      - matches: child-co
+      - has: {matches: child-co, stopBy: {kind: lambda_literal}}
+  loop-call:
+    # 迴圈呼叫:.map/.forEach/.mapIndexed/.forEachIndexed/.flatMap 與頂層 repeat(…),大括號裡的子協程在它的固定鏈 lambda 裡
+    kind: call_expression
+    any:
+      - has: {kind: navigation_expression, nthChild: 1, has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(map|forEach|mapIndexed|forEachIndexed|flatMap)$'}}
+      - has: {kind: simple_identifier, nthChild: 1, regex: '^repeat$'}
+    has:
+      kind: call_suffix
+      has:
+        kind: annotated_lambda
+        has:
+          kind: lambda_literal
+          has: {matches: child-co, stopBy: {kind: lambda_literal}}
+  many-co:
+    # 作用域大括號 L 有兩個以上子協程:①兩個子協程配對(同一個陳述裡兩個也算);②一個子協程落在 for/while 本體或迴圈呼叫的大括號裡
+    kind: lambda_literal
+    any:
+      - has:
+          stopBy: {kind: lambda_literal}
+          not: {kind: lambda_literal}
+          matches: has-co
+          precedes: {stopBy: end, matches: has-co}
+      - has:
+          stopBy: {kind: lambda_literal}
+          any:
+            - {kind: for_statement, has: {kind: control_structure_body, has: {matches: child-co, stopBy: {kind: lambda_literal}}}}
+            - {kind: while_statement, has: {kind: control_structure_body, has: {matches: child-co, stopBy: {kind: lambda_literal}}}}
+            - matches: loop-call
+rule:
+  kind: simple_identifier
+  regex: '^supervisorScope$'
+  nthChild: 1
+  not:
+    not:
+      inside:
+        kind: call_expression
+        has:
+          kind: call_suffix
+          has:
+            kind: annotated_lambda
+            has: {matches: many-co}
+---
+id: C-39
+language: kotlin
+severity: hint
+message: 協程作用域 coroutineScope(換成 supervisorScope,一支失敗時兄弟照常做完)
+utils:
+  child-co:
+    # 子協程:呼叫名稱是單一識別字 async 或 launch(帶接收者的 scope.launch、this.async 開在別的作用域,不算)。建立後立刻 .await()/.join()
+    # 的照算:不看先後的排除會把同時跑的兄弟一起排掉、又讓長方法鏈的掃描時間三次方成長,不收(計劃〈天花板〉第 3 條;代碼審 r2 c1 b1 g1 r1)
+    kind: call_expression
+    has: {kind: simple_identifier, nthChild: 1, regex: '^(async|launch)$'}
+  has-co:
+    # 本身是子協程,或往下(不越過下一層 lambda)有子協程
+    any:
+      - matches: child-co
+      - has: {matches: child-co, stopBy: {kind: lambda_literal}}
+  loop-call:
+    # 迴圈呼叫:.map/.forEach/.mapIndexed/.forEachIndexed/.flatMap 與頂層 repeat(…),大括號裡的子協程在它的固定鏈 lambda 裡
+    kind: call_expression
+    any:
+      - has: {kind: navigation_expression, nthChild: 1, has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(map|forEach|mapIndexed|forEachIndexed|flatMap)$'}}
+      - has: {kind: simple_identifier, nthChild: 1, regex: '^repeat$'}
+    has:
+      kind: call_suffix
+      has:
+        kind: annotated_lambda
+        has:
+          kind: lambda_literal
+          has: {matches: child-co, stopBy: {kind: lambda_literal}}
+  many-co:
+    # 作用域大括號 L 有兩個以上子協程:①兩個子協程配對(同一個陳述裡兩個也算);②一個子協程落在 for/while 本體或迴圈呼叫的大括號裡
+    kind: lambda_literal
+    any:
+      - has:
+          stopBy: {kind: lambda_literal}
+          not: {kind: lambda_literal}
+          matches: has-co
+          precedes: {stopBy: end, matches: has-co}
+      - has:
+          stopBy: {kind: lambda_literal}
+          any:
+            - {kind: for_statement, has: {kind: control_structure_body, has: {matches: child-co, stopBy: {kind: lambda_literal}}}}
+            - {kind: while_statement, has: {kind: control_structure_body, has: {matches: child-co, stopBy: {kind: lambda_literal}}}}
+            - matches: loop-call
+rule:
+  kind: simple_identifier
+  regex: '^coroutineScope$'
+  nthChild: 1
+  not:
+    not:
+      inside:
+        kind: call_expression
+        has:
+          kind: call_suffix
+          has:
+            kind: annotated_lambda
+            has: {matches: many-co}
+---
+# C-40~C-47 方法名各列:同第一版 `$R.方法名` 後接呼叫的 navigation_suffix(錨點「方法名」),規則跟 C-19~C-31 一字不差(只往上兩層、不往下找,
+# 照第一版正面寫 inside;第三批開頭那段的形狀判準,t_choice_rule_shape_batch3 守)。
+id: C-40
+language: kotlin
+severity: hint
+message: 業務情境 singleOrNull(換成 firstOrNull,多筆時回 null 變成取第一筆)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*singleOrNull$'
+  inside:
+    kind: navigation_expression
+    inside: {kind: call_expression}
+---
+id: C-41
+language: kotlin
+severity: hint
+message: 業務情境 single(換成 first,多筆時丟例外變成取第一筆)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*single$'
+  inside:
+    kind: navigation_expression
+    inside: {kind: call_expression}
+---
+id: C-42
+language: kotlin
+severity: hint
+message: 業務情境 firstOrNull(換成 first,找不到時回 null 變成丟例外)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*firstOrNull$'
+  inside:
+    kind: navigation_expression
+    inside: {kind: call_expression}
+---
+id: C-43
+language: kotlin
+severity: hint
+message: 業務情境 toIntOrNull(換成 toInt,格式不對時回 null 變成丟例外)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*toIntOrNull$'
+  inside:
+    kind: navigation_expression
+    inside: {kind: call_expression}
+---
+id: C-44
+language: kotlin
+severity: hint
+message: 業務情境 toLongOrNull(換成 toLong,格式不對時回 null 變成丟例外)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*toLongOrNull$'
+  inside:
+    kind: navigation_expression
+    inside: {kind: call_expression}
+---
+id: C-45
+language: kotlin
+severity: hint
+message: 業務情境 toDoubleOrNull(換成 toDouble,格式不對時回 null 變成丟例外)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*toDoubleOrNull$'
+  inside:
+    kind: navigation_expression
+    inside: {kind: call_expression}
+---
+id: C-46
+language: kotlin
+severity: hint
+message: 業務情境 mapLatest(換成 map,新值來時不再取消舊的)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*mapLatest$'
+  inside:
+    kind: navigation_expression
+    inside: {kind: call_expression}
+---
+id: C-47
+language: kotlin
+severity: hint
+message: 業務情境 transformLatest(換成 transform,新值來時不再取消舊的)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*transformLatest$'
+  inside:
+    kind: navigation_expression
+    inside: {kind: call_expression}
+---
+# C-48、C-49 replay:命中具名引數 `replay = ` 後面那個整數字面值本身(錨點「運算元起始」;整個引數換掉會丟掉 `replay =`),外層呼叫是
+# MutableSharedFlow 或 .shareIn(自訂函式的同名參數不收);位置引數寫法不收(計劃〈天花板〉)。關聯規則外包雙重否定。
+# C-48 另排除換成 0 會在建構時丟例外的呼叫:帶值不是 SUSPEND 的 onBufferOverflow、又沒有值不是 0 的 extraBufferCapacity(kotlinx.coroutines
+# 規定 replay 與 extraBufferCapacity 都是 0 時只准預設的 SUSPEND;任何建構它的測試都殺得掉,問不出需求)。顯式寫 SUSPEND(含裸名稱與完整
+# 套件名)換 0 照樣合法,照常命中;「值是 0」認得 0、0x0、0b0、0L 與帶正負號的這幾種整數字面值,括號包住的 (0) 不認(計劃〈天花板〉;代碼審 r1 b2 c1)。
+id: C-48
+language: kotlin
+severity: hint
+message: 業務情境 replay = 1(換成 0,晚到的訂閱者看不到上一個值)
+utils:
+  zero-int:
+    # 值是 0 的整數字面值:十進位、十六進位、二進位、Long,或前面帶一個正負號的這幾種
+    any:
+      - {kind: integer_literal, regex: '^0[0_]*$'}
+      - {kind: hex_literal, regex: '^0[xX][0_]+$'}
+      - {kind: bin_literal, regex: '^0[bB][0_]+$'}
+      - {kind: long_literal, regex: '^(0[0_]*|0[xX][0_]+|0[bB][0_]+)L$'}
+      - {kind: prefix_expression, regex: '^[-+]\s*(0[0_]*|0[xX][0_]+|0[bB][0_]+)L?$'}
+rule:
+  kind: integer_literal
+  regex: '^1$'
+  not:
+    not:
+      inside:
+        kind: value_argument
+        has: {kind: simple_identifier, nthChild: 1, regex: '^replay$'}
+        inside:
+          kind: value_arguments
+          not:
+            all:
+              - has:
+                  kind: value_argument
+                  has: {kind: simple_identifier, nthChild: 1, regex: '^onBufferOverflow$'}
+                  not: {has: {nthChild: {position: 1, reverse: true}, regex: '(^|\.)\s*SUSPEND$'}}
+              - not:
+                  has:
+                    kind: value_argument
+                    has: {kind: simple_identifier, nthChild: 1, regex: '^extraBufferCapacity$'}
+                    not: {has: {nthChild: {position: 1, reverse: true}, matches: zero-int}}
+          inside:
+            kind: call_suffix
+            inside:
+              kind: call_expression
+              any:
+                - has: {kind: simple_identifier, nthChild: 1, regex: '^MutableSharedFlow$'}
+                - has: {kind: navigation_expression, nthChild: 1, has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*shareIn$'}}
+---
+id: C-49
+language: kotlin
+severity: hint
+message: 業務情境 replay = 0(換成 1,晚到的訂閱者會再收到上一個值)
+rule:
+  kind: integer_literal
+  regex: '^0$'
+  not:
+    not:
+      inside:
+        kind: value_argument
+        has: {kind: simple_identifier, nthChild: 1, regex: '^replay$'}
+        inside:
+          kind: value_arguments
+          inside:
+            kind: call_suffix
+            inside:
+              kind: call_expression
+              any:
+                - has: {kind: simple_identifier, nthChild: 1, regex: '^MutableSharedFlow$'}
+                - has: {kind: navigation_expression, nthChild: 1, has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*shareIn$'}}
+---
+# C-50 CoroutineStart.LAZY:命中接在 CoroutineStart 後面那一段 navigation_suffix(不是呼叫;錨點「方法名」)。排除帶這個引數的那個
+# async/launch 呼叫直接被 .await() 或 .join() 接著呼叫(建立後立刻等,換成 DEFAULT 必然等價);只看直接接在後面那一層,包在別的呼叫
+# 引數裡的不排除。關聯規則整條外包雙重否定(第三批開頭那段)。
+id: C-50
+language: kotlin
+severity: hint
+message: 業務情境 CoroutineStart.LAZY(換成 DEFAULT,建立當下就開始做)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*LAZY$'
+  not:
+    not:
+      inside:
+        kind: navigation_expression
+        has: {kind: simple_identifier, nthChild: 1, regex: '^CoroutineStart$'}
+        not:
+          inside:
+            kind: value_argument
+            inside:
+              kind: value_arguments
+              inside:
+                kind: call_suffix
+                inside:
+                  kind: call_expression
+                  has:
+                    nthChild: 1
+                    any:
+                      - {kind: simple_identifier, regex: '^(async|launch)$'}
+                      - {kind: navigation_expression, has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(async|launch)$'}}
+                  inside:
+                    kind: navigation_expression
+                    has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(await|join)$'}
+                    inside: {kind: call_expression}
+---
+# C-51、C-52 BufferOverflow.DROP_*:命中接在 BufferOverflow 後面那一段 navigation_suffix(錨點「方法名」);關聯規則外包雙重否定。
+id: C-51
+language: kotlin
+severity: hint
+message: 業務情境 BufferOverflow.DROP_OLDEST(換成 DROP_LATEST,緩衝滿時留最早的)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*DROP_OLDEST$'
+  not:
+    not:
+      inside:
+        kind: navigation_expression
+        has: {kind: simple_identifier, nthChild: 1, regex: '^BufferOverflow$'}
+---
+id: C-52
+language: kotlin
+severity: hint
+message: 業務情境 BufferOverflow.DROP_LATEST(換成 DROP_OLDEST,緩衝滿時留最新的)
+rule:
+  kind: navigation_suffix
+  regex: '^(\?\.|\.)\s*DROP_LATEST$'
+  not:
+    not:
+      inside:
+        kind: navigation_expression
+        has: {kind: simple_identifier, nthChild: 1, regex: '^BufferOverflow$'}
+---
+# C-53 withContext(NonCancellable):命中 withContext( 唯一引數那個 NonCancellable 識別字(錨點「運算元起始」)。finally 區塊裡的不收
+# (那裡一定要用,型錄 CO-15 已靜態把關,換掉只會造出已知錯誤寫法)。關聯規則外包雙重否定。
+id: C-53
+language: kotlin
+severity: hint
+message: 業務情境 withContext(NonCancellable)(換成 EmptyCoroutineContext,取消後不再做完)
+rule:
+  kind: simple_identifier
+  regex: '^NonCancellable$'
+  not:
+    not:
+      all:
+        - inside:
+            kind: value_argument
+            inside:
+              kind: value_arguments
+              not: {has: {kind: value_argument, nthChild: 2}}
+              inside:
+                kind: call_suffix
+                inside:
+                  kind: call_expression
+                  has: {kind: simple_identifier, nthChild: 1, regex: '^withContext$'}
+        - not: {inside: {kind: finally_block, stopBy: end}}
+---
+# C-54、C-55 retry/retryWhen:錨點「整個呼叫」(計劃〈用詞〉),樣式命中整個呼叫運算式、`$A` 是接收者;壞法是刪掉 `$A` 結尾到呼叫結尾。
+# 接收者文字最後一段是 Result(WorkManager 的 Result.retry())時拿掉呼叫編不過,排除。接收者與 .retry 之間夾註解時樣式不命中(〈天花板〉)。
+id: C-54
+language: kotlin
+severity: hint
+message: 業務情境 retry(拿掉,失敗不再重試)
+rule:
+  any:
+    - pattern: $A.retry($$$B)
+    - pattern: $A.retry($$$B) { $$$C }
+    - pattern: $A.retry { $$$C }
+    - pattern: $A?.retry($$$B)
+    - pattern: $A?.retry($$$B) { $$$C }
+    - pattern: $A?.retry { $$$C }
+constraints:
+  A: {not: {regex: '(^|\.)\s*Result$'}}
+---
+id: C-55
+language: kotlin
+severity: hint
+message: 業務情境 retryWhen(拿掉,失敗不再重試)
+rule:
+  any:
+    - pattern: $A.retryWhen($$$B)
+    - pattern: $A.retryWhen { $$$C }
+    - pattern: $A?.retryWhen($$$B)
+    - pattern: $A?.retryWhen { $$$C }
+constraints:
+  A: {not: {regex: '(^|\.)\s*Result$'}}

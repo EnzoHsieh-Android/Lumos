@@ -1,0 +1,992 @@
+diff --git a/configs/ast-grep/kotlin-choice/rules-choice/api.yml b/configs/ast-grep/kotlin-choice/rules-choice/api.yml
+index 24338015b1dce2bd5022a302fe7cfab2ef2d7092..0bcc9257534aa2633bff2101a883e060e913827f 100644
+--- a/configs/ast-grep/kotlin-choice/rules-choice/api.yml
++++ b/configs/ast-grep/kotlin-choice/rules-choice/api.yml
+@@ -296,37 +296,45 @@ rule:
+   not:
+     inside:
+       not:
+         kind: call_suffix
+         has: {kind: annotated_lambda}
+         inside:
+           kind: call_expression
+           has: {kind: simple_identifier, nthChild: 1, regex: '^remember$'}
+ ---
+ # 第三批([[Projects/選擇點表第三批業務情境寫法_計劃]]):業務情境寫法——兩種寫法都合法、哪一個對看需求。凡是用到關聯規則(has/inside/precedes)的
+-# 一律外包雙重否定 not: {not: …}(同 C-18、C-34~C-37:正面寫的關聯規則會把外層整段節點當次要標記塞進每個命中,輸出平方成長;
+-# Systems/kotlin規則包 的 PITFALL)。
++# 都寫成雙重否定,理由同 C-18、C-34~C-37(正面寫的關聯規則會把外層整段節點當次要標記塞進每個命中,輸出平方成長;Systems/kotlin規則包 的
++# PITFALL),但形狀不同:既有那幾條把 not 放進關聯規則裡(not: {inside: {not: <父節點是 X>}}),適用於「父節點是 X」的單層判斷;這一批是
++# 多層 has/inside/precedes 鏈(作用域往下配對、replay 往上三層再看外層呼叫),逐層把 not 塞進去不等價,所以整條關聯規則外包一層
++# not: {not: …}——命中集合不變、輸出量降的幅度相同(S9 用合成輸入守住)。兩種寫法怎麼選見 Systems/kotlin規則包 那條 WHY。
+ # C-38、C-39 協程作用域:命中 call_expression 第一個子節點的 supervisorScope/coroutineScope 識別字(錨點「運算元起始」),而且這個作用域
+ # 有兩個以上子協程(計劃〈用詞〉):子協程是單一識別字 async/launch 的呼叫,往外最近一層 lambda 是作用域自己的大括號(或迴圈呼叫的大括號、
+ # 迴圈呼叫往外最近一層是作用域的大括號)。ast-grep 沒有計數:「兩個」用配對(含子協程的節點 X precedes 另一個含子協程的節點 Y);從作用域
+ # 大括號 L 往下找一律 stopBy 下一層 lambda_literal(停下那一層也算命中);沿固定鏈 call_suffix → annotated_lambda → lambda_literal 拿 L,
+ # 不用 stopBy: end(會越過內層作用域,外層被內層的 async 誤命中;設計審 r1 邊界席、r2 正確性席實跑)。
+ # utils 只在同一份規則文件裡有效,C-38 與 C-39 各一份,兩份要一字不差(t_choice_samples_batch3 比對)。
+ id: C-38
+ language: kotlin
+ severity: hint
+ message: 協程作用域 supervisorScope(換成 coroutineScope,一支失敗時兄弟一起取消)
+ utils:
+   child-co:
+-    # 子協程:呼叫名稱是單一識別字 async 或 launch(帶接收者的 scope.launch、this.async 開在別的作用域,不算)
++    # 子協程:呼叫名稱是單一識別字 async 或 launch(帶接收者的 scope.launch、this.async 開在別的作用域,不算);建立後同一個運算式就
++    # .await()/.join() 的不算(做完才開下一支,兩種作用域必然等價;同 C-50 只看直接接在後面那一層,包在別的呼叫引數裡的照算;代碼審 r1 g1)
+     kind: call_expression
+     has: {kind: simple_identifier, nthChild: 1, regex: '^(async|launch)$'}
++    not:
++      inside:
++        kind: navigation_expression
++        has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(await|join)$'}
++        inside: {kind: call_expression}
+   has-co:
+     # 本身是子協程,或往下(不越過下一層 lambda)有子協程
+     any:
+       - matches: child-co
+       - has: {matches: child-co, stopBy: {kind: lambda_literal}}
+   loop-call:
+     # 迴圈呼叫:.map/.forEach/.mapIndexed/.forEachIndexed/.flatMap 與頂層 repeat(…),大括號裡的子協程在它的固定鏈 lambda 裡
+     kind: call_expression
+     any:
+       - has: {kind: navigation_expression, nthChild: 1, has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(map|forEach|mapIndexed|forEachIndexed|flatMap)$'}}
+@@ -366,23 +374,29 @@ rule:
+           has:
+             kind: annotated_lambda
+             has: {matches: many-co}
+ ---
+ id: C-39
+ language: kotlin
+ severity: hint
+ message: 協程作用域 coroutineScope(換成 supervisorScope,一支失敗時兄弟照常做完)
+ utils:
+   child-co:
+-    # 子協程:呼叫名稱是單一識別字 async 或 launch(帶接收者的 scope.launch、this.async 開在別的作用域,不算)
++    # 子協程:呼叫名稱是單一識別字 async 或 launch(帶接收者的 scope.launch、this.async 開在別的作用域,不算);建立後同一個運算式就
++    # .await()/.join() 的不算(做完才開下一支,兩種作用域必然等價;同 C-50 只看直接接在後面那一層,包在別的呼叫引數裡的照算;代碼審 r1 g1)
+     kind: call_expression
+     has: {kind: simple_identifier, nthChild: 1, regex: '^(async|launch)$'}
++    not:
++      inside:
++        kind: navigation_expression
++        has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(await|join)$'}
++        inside: {kind: call_expression}
+   has-co:
+     # 本身是子協程,或往下(不越過下一層 lambda)有子協程
+     any:
+       - matches: child-co
+       - has: {matches: child-co, stopBy: {kind: lambda_literal}}
+   loop-call:
+     # 迴圈呼叫:.map/.forEach/.mapIndexed/.forEachIndexed/.flatMap 與頂層 repeat(…),大括號裡的子協程在它的固定鏈 lambda 裡
+     kind: call_expression
+     any:
+       - has: {kind: navigation_expression, nthChild: 1, has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(map|forEach|mapIndexed|forEachIndexed|flatMap)$'}}
+@@ -416,21 +430,21 @@ rule:
+   not:
+     not:
+       inside:
+         kind: call_expression
+         has:
+           kind: call_suffix
+           has:
+             kind: annotated_lambda
+             has: {matches: many-co}
+ ---
+-# C-40~C-47 方法名各列:同第一版 `$R.方法名` 後接呼叫的 navigation_suffix(錨點「方法名」);關聯規則外包雙重否定(同上)。
++# C-40~C-47 方法名各列:同第一版 `$R.方法名` 後接呼叫的 navigation_suffix(錨點「方法名」);關聯規則整條外包雙重否定(第三批開頭那段)。
+ id: C-40
+ language: kotlin
+ severity: hint
+ message: 業務情境 singleOrNull(換成 firstOrNull,多筆時回 null 變成取第一筆)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*singleOrNull$'
+   not:
+     not:
+       inside:
+@@ -523,44 +537,57 @@ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*transformLatest$'
+   not:
+     not:
+       inside:
+         kind: navigation_expression
+         inside: {kind: call_expression}
+ ---
+ # C-48、C-49 replay:命中具名引數 `replay = ` 後面那個整數字面值本身(錨點「運算元起始」;整個引數換掉會丟掉 `replay =`),外層呼叫是
+ # MutableSharedFlow 或 .shareIn(自訂函式的同名參數不收);位置引數寫法不收(計劃〈天花板〉)。關聯規則外包雙重否定。
+-# C-48 另排除換成 0 會在建構時丟例外的呼叫:帶 onBufferOverflow、又沒有值不是 0 的 extraBufferCapacity(kotlinx.coroutines 規定 replay 與
+-# extraBufferCapacity 都是 0 時只准預設的 SUSPEND;任何建構它的測試都殺得掉,問不出需求)。
++# C-48 另排除換成 0 會在建構時丟例外的呼叫:帶值不是 SUSPEND 的 onBufferOverflow、又沒有值不是 0 的 extraBufferCapacity(kotlinx.coroutines
++# 規定 replay 與 extraBufferCapacity 都是 0 時只准預設的 SUSPEND;任何建構它的測試都殺得掉,問不出需求)。顯式寫 SUSPEND(含裸名稱與完整
++# 套件名)換 0 照樣合法,照常命中;「值是 0」認得 0、0x0、0b0、0L 與帶正負號的這幾種整數字面值,括號包住的 (0) 不認(計劃〈天花板〉;代碼審 r1 b2 c1)。
+ id: C-48
+ language: kotlin
+ severity: hint
+ message: 業務情境 replay = 1(換成 0,晚到的訂閱者看不到上一個值)
++utils:
++  zero-int:
++    # 值是 0 的整數字面值:十進位、十六進位、二進位、Long,或前面帶一個正負號的這幾種
++    any:
++      - {kind: integer_literal, regex: '^0[0_]*$'}
++      - {kind: hex_literal, regex: '^0[xX][0_]+$'}
++      - {kind: bin_literal, regex: '^0[bB][0_]+$'}
++      - {kind: long_literal, regex: '^(0[0_]*|0[xX][0_]+|0[bB][0_]+)L$'}
++      - {kind: prefix_expression, regex: '^[-+]\s*(0[0_]*|0[xX][0_]+|0[bB][0_]+)L?$'}
+ rule:
+   kind: integer_literal
+   regex: '^1$'
+   not:
+     not:
+       inside:
+         kind: value_argument
+         has: {kind: simple_identifier, nthChild: 1, regex: '^replay$'}
+         inside:
+           kind: value_arguments
+           not:
+             all:
+-              - has: {kind: value_argument, has: {kind: simple_identifier, nthChild: 1, regex: '^onBufferOverflow$'}}
++              - has:
++                  kind: value_argument
++                  has: {kind: simple_identifier, nthChild: 1, regex: '^onBufferOverflow$'}
++                  not: {has: {nthChild: {position: 1, reverse: true}, regex: '(^|\.)\s*SUSPEND$'}}
+               - not:
+                   has:
+                     kind: value_argument
+                     has: {kind: simple_identifier, nthChild: 1, regex: '^extraBufferCapacity$'}
+-                    not: {has: {kind: integer_literal, nthChild: {position: 1, reverse: true}, regex: '^0$'}}
++                    not: {has: {nthChild: {position: 1, reverse: true}, matches: zero-int}}
+           inside:
+             kind: call_suffix
+             inside:
+               kind: call_expression
+               any:
+                 - has: {kind: simple_identifier, nthChild: 1, regex: '^MutableSharedFlow$'}
+                 - has: {kind: navigation_expression, nthChild: 1, has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*shareIn$'}}
+ ---
+ id: C-49
+ language: kotlin
+@@ -579,21 +606,21 @@ rule:
+           inside:
+             kind: call_suffix
+             inside:
+               kind: call_expression
+               any:
+                 - has: {kind: simple_identifier, nthChild: 1, regex: '^MutableSharedFlow$'}
+                 - has: {kind: navigation_expression, nthChild: 1, has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*shareIn$'}}
+ ---
+ # C-50 CoroutineStart.LAZY:命中接在 CoroutineStart 後面那一段 navigation_suffix(不是呼叫;錨點「方法名」)。排除帶這個引數的那個
+ # async/launch 呼叫直接被 .await() 或 .join() 接著呼叫(建立後立刻等,換成 DEFAULT 必然等價);只看直接接在後面那一層,包在別的呼叫
+-# 引數裡的不排除。關聯規則外包雙重否定。
++# 引數裡的不排除。關聯規則整條外包雙重否定(第三批開頭那段)。
+ id: C-50
+ language: kotlin
+ severity: hint
+ message: 業務情境 CoroutineStart.LAZY(換成 DEFAULT,建立當下就開始做)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*LAZY$'
+   not:
+     not:
+       inside:
+diff --git a/configs/ast-grep/kotlin-choice/samples/choice-batch3.kt b/configs/ast-grep/kotlin-choice/samples/choice-batch3.kt
+index 2bc6268bd15d548b0a4dc0bc9ec82e6c3ad0c017..f763b84df94b6e208a626b2e86cdc1599172dbcd 100644
+--- a/configs/ast-grep/kotlin-choice/samples/choice-batch3.kt
++++ b/configs/ast-grep/kotlin-choice/samples/choice-batch3.kt
+@@ -23,20 +23,34 @@ fun scopes(ids: List<Int>, list: List<Int>, c: Boolean) {
+     supervisorScope { val a = async { f() }; a.await() } // MISS C-38
+     coroutineScope { load { async { x() } } } // MISS C-39
+     list.map { coroutineScope { async { x() } } } // MISS C-39
+     supervisorScope { val x = coroutineScope { async { 1 }.await() }; val y = coroutineScope { async { 2 }.await() } } // MISS C-38 C-39
+     coroutineScope { scope.launch { a() }; scope.launch { b() } } // MISS C-39
+     supervisorScope { this.async { a() }; async { b() } } // MISS C-38
+     supervisorScope { list.map { ids.forEach { launch { f() } } } } // MISS C-38
+     supervisorScope { withContext(io) { launch { a() }; launch { b() } } } // MISS C-38
+     mySupervisorScope { launch { a() }; launch { b() } } // MISS C-38
+     x.supervisorScope { launch { a() }; launch { b() } } // MISS C-38
++    // 建立後同一個運算式就 .await()/.join() 的不算子協程(同 C-50 只看直接接在後面那一層):做完才開下一支,兩種作用域必然等價
++    supervisorScope { // MISS C-38
++        val a = async { f() }.await()
++        val b = async { g() }.await()
++    }
++    coroutineScope { launch { a() }.join(); launch { b() }.join() } // MISS C-39
++    supervisorScope { val a = async { f() }.await(); launch { g() } } // MISS C-38
++    // 都沒有立刻等的、包在別的呼叫引數裡才等的,照常算
++    supervisorScope { // HIT C-38
++        val a = async { f() }
++        val b = async { g() }
++        a.await() + b.await()
++    }
++    coroutineScope { foo(async { a() }).await(); foo(async { b() }).await() } // HIT C-39
+ }
+ 
+ fun picks(users: List<U>, s: String, q: Flow<String>, id: Int) {
+     val u = users.singleOrNull { it.id == id } // HIT C-40
+     val u1 = users.single { it.id == id } // HIT C-41
+     val u2 = users.firstOrNull { it.ok } // HIT C-42
+     val n = s.toIntOrNull() ?: 0 // HIT C-43
+     val n2 = s.toLongOrNull() // HIT C-44
+     val n3 = s?.toDoubleOrNull() // HIT C-45
+     val r = q.mapLatest { search(it) } // HIT C-46
+@@ -55,20 +69,29 @@ fun flows(q: Flow<Int>, scope: CoroutineScope, n: Int) {
+     val f9 = q.shareIn(scope, SharingStarted.Eagerly, replay = 1) // HIT C-48
+     val fa = q.shareIn(scope, SharingStarted.Eagerly, replay = 0) // HIT C-49
+     val f3 = MutableSharedFlow<Int>(replay = 2) // MISS C-48 C-49
+     // replay = 1 換 0 會在建構時丟例外的(帶 onBufferOverflow、沒有值不是 0 的 extraBufferCapacity)不收;DROP_OLDEST 照常命中
+     val f4 = MutableSharedFlow<Int>(replay = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST) // MISS C-48
+     val f5 = MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = 0, onBufferOverflow = BufferOverflow.DROP_OLDEST) // MISS C-48
+     // 同一個呼叫拆兩行:replay 那一列不命中、DROP_OLDEST 那一列照常命中(一行只能標一種,所以拆開標)
+     val f4b = MutableSharedFlow<Int>(replay = 1, // MISS C-48
+         onBufferOverflow = BufferOverflow.DROP_OLDEST) // HIT C-51
+     val f6 = MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST) // HIT C-48 C-51
++    // 顯式寫預設的 SUSPEND:換 0 照樣合法,照常命中(代碼審 r1 b2 c1);零寫成十六進位、二進位、帶正負號或 Long 也認得是 0,照樣排除
++    val fe = MutableSharedFlow<Int>(replay = 1, onBufferOverflow = BufferOverflow.SUSPEND) // HIT C-48
++    val ff = MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = 0x0, onBufferOverflow = BufferOverflow.DROP_OLDEST) // MISS C-48
++    val fg = MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = 0X00, onBufferOverflow = BufferOverflow.DROP_OLDEST) // MISS C-48
++    val fh = MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = 0b0, onBufferOverflow = BufferOverflow.DROP_OLDEST) // MISS C-48
++    val fi = MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = -0, onBufferOverflow = BufferOverflow.DROP_OLDEST) // MISS C-48
++    val fj = MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = +0, onBufferOverflow = BufferOverflow.DROP_OLDEST) // MISS C-48
++    val fk = MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = 0L, onBufferOverflow = BufferOverflow.DROP_OLDEST) // MISS C-48
++    val fl = MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = -0x0, onBufferOverflow = BufferOverflow.DROP_OLDEST) // MISS C-48
+     val fb = MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = n, onBufferOverflow = BufferOverflow.DROP_LATEST) // HIT C-48 C-52
+     val f7 = Foo(replay = 1) // MISS C-48
+     val f8 = MutableSharedFlow<Int>(1) // MISS C-48
+     val fc = MutableSharedFlow<Int>(extraBufferCapacity = 1) // MISS C-48 C-49
+     val f10 = MutableSharedFlow<Int>(extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_LATEST) // HIT C-52
+     val fd = Channel<Int>(8, MyOverflow.DROP_OLDEST) // MISS C-51
+ }
+ 
+ fun starts(scope: CoroutineScope) {
+     val j = async(start = CoroutineStart.LAZY) { f() } // HIT C-50
+diff --git a/scripts/lumos b/scripts/lumos
+index 49593cb07a0962c10fa4c4fedc5a4c5e0d6fdd66..1a60b990dc7c581d0f02558c142eb916a97cd3d8 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -77154,21 +77154,21 @@ _CHOICE_FP_CTX = 2                       # 行指紋:那一行與前後各幾行
+ _CHOICE_OLD_PAD = 2                      # 壞法身分的 old 不唯一時往外帶行的上限(前後各幾行,〈用詞〉壞法身分)
+ _CHOICE_CLI_SCAN_TIMEOUT = 300.0         # choice-points 指令一次掃描的上限(秒);推送前那一道另用 _KT_SIT_BUDGET
+ _CHOICE_ANY_RX = [("*", re.compile(""), None)]   # 交給 _kt_sit_hits 的「每一行都算」樣式:只沿用它的空白與 import 過濾
+ _CHOICE_SHOW_MAX = 80
+ # 運算子的優先層級(Kotlin 文法:乘除 > 加減 > 比較 > 相等 > && > ||);換成不同層級的運算子而外層是運算式時要加括號保持結構
+ _CHOICE_PREC = {"*": 6, "/": 6, "%": 6, "+": 5, "-": 5, "<": 4, ">": 4, "<=": 4, ">=": 4,
+                 "==": 3, "!=": 3, "===": 3, "!==": 3, "&&": 2, "||": 1}
+ _CHOICE_OP_RE = re.compile(rb"===|!==|==|!=|<=|>=|&&|\|\||[<>+\-*/%]")
+ _CHOICE_GAP_SKIP_RE = re.compile(rb"(?:\s+|//[^\n]*(?:\n|$)|/\*.*?\*/)*", re.S)
+ _CHOICE_ATOMIC_RE = re.compile(r"[\w.?!]+")
+-_CHOICE_CALL_NAME_RE = re.compile(rb"(\?\.|\.)\s*([A-Za-z_]\w*)")   # 「整個呼叫」錨點:接收者之後的 `.` 或 `?.` 加方法名(第三批)
++_CHOICE_CALL_NAME_RE = re.compile(rb"(\?\.|\.)\s*([A-Za-z_]\w*)")   # `.` 或 `?.` 加方法名:「方法名」錨點與「整個呼叫」錨點(第三批)共用
+ _CHOICE_STATUS_TEXT = {"none": "沒有壞法", "arid": "乾節點", "not_unique": "不唯一", "unrun": "沒跑"}
+ 
+ 
+ class _ChoiceNoTool(Exception):
+     """ast-grep 不在 PATH(或 PATH 不安全、解出來在 repo 裡):choice-points 回 3「沒檢查到」(〈用詞〉ast-grep 不在 PATH)。"""
+ 
+ 
+ class _ChoiceUnverifiable(Exception):
+     """語法樹掃描算不出來(ast-grep rc 不是 0 或 1、逾時、輸出剖不了、設定檔不在工具鏈底下)。"""
+ 
+@@ -77409,40 +77409,46 @@ def _choice_anchor(b, hit, row, changed=None, starts=None):
+     第三批([[Projects/選擇點表第三批業務情境寫法_計劃]]〈用詞〉):整個呼叫是 `$A` 結尾跳過空白、換行與註解(_CHOICE_GAP_SKIP_RE)後
+     `.` 或 `?.` 後面那個識別字(換行寫法時錨點行是方法名那一行);沒有 `$A` 或比對不到回 (None, None)。"""
+     mv = hit["mv"]
+     if row["anchor"] == "整個呼叫":
+         if "A" not in mv:
+             return None, None
+         k = _CHOICE_GAP_SKIP_RE.match(b, mv["A"][1], hit["e"]).end()
+         m = _CHOICE_CALL_NAME_RE.match(b, k, hit["e"])
+         return (m.start(2), (m.start(2), m.end(2))) if m else (None, None)
+     if row["anchor"] == "方法名":
+-        m = re.match(rb"(\?\.|\.)\s*([A-Za-z_]\w*)", b[hit["s"]:hit["e"]])
+-        return (hit["s"] + m.start(2), (hit["s"] + m.start(2), hit["s"] + m.end(2))) if m else (None, None)
++        m = _CHOICE_CALL_NAME_RE.match(b, hit["s"], hit["e"])
++        return (m.start(2), (m.start(2), m.end(2))) if m else (None, None)
+     if row["anchor"] == "安全呼叫符":
+         s = hit["s"]
+         return (s, (s, s + 2)) if b.startswith(b"?.", s) else (None, None)
+     if row["anchor"] == "引數":
+         for ln in range(hit["line"], hit["end_line"] + 1):
+             if changed is not None and starts is not None and ln in changed and ln - 1 < len(starts):
+                 return max(hit["s"], starts[ln - 1]), None
+         return hit["s"], None
+     if row["anchor"] == "運算子" and "A" in mv and "B" in mv:
+         gs, ge = mv["A"][1], mv["B"][0]
+         k = _CHOICE_GAP_SKIP_RE.match(b, gs, ge).end()   # 帶 pos 的 match:end() 是整份的位移
+         if row.get("category") == "NUL":
+             return (k, (k, k + 2)) if b.startswith(b"?:", k) else (None, None)
+         m = _CHOICE_OP_RE.match(b, k, ge)
+         return (k, (k, m.end())) if m else (None, None)
+     return hit["s"], None
+ 
+ 
++def _choice_err_start(row, hit, anchor, line_of):
++    """ERROR 覆蓋判斷從哪一行起算:「整個呼叫」錨點從錨點行起(命中含整段接收者,接收者裡的 ERROR 不該讓 .retry 消失;
++    [[Projects/選擇點表第三批業務情境寫法_計劃]] 範圍 3),其他錨點照舊從命中第一行起。依錨點名稱分流的判斷都收在 _choice_anchor 這一帶。"""
++    return line_of(anchor) if row["anchor"] == "整個呼叫" else hit["line"]
++
++
+ def _choice_line_index(b):
+     """位元組文字 → 每一行開頭的位移清單(給 bisect 換行號)。"""
+     starts, i = [0], b.find(b"\n")
+     while i >= 0:
+         starts.append(i + 1)
+         i = b.find(b"\n", i + 1)
+     return starts
+ 
+ 
+ def _choice_ctx_safe(b, s, e):
+@@ -77794,23 +77800,22 @@ def _choice_file_points(rel, text, lines_changed, scan, tables, deadline=None):
+     arid_cover = _choice_iv_cover(scan["arid"])
+     strcat = _choice_str_chains(b, scan["choice"], rows)
+     by_line = {}
+     for h in scan["choice"]:
+         row = rows.get(h["rule"])
+         if row is None:
+             continue
+         anchor, op = _choice_anchor(b, h, row, want, starts)
+         if anchor is None or line_of(anchor) not in want:
+             continue
+-        # 「整個呼叫」錨點的命中含整段接收者,接收者裡任何一行文法不認得都會讓 .retry 靜默消失:改用錨點行到命中結尾判(第三批範圍 3);
+-        # 其他錨點照舊用命中的整個行範圍。乾節點覆蓋(位元組位移判整個命中落在同一個乾節點裡)不分流
+-        if err_hit(line_of(anchor) if row["anchor"] == "整個呼叫" else h["line"], h["end_line"]):
++        # ERROR 覆蓋的起算行依錨點分流(_choice_err_start);乾節點覆蓋(位元組位移判整個命中落在同一個乾節點裡)不分流
++        if err_hit(_choice_err_start(row, h, anchor, line_of), h["end_line"]):
+             continue
+         n = dict(h, anchor=anchor, op=op, arid=arid_cover(h["s"], h["e"]), strcat=(h["s"], h["e"]) in strcat)
+         by_line.setdefault(line_of(anchor), []).append(n)
+     lines = text.split("\n")
+     ctx = {"b": b, "lines": lines, "starts": starts}
+     stripped = _strip_c_comments(text, blank_strings=True, keep_length=True, kotlin=True).split("\n")
+     levels = _kt_sit_levels("\n".join(stripped))
+     cache, out = {}, []
+     for ln in lines_changed:
+         nodes = by_line.get(ln) or []
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 37273405206bb6d39bd247240b4665f5ff47b9b1..88e47da43119b1552baa7b8bf0643a67191a97a7 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -146249,33 +146249,38 @@ _CB2_RULES = {
+                  "      has: {kind: simple_identifier, nthChild: 1, regex: '^remember$'}\n"),
+ }
+ 
+ 
+ def _cb2_row(rid, cat, anchor, cands=(), special=None, pre="(無)", imp=None):
+     """合成的〈選擇點表〉一列(形狀同 check.py 的 _choice_row 回傳)。"""
+     return {"id": rid, "category": cat, "rule_file": "t.yml", "rule": "", "anchor": anchor, "candidates": list(cands), "special": special,
+             "precondition": pre, "import": imp, "dt": "—", "why": "測試", "source": "測試"}
+ 
+ 
+-def _cb2_points(src, lines, rows, rule_keys):
+-    """真 ast-grep 用測試自帶的規則掃 src → lumos 剖輸出 → _choice_file_points(合成的表)。沒裝 ast-grep 回 None。"""
++def _cb_points(rules, src, lines, rows, rule_keys, skip=None):
++    """真 ast-grep 用測試自帶的規則(rules 是 {鍵: 規則文字},第二批 _CB2_RULES、第三批 _CB3_RULES)掃 src → lumos 剖輸出 →
++    _choice_file_points(合成的表)。第二、三批共用這一支(第三批代碼審 r1 a1)。沒裝 ast-grep:skip 給了就 raise _SrcOnly(skip)(第三批),
++    沒給回 None(第二批的呼叫端照舊判 None、印一行跳過)。暫存目錄用完就刪。"""
+     sg = _ktpack_sg()
+     if not sg:
++        if skip is not None:
++            raise _SrcOnly(skip)
+         return None
+     m = _load_lumos_inproc()
+-    d = Path(tempfile.mkdtemp(prefix="gctl-cb2-"))
+-    (d / "rules").mkdir()
+-    (d / "rules" / "t.yml").write_text("\n---\n".join(_CB2_RULES[k] for k in rule_keys), encoding="utf-8")
+-    (d / "sgconfig.yml").write_text("ruleDirs:\n  - rules\n", encoding="utf-8")
+-    (d / "src").mkdir()
+-    (d / "src" / "0.kt").write_text(src, encoding="utf-8")
+-    r = subprocess.run([sg, "scan", "--config", str(d / "sgconfig.yml"), "--json=stream", "src/0.kt"], cwd=str(d), capture_output=True, text=True)
++    with tempfile.TemporaryDirectory(prefix="gctl-cb-") as td:
++        d = Path(td)
++        (d / "rules").mkdir()
++        (d / "rules" / "t.yml").write_text("\n---\n".join(rules[k] for k in rule_keys), encoding="utf-8")
++        (d / "sgconfig.yml").write_text("ruleDirs:\n  - rules\n", encoding="utf-8")
++        (d / "src").mkdir()
++        (d / "src" / "0.kt").write_text(src, encoding="utf-8")
++        r = subprocess.run([sg, "scan", "--config", str(d / "sgconfig.yml"), "--json=stream", "src/0.kt"], cwd=str(d), capture_output=True, text=True)
+     assert r.returncode in (0, 1), r.stderr
+     scan = m._choice_scan_parse(r.stdout, {"0.kt": _CHOICE_MAIN}, {_CHOICE_MAIN: src})[_CHOICE_MAIN]
+     tables = {"choice": rows, "arid": [], "categories": list(_CB2_CATS)}
+     return m._choice_file_points(_CHOICE_MAIN, src, lines, scan, tables)
+ 
+ 
+ def _cb2_new(points, ln):
+     """那一行挑到的壞法的 new(去頭尾空白);沒有回 None。"""
+     x = next((p for p in points or [] if p["line"] == ln), None)
+     ident = ((x or {}).get("mutant") or {}).get("identity") or {}
+@@ -146289,33 +146294,33 @@ def t_choice_points_nul_elvis():
+     m = _load_lumos_inproc()
+     row = _cb2_row("C-32", "NUL", "運算子", ["$A!!"], pre="運算元有 null 字面值")
+     # 不靠 ast-grep:編輯與錨點(假命中照 ast-grep 的形狀:節點是整個 elvis、$A $B 是兩個運算元)
+     src = _choice_wrap("        f(a + b ?: c)\n")
+     h = _choice_hit(src, "C-32", "a + b ?: c", mv={"A": "a + b", "B": "c"})
+     bb = src.encode("utf-8")
+     anchor, op = m._choice_anchor(bb, h, row)
+     check("S1 NUL 列的運算子錨點比字面 ?:(假命中)", op is not None and bb[op[0]:op[1]] == b"?:", str((anchor, op)))
+     edits = m._choice_edits(bb, h, row, op, "$A!!")
+     check("S1 `$A` 是 a + b → 換成 (a + b)!!(假命中)", edits == [(h["s"], h["e"], b"(a + b)!!")], str(edits))
+-    pts = _cb2_points(_choice_wrap("        val n = name ?: \"guest\"\n"), [5], [row], ["elvis"])
++    pts = _cb_points(_CB2_RULES, _choice_wrap("        val n = name ?: \"guest\"\n"), [5], [row], ["elvis"])
+     if pts is None:
+         print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑預期值表逐列)")
+         return
+     check("S1 `val n = name ?: \"guest\"` → `val n = name!!`", _cb2_new(pts, 5) == "val n = name!!", str(pts)[:400])
+-    pts = _cb2_points(_choice_wrap("        f(a + b ?: c)\n"), [5], [row], ["elvis"])
++    pts = _cb_points(_CB2_RULES, _choice_wrap("        f(a + b ?: c)\n"), [5], [row], ["elvis"])
+     check("S1 `f(a + b ?: c)` → `f((a + b)!!)`", _cb2_new(pts, 5) == "f((a + b)!!)", str(pts)[:400])
+-    pts = _cb2_points(_choice_wrap("        val v = repo.load() ?: d\n"), [5], [row], ["elvis"])
++    pts = _cb_points(_CB2_RULES, _choice_wrap("        val v = repo.load() ?: d\n"), [5], [row], ["elvis"])
+     check("S1 `repo.load()` 是單一記號、不加括號 → `val v = repo.load()!!`", _cb2_new(pts, 5) == "val v = repo.load()!!", str(pts)[:400])
+-    pts = _cb2_points(_choice_wrap("        val p = x ?: null\n        val q = null ?: x\n"), [5, 6], [row], ["elvis"])
++    pts = _cb_points(_CB2_RULES, _choice_wrap("        val p = x ?: null\n        val q = null ?: x\n"), [5, 6], [row], ["elvis"])
+     check("S1 `x ?: null` 與 `null ?: x` → 都不產生(運算元有 null 字面值)",
+           [p["status"] for p in pts] == ["none", "none"] and all(p["mutant"] is None for p in pts), str(pts)[:400])
+-    pts = _cb2_points(_choice_wrap("        val n = name\n            ?: \"guest\"\n"), [6], [row], ["elvis"])
++    pts = _cb_points(_CB2_RULES, _choice_wrap("        val n = name\n            ?: \"guest\"\n"), [6], [row], ["elvis"])
+     x = next((p for p in pts if p["line"] == 6), None)
+     check("S1 `?:` 換行寫在續行、只改續行 → 第二行照樣挑出 `$A!!`(錨點在 `?:` 那一行)",
+           x is not None and (x["mutant"] or {}).get("row") == "C-32" and x["mutant"]["identity"]["new"].strip() == "val n = name!!", str(pts)[:400])
+ 
+ 
+ def t_choice_points_nul_safecall():
+     """[第二批 S2] `a?.b?.c` 鏈只把挑中的那一個 `?.` 換成 `!!.`、其餘不動;`?.` 另起一行時 `!!` 接在前一行結尾、續行留 `.`。
+     判準來源:計劃預期值表 S2 兩列(Kotlin 文法:`!!` 前面不能換行)。翻紅釘:`!!` 插在 `?.` 原位置 → 另起一行那條變成 `!!.name` 紅;
+     整條鏈都換 → `user!!.profile!!.name` 紅。"""
+     m = _load_lumos_inproc()
+@@ -146328,57 +146333,57 @@ def t_choice_points_nul_safecall():
+     p = bb.index(b"user()") + len(b"user()")
+     check("S2 另起一行的 `?.`:`!!` 插在前一行最後一個非空白字元之後、`?.` 換成 `.`(假命中)",
+           sorted(edits) == sorted([(p, p, b"!!"), (op[0], op[1], b".")]), str(edits))
+     mb = _choice_wrap("        val é = \"價格\"; val u = r\n            ?.n\n")
+     hm = _choice_hit(mb, "C-33", "?.n")
+     bm = mb.encode("utf-8")
+     _a, opm = m._choice_anchor(bm, hm, row)
+     pm = bm.index(b"val u = r") + len(b"val u = r")
+     check("S2 前面有多位元組字元:`!!` 的位置照 UTF-8 位元組算、接在 r 後面(代碼審 r1 c3,假命中)",
+           sorted(m._choice_edits(bm, hm, row, opm, "!!.")) == sorted([(pm, pm, b"!!"), (opm[0], opm[1], b".")]), str(pm))
+-    pts = _cb2_points(_choice_wrap("        val s = user?.profile?.name\n"), [5], [row], ["safecall"])
++    pts = _cb_points(_CB2_RULES, _choice_wrap("        val s = user?.profile?.name\n"), [5], [row], ["safecall"])
+     if pts is None:
+         print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑預期值表逐列)")
+         return
+     check("S2 `user?.profile?.name` 挑中第一個 `?.` → `user!!.profile?.name`", _cb2_new(pts, 5) == "val s = user!!.profile?.name", str(pts)[:400])
+-    pts = _cb2_points(src, [6], [row], ["safecall"])
++    pts = _cb_points(_CB2_RULES, src, [6], [row], ["safecall"])
+     x = next((q for q in pts if q["line"] == 6), None)
+     new = (((x or {}).get("mutant") or {}).get("identity") or {}).get("new", "")
+     check("S2 `val n = repo.user()` 換行 `?.name`、只改第二行 → 第一行變 `val n = repo.user()!!`、第二行變 `.name`",
+           new.split("\n") == ["        val n = repo.user()!!", "            .name"], repr(new))
+-    pts = _cb2_points(mb, [6], [row], ["safecall"])
++    pts = _cb_points(_CB2_RULES, mb, [6], [row], ["safecall"])
+     x = next((q for q in pts if q["line"] == 6), None)
+     new = (((x or {}).get("mutant") or {}).get("identity") or {}).get("new", "")
+     check("S2 真 ast-grep:`val é = \"價格\"; val u = r` 換行 `?.n` → `val u = r!!`、續行 `.n`(多位元組不錯位)",
+           new.split("\n") == ["        val é = \"價格\"; val u = r!!", "            .n"], repr(new))
+ 
+ 
+ def t_choice_points_batch2_api():
+     """[第二批 S3] `.let {` 與接收者寫法 `.combine(` 照方法名錨點換成 `also`、`zip`;檔頭逐一 import 了 combine 時補 `import kotlinx.coroutines.flow.zip`。
+     判準來源:計劃預期值表 S3 兩列。翻紅釘:API 列的 import 只看列名不看檔頭 → 沒 import 那條紅。"""
+     let = _cb2_row("C-34", "API", "方法名", ["also"])
+     comb = _cb2_row("C-35", "API", "方法名", ["zip"], imp="kotlinx.coroutines.flow.zip")
+-    pts = _cb2_points(_choice_wrap("        val y = x.let { it + 1 }\n"), [5], [let], ["let"])
++    pts = _cb_points(_CB2_RULES, _choice_wrap("        val y = x.let { it + 1 }\n"), [5], [let], ["let"])
+     if pts is None:
+         raise _SrcOnly("本機沒有 ast-grep,跳過 S3;CI 裝了 0.51.1 會跑預期值表逐列")
+     check("S3 `val y = x.let { it + 1 }` → `val y = x.also { it + 1 }`", _cb2_new(pts, 5) == "val y = x.also { it + 1 }", str(pts)[:400])
+     imp = "import kotlinx.coroutines.flow.combine\n\n"
+     src = _choice_wrap("        val f = a.combine(b) { x, y -> x + y }\n", imp)
+     ln = src.split("\n").index("        val f = a.combine(b) { x, y -> x + y }") + 1
+-    pts = _cb2_points(src, [ln], [comb], ["combine"])
++    pts = _cb_points(_CB2_RULES, src, [ln], [comb], ["combine"])
+     x = next((q for q in pts if q["line"] == ln), None)
+     mut = (x or {}).get("mutant") or {}
+     also = mut.get("also") or [{}]
+     check("S3 `a.combine(b) { x, y -> x + y }` → `a.zip(b) { x, y -> x + y }`", _cb2_new(pts, ln) == "val f = a.zip(b) { x, y -> x + y }", str(pts)[:400])
+     check("S3 檔頭有 import combine → 補 import kotlinx.coroutines.flow.zip", "import kotlinx.coroutines.flow.zip" in also[0].get("new", ""), str(also)[:300])
+     src = _choice_wrap("        val f = a.combine(b) { x, y -> x + y }\n")
+-    pts = _cb2_points(src, [5], [comb], ["combine"])
++    pts = _cb_points(_CB2_RULES, src, [5], [comb], ["combine"])
+     x = next((q for q in pts if q["line"] == 5), None)
+     check("S3 檔頭沒有 import combine → 不補 import(照第一版)", x is not None and not (x["mutant"] or {}).get("also"), str(x)[:300])
+ 
+ 
+ def t_choice_points_compose():
+     """[第二批 S4] `LaunchedEffect(k1, k2) {` 的引數清單換成 `(Unit)`(不多包括號);`remember(k) {` 刪掉引數清單;引數跨多行、只改中間一行的
+     `remember(` 照樣挑出(錨點「引數」取節點範圍內第一個改動行)。判準來源:計劃預期值表 S4 兩列與範圍 3。翻紅釘:引數錨點用節點開頭 →
+     跨多行那條紅;樣板經「不是單一記號就加括號」→ `((Unit))` 紅。"""
+     m = _load_lumos_inproc()
+     eff = _cb2_row("C-36", "API", "引數", ["(Unit)"])
+@@ -146387,31 +146392,31 @@ def t_choice_points_compose():
+     h = _choice_hit(src, "C-37", "(\n            a,\n            b,\n        )")
+     bb = src.encode("utf-8")
+     starts = m._choice_line_index(bb)
+     anchor, _op = m._choice_anchor(bb, h, rem, {7}, starts)
+     check("S4 引數錨點:跨多行只改第 7 行 → 錨點落在第 7 行開頭(假命中)", anchor == starts[6], str((anchor, starts[6])))
+     anchor, _op = m._choice_anchor(bb, h, rem, {8}, starts)
+     check("S4 引數錨點:只改右括號那一行(第 8 行)→ 錨點落在第 8 行開頭(範圍含右括號那行;代碼審 r1 b4,假命中)", anchor == starts[7],
+           str((anchor, starts[7])))
+     anchor, _op = m._choice_anchor(bb, h, rem, {99}, starts)
+     check("S4 引數錨點:範圍內沒有改動行 → 回節點開頭(假命中)", anchor == h["s"], str(anchor))
+-    pts = _cb2_points(_choice_wrap("        LaunchedEffect(k1, k2) { load() }\n"), [5], [eff], ["effect"])
++    pts = _cb_points(_CB2_RULES, _choice_wrap("        LaunchedEffect(k1, k2) { load() }\n"), [5], [eff], ["effect"])
+     if pts is None:
+         print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑預期值表逐列)")
+         return
+     check("S4 `LaunchedEffect(k1, k2) {` → `LaunchedEffect(Unit) {`(不多包括號)", _cb2_new(pts, 5) == "LaunchedEffect(Unit) { load() }", str(pts)[:400])
+-    pts = _cb2_points(_choice_wrap("        LaunchedEffect(userId) { load(userId) }\n"), [5], [eff], ["effect"])
++    pts = _cb_points(_CB2_RULES, _choice_wrap("        LaunchedEffect(userId) { load(userId) }\n"), [5], [eff], ["effect"])
+     check("S4 `LaunchedEffect(userId) { load(userId) }` → `LaunchedEffect(Unit) { load(userId) }`",
+           _cb2_new(pts, 5) == "LaunchedEffect(Unit) { load(userId) }", str(pts)[:400])
+-    pts = _cb2_points(_choice_wrap("        val r = remember(items) { items.sorted() }\n"), [5], [rem], ["remember"])
++    pts = _cb_points(_CB2_RULES, _choice_wrap("        val r = remember(items) { items.sorted() }\n"), [5], [rem], ["remember"])
+     check("S4 `remember(items) { items.sorted() }` → `remember { items.sorted() }`", _cb2_new(pts, 5) == "val r = remember { items.sorted() }", str(pts)[:400])
+-    pts = _cb2_points(src, [7], [rem], ["remember"])
++    pts = _cb_points(_CB2_RULES, src, [7], [rem], ["remember"])
+     x = next((q for q in pts if q["line"] == 7), None)
+     new = (((x or {}).get("mutant") or {}).get("identity") or {}).get("new", "")
+     check("S4 引數跨多行、只改中間一行 → 那一行照樣挑出、引數清單整個刪掉", x is not None and "val r = remember { a + b }" in new, str(pts)[:400])
+ 
+ 
+ _CB2_SYN_CAT = """# 合成型錄
+ 
+ ## 選擇點表
+ 
+ 說明。
+@@ -146662,37 +146667,21 @@ _CB3_RULES = {
+     "replay": "id: C-48\nlanguage: kotlin\nrule:\n  kind: integer_literal\n  regex: '^1$'\n  inside: {kind: value_argument, has: {kind: simple_identifier, regex: '^replay$'}}\n",
+     "lazy": "id: C-50\nlanguage: kotlin\nrule:\n  kind: navigation_suffix\n  regex: '^\\.\\s*LAZY$'\n",
+     "drop": "id: C-51\nlanguage: kotlin\nrule:\n  kind: navigation_suffix\n  regex: '^\\.\\s*DROP_OLDEST$'\n",
+     "nonc": "id: C-53\nlanguage: kotlin\nrule:\n  kind: simple_identifier\n  regex: '^NonCancellable$'\n  inside: {kind: value_argument}\n",
+ }
+ for _k, _n, _rid in (("singleOrNull", "singleOrNull", "C-40"), ("single", "single", "C-41"), ("firstOrNull", "firstOrNull", "C-42"),
+                      ("toIntOrNull", "toIntOrNull", "C-43"), ("mapLatest", "mapLatest", "C-46")):
+     _CB3_RULES[_k] = f"id: {_rid}\nlanguage: kotlin\nrule:\n  kind: navigation_suffix\n  regex: '^(\\?\\.|\\.)\\s*{_n}$'\n"
+ 
+ 
+-def _cb3_points(src, lines, rows, rule_keys):
+-    """真 ast-grep 用測試自帶的規則(_CB3_RULES)掃 src → lumos 剖輸出 → _choice_file_points(合成的表)。沒裝 ast-grep → raise _SrcOnly。"""
+-    sg = _ktpack_sg()
+-    if not sg:
+-        raise _SrcOnly("本機沒有 ast-grep,真掃描那半跳過;CI 裝了 0.51.1 會跑預期值表逐列")
+-    m = _load_lumos_inproc()
+-    d = Path(tempfile.mkdtemp(prefix="gctl-cb3-"))
+-    (d / "rules").mkdir()
+-    (d / "rules" / "t.yml").write_text("\n---\n".join(_CB3_RULES[k] for k in rule_keys), encoding="utf-8")
+-    (d / "sgconfig.yml").write_text("ruleDirs:\n  - rules\n", encoding="utf-8")
+-    (d / "src").mkdir()
+-    (d / "src" / "0.kt").write_text(src, encoding="utf-8")
+-    r = subprocess.run([sg, "scan", "--config", str(d / "sgconfig.yml"), "--json=stream", "src/0.kt"], cwd=str(d), capture_output=True, text=True)
+-    assert r.returncode in (0, 1), r.stderr
+-    scan = m._choice_scan_parse(r.stdout, {"0.kt": _CHOICE_MAIN}, {_CHOICE_MAIN: src})[_CHOICE_MAIN]
+-    tables = {"choice": rows, "arid": [], "categories": list(_CB2_CATS)}
+-    return m._choice_file_points(_CHOICE_MAIN, src, lines, scan, tables)
++_CB3_SKIP = "本機沒有 ast-grep,真掃描那半跳過;CI 裝了 0.51.1 會跑預期值表逐列"   # 第三批 _cb_points 沒裝 ast-grep 時 raise 的跳過訊息
+ 
+ 
+ def _cb3_mut(points, ln):
+     """那一行挑到的壞法 dict(沒有回 {})。"""
+     x = next((p for p in points or [] if p["line"] == ln), None)
+     return (x or {}).get("mutant") or {}
+ 
+ 
+ def _cb3_ln(src, text):
+     """src 裡第一個內容等於 text 的行號(1 起)。"""
+@@ -146716,31 +146705,31 @@ def t_choice_points_batch3_scope():
+     h["anchor"], h["op"] = m._choice_anchor(bb, h, sup)
+     ln = _cb3_ln(src, "        supervisorScope {")
+     mut = m._choice_pick(_CHOICE_MAIN, src, bb, lambda o: _bi.bisect_right(starts, o), ln, [h], {"C-38": sup}, _CB2_CATS, "0" * 16)
+     also = (mut or {}).get("also") or [{}]
+     check("S1 假命中:檔頭只 import supervisorScope → 補 import kotlinx.coroutines.coroutineScope",
+           "import kotlinx.coroutines.coroutineScope" in also[0].get("new", ""), str(mut)[:400])
+     for label, imp, want in (("單獨 import 原寫法", "import kotlinx.coroutines.supervisorScope\n\n", True),
+                              ("萬用 import", "import kotlinx.coroutines.*\n\n", False), ("沒有 import", "", False)):
+         src = _choice_wrap(body, imp)
+         ln = _cb3_ln(src, "        supervisorScope {")
+-        pts = _cb3_points(src, [ln], [sup], ["sup"])
++        pts = _cb_points(_CB3_RULES, src, [ln], [sup], ["sup"], skip=_CB3_SKIP)
+         mut = _cb3_mut(pts, ln)
+         new = (mut.get("identity") or {}).get("new", "")
+         check(f"S1 {label}:`supervisorScope {{` 兩個 async → 換成 `coroutineScope {{`", mut.get("row") == "C-38" and new.strip() == "coroutineScope {",
+               str(pts)[:400])
+         got = mut.get("also") or []
+         check(f"S1 {label} → {'補' if want else '不補'} import kotlinx.coroutines.coroutineScope",
+               bool(got) is want and (not want or "import kotlinx.coroutines.coroutineScope" in got[0].get("new", "")), str(got)[:300])
+     src = _choice_wrap(body.replace("supervisorScope", "coroutineScope"), "import kotlinx.coroutines.coroutineScope\n\n")
+     ln = _cb3_ln(src, "        coroutineScope {")
+-    pts = _cb3_points(src, [ln], [coro], ["coro"])
++    pts = _cb_points(_CB3_RULES, src, [ln], [coro], ["coro"], skip=_CB3_SKIP)
+     mut = _cb3_mut(pts, ln)
+     also = mut.get("also") or [{}]
+     check("S1 反方向:`coroutineScope {` → `supervisorScope {`、補 import kotlinx.coroutines.supervisorScope",
+           (mut.get("identity") or {}).get("new", "").strip() == "supervisorScope {" and "import kotlinx.coroutines.supervisorScope" in also[0].get("new", ""),
+           str(mut)[:400])
+ 
+ 
+ def t_choice_points_batch3_retry():
+     """[第三批 S2] `.retry(3)`、`.retryWhen { … }`、`.retry(3) { … }` 照「整個呼叫」錨點刪掉接收者之後到呼叫結尾;`.retryWhen` 換行寫在下一行、
+     只改那一行時照樣挑出,錨點行是 `.retryWhen` 那一行、壞法的 old 含接收者那一行;接收者裡有一行是 ERROR 節點、`.retry` 那一行不是時照樣挑出。
+@@ -146772,101 +146761,111 @@ def t_choice_points_batch3_retry():
+     check("S2 整個呼叫:ERROR 在錨點行之後、命中範圍裡(retry 的 lambda 裡)→ 照樣略過(假命中)", got == [], str(got)[:300])
+     eff = _cb2_row("C-36", "API", "引數", ["(Unit)"])
+     src = _choice_wrap("        LaunchedEffect(上限 >,\n            k,\n        ) { load() }\n")
+     h = _choice_hit(src, "C-36", "(上限 >,\n            k,\n        )")
+     sb = src.encode("utf-8")
+     err = [(sb.index(b" >,"), sb.index(b" >,") + 2)]
+     got = m._choice_file_points(_CHOICE_MAIN, src, [6], {"choice": [h], "arid": [], "error": err},
+                                 {"choice": [eff], "arid": [], "categories": list(_CB2_CATS)})
+     check("S2 對照:引數錨點落在第 6 行、ERROR 在命中第一行(第 5 行)→ 照舊看整個命中範圍、略過(假命中)", got == [], str(got)[:300])
+     src = _choice_wrap("        val w = flow.retry(3).map { it }\n")
+-    pts = _cb3_points(src, [5], [rt], ["retry"])
++    pts = _cb_points(_CB3_RULES, src, [5], [rt], ["retry"], skip=_CB3_SKIP)
+     check("S2 `val w = flow.retry(3).map { it }` → `val w = flow.map { it }`", _cb2_new(pts, 5) == "val w = flow.map { it }", str(pts)[:400])
+     src = _choice_wrap("        val z = repo.items()\n            .retryWhen { c, n -> n < 2 }\n")
+-    pts = _cb3_points(src, [6], [rw], ["retryWhen"])
++    pts = _cb_points(_CB3_RULES, src, [6], [rw], ["retryWhen"], skip=_CB3_SKIP)
+     mut = _cb3_mut(pts, 6)
+     ident = mut.get("identity") or {}
+     check("S2 換行的 `.retryWhen`、只改第二行 → 第二行挑出(錨點行是第二行)", mut.get("row") == "C-55" and mut.get("line") == 6, str(pts)[:400])
+     check("S2 換行的 `.retryWhen` → old 含第一、二兩行、new 是第一行原樣",
+           ident.get("old") == "        val z = repo.items()\n            .retryWhen { c, n -> n < 2 }" and ident.get("new") == "        val z = repo.items()",
+           str(ident)[:400])
+     src = _choice_wrap("        repo.items().retry(3) { it is IOException }\n")
+-    pts = _cb3_points(src, [5], [rt], ["retry"])
++    pts = _cb_points(_CB3_RULES, src, [5], [rt], ["retry"], skip=_CB3_SKIP)
+     check("S2 `repo.items().retry(3) { it is IOException }` → `repo.items()`", _cb2_new(pts, 5) == "repo.items()", str(pts)[:400])
+     src = _choice_wrap("        val z = flow {\n            if (a > 上限) z()\n        }.retry(3)\n")
+-    pts = _cb3_points(src, [7], [rt], ["retry", "syntax"])
++    pts = _cb_points(_CB3_RULES, src, [7], [rt], ["retry", "syntax"], skip=_CB3_SKIP)
+     check("S2 接收者裡有 ERROR 節點、只改 `}.retry(3)` 那一行 → 照樣挑出拿掉 `.retry(3)`", _cb2_new(pts, 7) == "}", str(pts)[:400])
+-    pts = _cb3_points(_choice_wrap("        val z = flow { if (a > 上限) z() }.retry(3)\n"), [5], [rt], ["retry", "syntax"])
++    pts = _cb_points(_CB3_RULES, _choice_wrap("        val z = flow { if (a > 上限) z() }.retry(3)\n"), [5], [rt], ["retry", "syntax"], skip=_CB3_SKIP)
+     check("S2 對照:ERROR 跟 `.retry` 同一行 → 照舊略過(錨點行到命中結尾跟 ERROR 有交集)", _cb3_mut(pts, 5) == {}, str(pts)[:400])
+ 
+ 
+ def t_choice_points_batch3_values():
+     """[第三批 S3] `replay = 1`、`CoroutineStart.LAZY`、`BufferOverflow.DROP_OLDEST`、`withContext(NonCancellable)` 分別換成 `replay = 0`、
+     `CoroutineStart.DEFAULT`、`BufferOverflow.DROP_LATEST`、`withContext(kotlin.coroutines.EmptyCoroutineContext)`。判準來源:計劃預期值表 S3 四列
+     (運算元起始換整個節點、方法名換識別字,沿用第一、二批的通用路徑)。翻紅釘:運算元起始整個節點替換改成蓋掉整個引數 → `replay = ` 不見、紅。"""
+     rep = _cb2_row("C-48", "API", "運算元起始", ["0"])
+     lazy = _cb2_row("C-50", "API", "方法名", ["DEFAULT"])
+     drop = _cb2_row("C-51", "API", "方法名", ["DROP_LATEST"])
+     nonc = _cb2_row("C-53", "API", "運算元起始", ["kotlin.coroutines.EmptyCoroutineContext"])
+     for body, row, key, want in (
+             ("        val f = MutableSharedFlow<Int>(replay = 1)\n", rep, "replay", "val f = MutableSharedFlow<Int>(replay = 0)"),
+             ("        val j = async(start = CoroutineStart.LAZY) { f() }\n", lazy, "lazy", "val j = async(start = CoroutineStart.DEFAULT) { f() }"),
+             ("        val f = MutableSharedFlow<Int>(onBufferOverflow = BufferOverflow.DROP_OLDEST)\n", drop, "drop",
+              "val f = MutableSharedFlow<Int>(onBufferOverflow = BufferOverflow.DROP_LATEST)"),
+             ("        withContext(NonCancellable) { save() }\n", nonc, "nonc", "withContext(kotlin.coroutines.EmptyCoroutineContext) { save() }")):
+-        pts = _cb3_points(_choice_wrap(body), [5], [row], [key])
++        pts = _cb_points(_CB3_RULES, _choice_wrap(body), [5], [row], [key], skip=_CB3_SKIP)
+         check(f"S3 `{body.strip()}` → `{want}`", _cb2_new(pts, 5) == want, str(pts)[:400])
+ 
+ 
+ def t_choice_points_batch3_api():
+     """[第三批 S4] `.singleOrNull`、`.single`、`.firstOrNull`、`.toIntOrNull`、`.mapLatest` 照方法名錨點換成 `firstOrNull`、`first`、`first`、
+     `toInt`、`map`;Flow 版本檔頭有逐一 import 原寫法時補 import(照第一版)。判準來源:計劃預期值表 S4 三列與範圍 1。
+     翻紅釘:API 列的 import 只看列名不看檔頭 → 沒 import 那條紅。"""
+     rows = {"singleOrNull": _cb2_row("C-40", "API", "方法名", ["firstOrNull"], imp="kotlinx.coroutines.flow.firstOrNull"),
+             "single": _cb2_row("C-41", "API", "方法名", ["first"], imp="kotlinx.coroutines.flow.first"),
+             "firstOrNull": _cb2_row("C-42", "API", "方法名", ["first"], imp="kotlinx.coroutines.flow.first"),
+             "toIntOrNull": _cb2_row("C-43", "API", "方法名", ["toInt"]),
+             "mapLatest": _cb2_row("C-46", "API", "方法名", ["map"], imp="kotlinx.coroutines.flow.map")}
+     for key, body, want in (("singleOrNull", "val u = users.singleOrNull { it.id == id }", "val u = users.firstOrNull { it.id == id }"),
+                             ("single", "val u = users.single { it.id == id }", "val u = users.first { it.id == id }"),
+                             ("firstOrNull", "val u = users.firstOrNull { it.ok }", "val u = users.first { it.ok }"),
+                             ("toIntOrNull", "val n = s.toIntOrNull() ?: 0", "val n = s.toInt() ?: 0")):
+-        pts = _cb3_points(_choice_wrap(f"        {body}\n"), [5], [rows[key]], [key])
++        pts = _cb_points(_CB3_RULES, _choice_wrap(f"        {body}\n"), [5], [rows[key]], [key], skip=_CB3_SKIP)
+         check(f"S4 `{body}` → `{want}`", _cb2_new(pts, 5) == want, str(pts)[:400])
+         check(f"S4 `{body}` 檔頭沒有 import → 不補 import", not _cb3_mut(pts, 5).get("also"), str(pts)[:300])
+     src = _choice_wrap("        q.mapLatest { search(it) }\n", "import kotlinx.coroutines.flow.mapLatest\n\n")
+     ln = _cb3_ln(src, "        q.mapLatest { search(it) }")
+-    pts = _cb3_points(src, [ln], [rows["mapLatest"]], ["mapLatest"])
++    pts = _cb_points(_CB3_RULES, src, [ln], [rows["mapLatest"]], ["mapLatest"], skip=_CB3_SKIP)
+     also = _cb3_mut(pts, ln).get("also") or [{}]
+     check("S4 `q.mapLatest { search(it) }` → `q.map { search(it) }`", _cb2_new(pts, ln) == "q.map { search(it) }", str(pts)[:400])
+     check("S4 檔頭有 import mapLatest → 補 import kotlinx.coroutines.flow.map", "import kotlinx.coroutines.flow.map\n" in also[0].get("new", "") + "\n",
+           str(also)[:300])
+ 
+ 
+ _CB3_IDS = {f"C-{i}" for i in range(38, 56)}   # 第三批暫定列號(範圍 1 的順序;範圍 7 實測後被擋下的列不給號)
+ # S5 的命中與不命中(計劃 S5 條款與預期值表 S5 各列):(HIT/MISS, 列號, 樣本裡要有的片段)。只核表裡還在的列(撤列時樣本標記一起拿掉,這裡跳過)
+ _CB3_S5_MARKS = (
+     ("HIT", "C-39", "awaitAll(async { a() }, async { b() })"), ("HIT", "C-38", "for (id in ids) { launch { load(id) } }"),
+     ("HIT", "C-38", "repeat(3) { launch { f() } }"), ("HIT", "C-39", "ids.map { async { load(it) } }.awaitAll()"),
+     ("MISS", "C-38", "supervisorScope { val a = async { f() }; a.await() }"), ("MISS", "C-39", "coroutineScope { load { async { x() } } }"),
+     ("MISS", "C-38", "supervisorScope { val x = coroutineScope { async { 1 }.await() }; val y = coroutineScope { async { 2 }.await() } }"),
+     ("MISS", "C-39", "supervisorScope { val x = coroutineScope { async { 1 }.await() }; val y = coroutineScope { async { 2 }.await() } }"),
+     ("MISS", "C-39", "list.map { coroutineScope { async { x() } } }"), ("MISS", "C-39", "coroutineScope { scope.launch { a() }; scope.launch { b() } }"),
++    # 建立後同一個運算式就 .await()/.join() 的不算子協程(代碼審 r1 g1);多行寫法的標記在節點起始的第一行
++    ("MISS", "C-38", "supervisorScope { // MISS C-38\n        val a = async { f() }.await()\n        val b = async { g() }.await()"),
++    ("MISS", "C-39", "coroutineScope { launch { a() }.join(); launch { b() }.join() }"),
++    ("MISS", "C-38", "supervisorScope { val a = async { f() }.await(); launch { g() } }"),
++    ("HIT", "C-38", "supervisorScope { // HIT C-38\n        val a = async { f() }\n        val b = async { g() }\n        a.await() + b.await()"),
++    ("HIT", "C-39", "coroutineScope { foo(async { a() }).await(); foo(async { b() }).await() }"),
+     ("MISS", "C-50", "async(start = CoroutineStart.LAZY) { f() }.await()"), ("MISS", "C-50", "launch(start = CoroutineStart.LAZY) { f() }.join()"),
+     ("MISS", "C-53", "finally { withContext(NonCancellable) { close() } }"), ("MISS", "C-48", "MutableSharedFlow<Int>(replay = 2)"),
+     ("MISS", "C-49", "MutableSharedFlow<Int>(replay = 2)"),
+     ("MISS", "C-48", "MutableSharedFlow<Int>(replay = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)"),
+-    # 同一個呼叫拆兩行(一行只能標一種):replay 那一列不命中、DROP_OLDEST 那一列照常命中;片段含換行時比對連續兩行、標記看最後一行
++    # 同一個呼叫拆兩行(一行只能標一種):replay 那一列不命中、DROP_OLDEST 那一列照常命中;片段含換行時比對連續幾行、標記看最後一行
+     ("MISS", "C-48", "MutableSharedFlow<Int>(replay = 1, //"),
+     ("HIT", "C-51", "MutableSharedFlow<Int>(replay = 1, // MISS C-48\n        onBufferOverflow = BufferOverflow.DROP_OLDEST)"),
+     ("MISS", "C-48", "MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = 0, onBufferOverflow = BufferOverflow.DROP_OLDEST)"),
+     ("HIT", "C-48", "MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)"),
++    # 顯式 SUSPEND 照常命中;各種寫法的零照樣排除(代碼審 r1 b2 c1)
++    ("HIT", "C-48", "MutableSharedFlow<Int>(replay = 1, onBufferOverflow = BufferOverflow.SUSPEND)"),
++    ("MISS", "C-48", "MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = 0x0, onBufferOverflow = BufferOverflow.DROP_OLDEST)"),
++    ("MISS", "C-48", "extraBufferCapacity = -0,"), ("MISS", "C-48", "extraBufferCapacity = 0L,"), ("MISS", "C-48", "extraBufferCapacity = 0b0,"),
+     ("MISS", "C-48", "Foo(replay = 1)"), ("MISS", "C-54", "= Result.retry()"), ("MISS", "C-54", "= ListenableWorker.Result.retry()"),
+     ("MISS", "C-54", "androidx.work.ListenableWorker.Result.retry()"))
+ # 兩份要一字不差的 utils(ast-grep 的 utils 只在同一份規則文件裡有效,C-38 與 C-39 各抄一份)
+ _CB3_SCOPE_UTILS = ("child-co", "has-co", "loop-call", "many-co")
+ 
+ 
+ def t_choice_samples_batch3():
+     """[第三批 S5] 真規則對第三批樣本檔:表裡還在的每條第三批規則命中該命中的、不命中不該命中的;命中包含同一個陳述裡兩個 `async`、`for` 本體裡的
+     `launch`、`repeat(n) { launch { } }`;不命中包含作用域裡只有一個 `async`、`load { async { } }`、外層作用域裡只有內層作用域的 `async`、
+     `list.map { coroutineScope { async { } } }`、`scope.launch { }` 兩個、建立後立刻 `.await()`/`.join()` 的 LAZY、`finally` 裡的
+@@ -146880,21 +146879,23 @@ def t_choice_samples_batch3():
+         raise _SrcOnly("第三批樣本檔不在(整批撤掉了),這段跳過")
+     tables, probs = kp.choice_tables(_choice_real_cat().read_text(encoding="utf-8"))
+     check("S5 真型錄讀得懂", not probs, str(probs)[:300])
+     have = {r["id"] for r in tables["choice"]} & _CB3_IDS
+     lines = smp.read_text(encoding="utf-8").split("\n")
+     for kind, rid, snip in _CB3_S5_MARKS:
+         if rid not in have:
+             continue
+         k = snip.count("\n") + 1
+         wins = ["\n".join(lines[i:i + k]) for i in range(len(lines) - k + 1)]
+-        ok = any(snip in w and _re_mod.search(rf"//\s*{kind}\b[^\n]*\b{_re_mod.escape(rid)}\b", w.split("\n")[-1]) for w in wins)
++        # 標記看窗口的最後一行,或第一行(多行寫法時節點起始那一行)
++        ok = any(snip in w and any(_re_mod.search(rf"//\s*{kind}\b[^\n]*\b{_re_mod.escape(rid)}\b", x) for x in {w.split("\n")[0], w.split("\n")[-1]})
++                 for w in wins)
+         check(f"S5 樣本有 {rid} 的{'命中' if kind == 'HIT' else '不命中'}寫法 {snip!r} 並標 {kind}", ok)
+     api = (kp.CHOICE / "rules-choice" / "api.yml").read_text(encoding="utf-8")
+     if {"C-38", "C-39"} <= have:
+         for name in _CB3_SCOPE_UTILS:
+             a, b = _cb2_util_block(api, "C-38", name), _cb2_util_block(api, "C-39", name)
+             check(f"S5 C-38 與 C-39 照抄的 utils `{name}` 一致", a is not None and a == b, f"{a!r}\n{b!r}"[:400])
+     sg = _ktpack_sg()
+     if not sg:
+         raise _SrcOnly("本機沒有 ast-grep,樣本只核了標記;CI 裝了 0.51.1 會跑真規則")
+     # 掃描整個跑不起來(規則檔壞、ast-grep 逾時)回的是 <choice-samples>,一定要算進來,不然規則寫壞時這支靜默變綠(實作自我改壞時實測)
+@@ -146948,23 +146949,66 @@ def t_choice_table_batch3():
+     names, bad = _cb3_scope_unlisted(syn, [_cb2_row("C-38", "API", "運算元起始", ["coroutineScope"])])
+     check("S6 判法:有 supervisorScope 列、不收那一行仍寫著 supervisorScope → 報", names == {"supervisorScope"} and bad == ["supervisorScope"], str((names, bad)))
+     names, bad = _cb3_scope_unlisted(syn, [_cb2_row("C-19", "API", "方法名", ["filterNot"])])
+     check("S6 判法:作用域列都撤掉、不收那一行加回 → 這一項跳過(要核的名稱是空的)", names == set() and bad == [], str((names, bad)))
+     names, bad = _cb3_scope_unlisted(real, t_real["choice"])
+     if names:
+         check(f"S6 真型錄有作用域列:以 `不收(` 開頭的那一行不列 {'、'.join(sorted(names))}", bad == [], str(bad))
+ 
+ 
+ # 加入第三批列之前(2026-11-22,實作第一步)跑出來的第一版六支樣本檔挑法:(檔, 行, 狀態, 列, 樣板, new_sha);含第二、三批語法的行不收
+-# (第二批 S7 的做法;不把 samples/choice-batch2.kt 釘進來,第二批撤列時才不會讓這支紅)。實跑結果跟第二批的 _CB2_S7_PIN 逐筆相同,另抄一份:
+-# 第二批撤列時那份可能改,這份照第三批加入前的結果釘死。
+-_CB3_S7_PIN = tuple(_CB2_S7_PIN)
++# (第二批 S7 的做法;不把 samples/choice-batch2.kt 釘進來,第二批撤列時才不會讓這支紅)。實跑結果跟第二批的 _CB2_S7_PIN 逐筆相同,
++# 但這裡逐筆抄成獨立的字面常數、不引用那一份:日後第二批的釘值改了,這份照第三批加入前的結果不動(代碼審 r1 i5)。
++_CB3_S7_PIN = (
++    ('arid.kt', 6, 'arid', None, None, None), ('arid.kt', 7, 'arid', None, None, None), ('arid.kt', 8, 'arid', None, None, None),
++    ('arid.kt', 9, 'arid', None, None, None), ('arid.kt', 10, 'mutant', 'C-18', 'delete', 'f284f804e6fd94bb'),
++    ('arid.kt', 11, 'mutant', 'C-18', 'delete', 'f284f804e6fd94bb'), ('arid.kt', 15, 'arid', None, None, None),
++    ('arid.kt', 16, 'arid', None, None, None), ('arid.kt', 17, 'arid', None, None, None),
++    ('arid.kt', 18, 'mutant', 'C-1', '$A < $B', '6a3208f17a30773b'), ('arid.kt', 22, 'arid', None, None, None),
++    ('arid.kt', 23, 'mutant', 'C-1', 'false', '290b1b565b4ce109'), ('arid.kt', 24, 'mutant', 'C-17', '!$X', 'a3880b1dd21ab976'),
++    ('arid.kt', 28, 'arid', None, None, None), ('arid.kt', 29, 'arid', None, None, None),
++    ('arid.kt', 30, 'mutant', 'C-18', 'delete', '14401973c90e1c6a'), ('arid.kt', 34, 'arid', None, None, None),
++    ('arid.kt', 35, 'arid', None, None, None), ('arid.kt', 36, 'mutant', 'C-18', 'delete', 'c34bb3f648063a4b'),
++    ('arid.kt', 40, 'arid', None, None, None), ('arid.kt', 46, 'arid', None, None, None), ('arid.kt', 48, 'arid', None, None, None),
++    ('arid.kt', 50, 'none', None, None, None), ('arid.kt', 54, 'arid', None, None, None),
++    ('arid.kt', 55, 'mutant', 'C-5', '$A != $B', 'a3d25a1d8259a76e'), ('arid.kt', 59, 'arid', None, None, None),
++    ('arid.kt', 60, 'arid', None, None, None), ('arid.kt', 61, 'mutant', 'C-1', '$A < $B', '26937e3fdd47bf66'),
++    ('arid.kt', 65, 'arid', None, None, None), ('arid.kt', 66, 'mutant', 'C-17', '!$X', '4b4d234e06a99dc8'),
++    ('arid.kt', 71, 'arid', None, None, None), ('arid.kt', 72, 'arid', None, None, None), ('arid.kt', 77, 'arid', None, None, None),
++    ('arid.kt', 78, 'mutant', 'C-1', '$A <= $B', '3e601cde16f6024c'), ('arid.kt', 82, 'arid', None, None, None),
++    ('arid.kt', 83, 'arid', None, None, None), ('arid.kt', 84, 'mutant', 'C-18', 'delete', '523055d822ce9ca3'),
++    ('chain.kt', 7, 'mutant', 'C-28', 'flatMapConcat', '7038478586a7ab21'), ('choice.kt', 6, 'mutant', 'C-17', '!$X', '1f747aed0b89030a'),
++    ('choice.kt', 7, 'mutant', 'C-2', '$A <= $B', '2e415586d7c4802d'), ('choice.kt', 8, 'mutant', 'C-10', 'true', '1ac02f643f17725f'),
++    ('choice.kt', 9, 'mutant', 'C-4', 'true', '8930709a5adb1399'), ('choice.kt', 10, 'mutant', 'C-5', '$A != $B', '7c33a0528f9588ab'),
++    ('choice.kt', 11, 'mutant', 'C-6', '$A == $B', '309c01a7d784e226'), ('choice.kt', 12, 'mutant', 'C-7', '$A !== $B', '4b52b5d1a51d4884'),
++    ('choice.kt', 13, 'mutant', 'C-8', '$A === $B', 'ddbaeb4589148e51'), ('choice.kt', 17, 'mutant', 'C-11', '$A / $B', '3e01b98fd8a6230a'),
++    ('choice.kt', 18, 'mutant', 'C-12', '$A + $B', 'bde4e328c8e68e38'), ('choice.kt', 19, 'mutant', 'C-13', '$A', 'c4044b83522480c9'),
++    ('choice.kt', 20, 'mutant', 'C-14', '$A % $B', '01ac464470d1f6a0'), ('choice.kt', 21, 'mutant', 'C-15', '$A * $B', 'ce083080c5259b87'),
++    ('choice.kt', 22, 'mutant', 'C-11', '$A - $B', 'c3f8abcf69147881'), ('choice.kt', 26, 'mutant', 'C-16', '$B', '1e9630ca9f7a6153'),
++    ('choice.kt', 27, 'mutant', 'C-17', '!$X', '59d6d24f8fb73269'), ('choice.kt', 28, 'mutant', 'C-17', '!$X', '90484b88ab88be7d'),
++    ('choice.kt', 35, 'mutant', 'C-18', 'delete', 'd0f42b819ace9778'), ('choice.kt', 36, 'mutant', 'C-18', 'delete', 'd0f42b819ace9778'),
++    ('choice.kt', 44, 'mutant', 'C-18', 'delete', '1a0f564ddc603945'), ('choice.kt', 47, 'mutant', 'C-17', '!$X', 'd8c1dd16e79d3ab4'),
++    ('choice.kt', 50, 'mutant', 'C-18', 'delete', '1a0f564ddc603945'), ('choice.kt', 51, 'mutant', 'C-18', 'delete', '06bb2f5b47e565c3'),
++    ('choice.kt', 57, 'mutant', 'C-19', 'filterNot', '9463d4fdf56a7494'), ('choice.kt', 58, 'mutant', 'C-1', 'false', 'a6b1e3ba519c1a03'),
++    ('choice.kt', 59, 'mutant', 'C-21', 'none', '48c3cb5126f1ca54'), ('choice.kt', 60, 'mutant', 'C-1', '$A < $B', '4d8e5b9868fb3f10'),
++    ('choice.kt', 61, 'mutant', 'C-18', 'delete', 'f0bc4b67681a436a'),
++    ('choice.kt', 62, 'mutant', 'C-24', 'sortedByDescending', '493460ed9077a568'),
++    ('choice.kt', 63, 'mutant', 'C-25', 'sortedBy', 'b5b0d0a748edf7bd'),
++    ('choice.kt', 64, 'mutant', 'C-26', 'maxByOrNull', 'eb2e82e89a887478'),
++    ('choice.kt', 65, 'mutant', 'C-27', 'minByOrNull', '7dddf43d4dd1417a'), ('choice.kt', 66, 'mutant', 'C-18', 'delete', '9739c15e1528ba87'),
++    ('choice.kt', 67, 'mutant', 'C-18', 'delete', 'dd23cb4388a1fa23'), ('choice.kt', 68, 'mutant', 'C-18', 'delete', '53a6d9dce1fa3432'),
++    ('choice.kt', 69, 'mutant', 'C-18', 'delete', 'c58a14074655af66'), ('error.kt', 5, 'mutant', 'C-1', '$A <= $B', '696f0de1909a2b27'),
++    ('multibyte.kt', 5, 'mutant', 'C-1', 'false', '8012e547698b0064'), ('nested.kt', 5, 'mutant', 'C-11', '$B', 'ed2fae34e0fe8a6a'),
++    ('nested.kt', 6, 'mutant', 'C-11', '$A * $B', '4d9955c22834299a'), ('nested.kt', 7, 'mutant', 'C-1', '$A <= $B', '4fbb231294aa0064'),
++    ('nested.kt', 8, 'mutant', 'C-2', '$A <= $B', '4cf02c05a3a78fca'), ('nested.kt', 9, 'mutant', 'C-2', '$A >= $B', '4f83a9e7d383650a'),
++    ('nested.kt', 10, 'none', None, None, None),
++)
+ _CB3_S7_SKIP = (r"\?\.|\?:|\blet\b|combine|LaunchedEffect|remember|supervisorScope|coroutineScope"
+                 r"|\.\s*(?:singleOrNull|single|firstOrNull|toIntOrNull|toLongOrNull|toDoubleOrNull|mapLatest|transformLatest|retry|retryWhen)\b"
+                 r"|\breplay\s*=|CoroutineStart|BufferOverflow|NonCancellable")
+ 
+ 
+ def t_choice_points_batch3_stable():
+     """[第三批 S7] 第三批列加入後,第一版六支樣本檔裡不含第二、三批語法的行挑出跟加入前相同的壞法(行指紋相同、壞法相同;加入前的結果在實作第一步
+     跑一次、釘在 _CB3_S7_PIN);沒有 `$A` 的既有 `(拿掉呼叫)` 列(C-31 `.distinctUntilChanged()`)照舊只刪 `.方法名()`。判準來源:計劃預期值表
+     S7 兩列。翻紅釘:_choice_anchor_edits 把「整個呼叫」分支寫成看樣板(drop_call 一律刪 `$A` 結尾到命中結尾)→ C-31 那條紅;
+     _CHOICE_GAP_SKIP_RE 被改 → 釘值那條可能紅。"""
+@@ -147008,58 +147052,81 @@ def _cb3_positive(doc):
+         ln = lines[i]
+         if not cut and ln == "  not:" and i + 1 < len(lines) and lines[i + 1] == "    not:" and "rule:" in out:
+             cut, i = True, i + 2
+             continue
+         out.append(ln[4:] if cut and ln.startswith("      ") else ln)
+         i += 1
+     return "\n".join(out) if cut else None
+ 
+ 
+ def t_choice_scope_rule_output():
+-    """[第三批 S9] 作用域規則(真規則檔裡命中 coroutineScope 的那一條)直接用 ast-grep 掃合成輸入:單一 coroutineScope 裡平鋪 300 個 `launch { }`、
+-    巢狀 100 層 coroutineScope 每層兩個 `launch`;輸出各不超過 1MB,命中跟同一條規則不包雙重否定時相同。表裡沒有作用域列時跳過(撤列)。
+-    判準來源:計劃預期值表 S9 兩列(Systems/kotlin規則包 正面關聯規則輸出爆量的 PITFALL)。翻紅釘:拿掉雙重否定 → 巢狀那條輸出約 46MB、紅。"""
++    """[第三批 S9] 用到關聯規則的第三批規則直接用 ast-grep 掃合成輸入(不走批次掃描):作用域規則(命中 coroutineScope 那一條)掃單一
++    coroutineScope 裡平鋪 300 個 `launch { }`、巢狀 100 層 coroutineScope 每層兩個 `launch`;C-48(`replay = 1` 那一條)掃巢狀 200 層的
++    `MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = g(…))`;C-53(`withContext(NonCancellable)` 那一條)掃巢狀 200 層的
++    `withContext(NonCancellable) { … }`。有雙重否定時輸出各不超過 1MB,命中跟同一條規則拿掉雙重否定(正面寫)時相同;巢狀那幾列正面寫的輸出
++    明顯比較大(至少 10 倍,不然雙重否定沒有在守東西)。表裡沒有那一列時那一列跳過、三列都沒有整段跳過(撤列)。
++    判準來源:計劃預期值表 S9 四列(Systems/kotlin規則包 正面關聯規則輸出爆量的 PITFALL;C-48、C-53 兩列是代碼審 r1 r2 補的)。
++    翻紅釘:拿掉作用域規則的雙重否定 → 巢狀 100 層那條輸出約 46MB、紅;平鋪 300 個那條正面寫只有約 60KB,拿掉雙重否定不會超過 1MB,
++    靠的是巢狀那條;拿掉 C-48 或 C-53 的雙重否定 → 那一條輸出數 MB、紅。"""
+     import json as _j
+     kp = _ktpack()
+     tables, _p = kp.choice_tables(_choice_real_cat().read_text(encoding="utf-8"))
+-    row = next((r for r in tables["choice"] if r["id"] in _CB3_IDS and r["candidates"] == ["supervisorScope"]), None)
+-    if row is None:
+-        raise _SrcOnly("表裡沒有 coroutineScope 那一列(撤列了),這段跳過")
++    want = (("作用域 coroutineScope", ["supervisorScope"]), ("C-48 replay = 1", ["0"]), ("C-53 NonCancellable", ["kotlin.coroutines.EmptyCoroutineContext"]))
++    rows = {lab: next((r for r in tables["choice"] if r["id"] in _CB3_IDS and r["candidates"] == cands), None) for lab, cands in want}
++    if not any(rows.values()):
++        raise _SrcOnly("表裡沒有作用域、replay = 1、NonCancellable 這三列(撤列了),這段跳過")
+     sg = _ktpack_sg()
+     if not sg:
+         raise _SrcOnly("本機沒有 ast-grep,這段跳過;CI 裝了 0.51.1 會跑")
+-    api = (kp.CHOICE / "rules-choice" / row["rule_file"]).read_text(encoding="utf-8")
+-    doc = next(x for x in _re_mod.split(r"^---\s*$", api, flags=_re_mod.M) if _re_mod.search(rf"^id:\s*{row['id']}\s*$", x, _re_mod.M))
+-    pos = _cb3_positive(doc.strip("\n") + "\n")
+-    check("S9 規則有包雙重否定(拿得掉才有對照組)", pos is not None, doc[-300:])
+     flat = "fun f() {\n    coroutineScope {\n" + "".join("        launch { f() }\n" for _ in range(300)) + "    }\n}\n"
+     nest = "fun f() {\n" + "".join("    " * (i + 1) + "coroutineScope {\n" + "    " * (i + 2) + "launch { a() }\n" + "    " * (i + 2) + "launch { b() }\n"
+                                    for i in range(100)) + "".join("    " * (i + 1) + "}\n" for i in reversed(range(100))) + "}\n"
+-    d = Path(tempfile.mkdtemp(prefix="gctl-cb3s9-"))
+-    for name, text in (("neg", doc), ("pos", pos or doc)):
+-        (d / name).mkdir()
+-        (d / name / "r.yml").write_text(text, encoding="utf-8")
+-        (d / f"{name}.yml").write_text(f"ruleDirs:\n  - {name}\n", encoding="utf-8")
+-    (d / "src").mkdir()
+-    for label, text, n_hit in (("單一 coroutineScope 平鋪 300 個 launch", flat, 1), ("巢狀 100 層、每層兩個 launch", nest, 100)):
+-        (d / "src" / "0.kt").write_text(text, encoding="utf-8")
+-        res = {}
+-        for name in ("neg", "pos"):
+-            r = subprocess.run([sg, "scan", "--config", str(d / f"{name}.yml"), "--json=stream", "src/0.kt"], cwd=str(d), capture_output=True, text=True,
+-                               timeout=120)
+-            hits = sorted((x["range"]["byteOffset"]["start"], x["range"]["byteOffset"]["end"]) for x in map(_j.loads, filter(None, r.stdout.splitlines())))
+-            res[name] = (r.returncode, len(r.stdout.encode("utf-8")), hits)
+-        rc, size, hits = res["neg"]
+-        check(f"S9 {label}:輸出不超過 1MB(實得 {size} 位元組;正面寫 {res['pos'][1]} 位元組)", rc in (0, 1) and size <= 1_000_000, str(res["neg"][:2]))
+-        check(f"S9 {label}:命中 {n_hit} 處、跟不包雙重否定時相同", len(hits) == n_hit and hits == res["pos"][2], f"{len(hits)} vs {len(res['pos'][2])}")
+-    import shutil as _sh
+-    _sh.rmtree(d, ignore_errors=True)
++    # 每層一行(ast-grep 每筆命中都附整行原文,擠成一行時量到的是那一行的長度、不是規則的次要標記)
++    replay = ("fun f() {\n    val x =\n" + "".join("    " * (i + 1) + "MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = g(\n" for i in range(200))
++              + "    " * 201 + "1" + "))" * 200 + "\n}\n")
++    nonc = ("suspend fun f() {\n" + "".join("    " * (i + 1) + "withContext(NonCancellable) {\n" for i in range(200)) + "    " * 201 + "save()\n"
++            + "".join("    " * (i + 1) + "}\n" for i in reversed(range(200))) + "}\n")
++    cases = {"作用域 coroutineScope": (("單一 coroutineScope 平鋪 300 個 launch", flat, 1, False), ("巢狀 100 層、每層兩個 launch", nest, 100, True)),
++             "C-48 replay = 1": (("巢狀 200 層 MutableSharedFlow(replay = 1)", replay, 200, True),),
++             "C-53 NonCancellable": (("巢狀 200 層 withContext(NonCancellable)", nonc, 200, True),)}
++    with tempfile.TemporaryDirectory(prefix="gctl-cb3s9-") as td:
++        d = Path(td)
++        (d / "src").mkdir()
++        for lab, row in rows.items():
++            if row is None:
++                print(f"  (表裡沒有 {lab} 那一列,跳過)")
++                continue
++            api = (kp.CHOICE / "rules-choice" / row["rule_file"]).read_text(encoding="utf-8")
++            doc = next(x for x in _re_mod.split(r"^---\s*$", api, flags=_re_mod.M) if _re_mod.search(rf"^id:\s*{row['id']}\s*$", x, _re_mod.M))
++            pos = _cb3_positive(doc.strip("\n") + "\n")
++            check(f"S9 {lab}:規則有包雙重否定(拿得掉才有對照組)", pos is not None, doc[-300:])
++            for name, text in (("neg", doc), ("pos", pos or doc)):
++                (d / f"{row['id']}-{name}").mkdir()
++                (d / f"{row['id']}-{name}" / "r.yml").write_text(text, encoding="utf-8")
++                (d / f"{row['id']}-{name}.yml").write_text(f"ruleDirs:\n  - {row['id']}-{name}\n", encoding="utf-8")
++            for label, text, n_hit, grows in cases[lab]:
++                (d / "src" / "0.kt").write_text(text, encoding="utf-8")
++                res = {}
++                for name in ("neg", "pos"):
++                    r = subprocess.run([sg, "scan", "--config", str(d / f"{row['id']}-{name}.yml"), "--json=stream", "src/0.kt"], cwd=str(d),
++                                       capture_output=True, text=True, timeout=120)
++                    hits = sorted((x["range"]["byteOffset"]["start"], x["range"]["byteOffset"]["end"])
++                                  for x in map(_j.loads, filter(None, r.stdout.splitlines())))
++                    res[name] = (r.returncode, len(r.stdout.encode("utf-8")), hits)
++                rc, size, hits = res["neg"]
++                check(f"S9 {lab} {label}:輸出不超過 1MB(實得 {size} 位元組;正面寫 {res['pos'][1]} 位元組)", rc in (0, 1) and size <= 1_000_000,
++                      str(res["neg"][:2]))
++                check(f"S9 {lab} {label}:命中 {n_hit} 處、跟拿掉雙重否定時相同", len(hits) == n_hit and hits == res["pos"][2],
++                      f"{len(hits)} vs {len(res['pos'][2])}")
++                if grows:
++                    check(f"S9 {lab} {label}:拿掉雙重否定的輸出至少是 10 倍(雙重否定確實在壓輸出量)", res["pos"][1] >= 10 * max(size, 1),
++                          f"{res['pos'][1]} vs {size}")
+ 
+ 
+ def t_gov_stats_choice_by_row():
+     """[第二批 S8] gov --stats 選擇點段「依列號」:壞法以 (檔, 行指紋, 列號) 計,曾殺掉算殺掉、否則曾存活算存活、否則跑不出結果;
+     基準不綠沒跑的不算;同一行多筆放行只算最後一筆(照 UTC 秒數比,混時區偏移也對);沒有列號的放行另計;列號照數字排序、怪列號不讓整段當掉。
+     判準來源:計劃預期值表 S8 列(C-32 那一列數字照抄);C-9 那一列與時區、怪列號是代碼審 r1(a1、b1、b3、c2)補的。
+     翻紅釘:放行取第一筆或直接比字串 → C-32 放行變「不適用」紅;終態取最後一筆 → C-9 先殺掉後存活變存活、紅;不排除基準不綠 → 壞法 5 紅;
+     排序照字串 → C-32 排在 C-9 前面、紅;isdigit 擋不住上標數字 → `C-²` 那條例外紅。"""
+     import io
+     import contextlib
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index ecebbacece1e91d554563507b18df0b4908ed3ba..083b8c80962e6c6c64e390c56e202de6b5ae7da3 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -1699,31 +1699,31 @@
+ | C-28 | API | `api.yml` `$R.flatMapLatest` 後接呼叫 | 方法名 | `flatMapConcat` | (無) | `kotlinx.coroutines.flow.flatMapConcat` | D-4 | 新值來時取消前一個對上每一個都做完(搜尋框只要最新一次) | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-29 | API | `api.yml` `$R.flatMapConcat` 後接呼叫 | 方法名 | `flatMapMerge` | (無) | `kotlinx.coroutines.flow.flatMapMerge` | D-4 | 依序做完對上同時做、結果交錯 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-30 | API | `api.yml` `$R.flatMapMerge` 後接呼叫 | 方法名 | `flatMapConcat` | (無) | `kotlinx.coroutines.flow.flatMapConcat` | D-4 | 同時做對上依序做 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-31 | API | `api.yml` `$R.distinctUntilChanged` 後接呼叫 | 方法名 | (拿掉呼叫) | (無) | (無) | — | 連續相同的值會再送一次 | MutApi(API 兄弟寫法改寫表);論文2.2 |
+ | C-32 | NUL | `nul.yml` `$A ?: $B` | 運算子 | `$A!!` | 運算元有 null 字面值 | (無) | — | 遇到 null 從用預設值變成當掉 | Kotlin 官方 null safety https://kotlinlang.org/docs/null-safety.html ;Detekt UnsafeCallOnNullableType https://detekt.dev/docs/rules/potential-bugs ;論文表 1 形狀 |
+ | C-33 | NUL | `nul.yml` navigation_suffix 開頭的 `?.`(前一個兄弟節點是註解時不收) | 安全呼叫符 | `!!.` | (無) | (無) | — | 遇到 null 從略過變成當掉 | Kotlin 官方 null safety https://kotlinlang.org/docs/null-safety.html ;Detekt UnsafeCallOnNullableType https://detekt.dev/docs/rules/potential-bugs |
+ | C-34 | API | `api.yml` `$R.let` 後接呼叫、回傳值確定被用到(`sbr.yml` 的 value-pos,再排除外層 if/when/try 自己掛在另一個分支底下的位置) | 方法名 | `also` | (無) | (無) | — | 回傳值從區塊結果變成接收者本身 | Kotlin 官方範圍函式 https://kotlinlang.org/docs/scope-functions.html ;MutApi(API 兄弟寫法改寫表) |
+ | C-35 | API | `api.yml` 接收者寫法 `$R.combine` 後接呼叫(完整套件名的頂層呼叫不收) | 方法名 | `zip` | (無) | `kotlinx.coroutines.flow.zip` | D-5、D-6 | 任一邊有新值就輸出對上兩邊成對才輸出 | Kotlin 官方 Flow https://kotlinlang.org/docs/flow.html ;MutApi(API 兄弟寫法改寫表) |
+ | C-36 | API | `api.yml` `LaunchedEffect(…)` 帶尾隨 lambda、引數不全是字面值的引數清單 | 引數 | `(Unit)` | (無) | (無) | D-32 | key 變了不重跑 | Android 官方 Compose 副作用 https://developer.android.com/develop/ui/compose/side-effects |
+ | C-37 | API | `api.yml` `remember(…)` 帶尾隨 lambda、引數不全是字面值的引數清單 | 引數 | (刪掉) | (無) | (無) | — | 參數變了還顯示舊值 | Android 官方 Compose 狀態 https://developer.android.com/develop/ui/compose/state |
+-| C-38 | API | `api.yml` 呼叫名稱是 `supervisorScope` 的識別字,作用域大括號裡有兩個以上子協程(同一個陳述裡兩個、或一個落在迴圈裡也算) | 運算元起始 | `coroutineScope` | (無) | `kotlinx.coroutines.coroutineScope` | D-8、D-9 | 問「其中一支壞了,其他還要不要照常顯示?」:一支子協程失敗時,兄弟從照常做完變成一起取消 | 官方例外處理 Supervision 一節 https://kotlinlang.org/docs/exception-handling.html |
++| C-38 | API | `api.yml` 呼叫名稱是 `supervisorScope` 的識別字,作用域大括號裡有兩個以上子協程(同一個陳述裡兩個、或一個落在迴圈裡也算;建立後立刻 `.await()`、`.join()` 的不算) | 運算元起始 | `coroutineScope` | (無) | `kotlinx.coroutines.coroutineScope` | D-8、D-9 | 問「其中一支壞了,其他還要不要照常顯示?」:一支子協程失敗時,兄弟從照常做完變成一起取消 | 官方例外處理 Supervision 一節 https://kotlinlang.org/docs/exception-handling.html |
+ | C-39 | API | `api.yml` 呼叫名稱是 `coroutineScope` 的識別字,作用域大括號裡有兩個以上子協程(同上) | 運算元起始 | `supervisorScope` | (無) | `kotlinx.coroutines.supervisorScope` | D-8、D-9 | 問「其中一支壞了,其他還要不要照常顯示?」:一支子協程失敗時,兄弟從一起取消變成照常做完 | 官方例外處理 Supervision 一節 https://kotlinlang.org/docs/exception-handling.html |
+ | C-40 | API | `api.yml` `$R.singleOrNull` 後接呼叫 | 方法名 | `firstOrNull` | (無) | `kotlinx.coroutines.flow.firstOrNull` | — | 問「符合條件的一定只有一筆嗎?多筆算資料錯誤嗎?」:多筆時從回 null 變成取第一筆 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-41 | API | `api.yml` `$R.single` 後接呼叫 | 方法名 | `first` | (無) | `kotlinx.coroutines.flow.first` | — | 問「符合條件的一定只有一筆嗎?多筆算資料錯誤嗎?」:多筆時從丟例外變成取第一筆 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-42 | API | `api.yml` `$R.firstOrNull` 後接呼叫 | 方法名 | `first` | (無) | `kotlinx.coroutines.flow.first` | D-26 | 問「找不到是正常情況還是錯誤?」:找不到時從回 null 變成丟例外 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-43 | API | `api.yml` `$R.toIntOrNull` 後接呼叫 | 方法名 | `toInt` | (無) | (無) | — | 問「格式不對是正常情況還是錯誤?」:解析失敗時從回 null 變成丟例外 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-44 | API | `api.yml` `$R.toLongOrNull` 後接呼叫 | 方法名 | `toLong` | (無) | (無) | — | 問「格式不對是正常情況還是錯誤?」:解析失敗時從回 null 變成丟例外 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-45 | API | `api.yml` `$R.toDoubleOrNull` 後接呼叫 | 方法名 | `toDouble` | (無) | (無) | — | 問「格式不對是正常情況還是錯誤?」:解析失敗時從回 null 變成丟例外 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-46 | API | `api.yml` `$R.mapLatest` 後接呼叫 | 方法名 | `map` | (無) | `kotlinx.coroutines.flow.map` | D-4 | 問「新的值來了,舊的那次還要做完嗎?」:新值來時從取消舊的那次變成每一次都做完 | kotlinx.coroutines API 文件 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/ |
+ | C-47 | API | `api.yml` `$R.transformLatest` 後接呼叫 | 方法名 | `transform` | (無) | `kotlinx.coroutines.flow.transform` | D-4 | 問「新的值來了,舊的那次還要做完嗎?」:新值來時從取消舊的那次變成每一次都做完 | kotlinx.coroutines API 文件 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/ |
+-| C-48 | API | `api.yml` `MutableSharedFlow(…)` 或 `.shareIn(…)` 具名引數 `replay = 1` 的整數字面值(帶 `onBufferOverflow` 又沒有值不是 0 的 `extraBufferCapacity` 的不收:換 0 會建構就丟例外) | 運算元起始 | `0` | (無) | (無) | D-7、D-15 | 問「畫面重建後要不要再看到上一個值?這是狀態還是只發一次的事件?」:晚到的訂閱者從收到上一個值變成什麼都收不到 | Android 官方 StateFlow 與 SharedFlow https://developer.android.com/kotlin/flow/stateflow-and-sharedflow;MutableSharedFlow API 文件 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-mutable-shared-flow.html |
++| C-48 | API | `api.yml` `MutableSharedFlow(…)` 或 `.shareIn(…)` 具名引數 `replay = 1` 的整數字面值(帶值不是 `SUSPEND` 的 `onBufferOverflow` 又沒有值不是 0 的 `extraBufferCapacity` 的不收:換 0 會建構就丟例外) | 運算元起始 | `0` | (無) | (無) | D-7、D-15 | 問「畫面重建後要不要再看到上一個值?這是狀態還是只發一次的事件?」:晚到的訂閱者從收到上一個值變成什麼都收不到 | Android 官方 StateFlow 與 SharedFlow https://developer.android.com/kotlin/flow/stateflow-and-sharedflow;MutableSharedFlow API 文件 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-mutable-shared-flow.html |
+ | C-49 | API | `api.yml` `MutableSharedFlow(…)` 或 `.shareIn(…)` 具名引數 `replay = 0` 的整數字面值 | 運算元起始 | `1` | (無) | (無) | D-7、D-15 | 問「畫面重建後要不要再看到上一個值?這是狀態還是只發一次的事件?」:晚到的訂閱者從什麼都收不到變成再收到上一個值 | Android 官方 StateFlow 與 SharedFlow https://developer.android.com/kotlin/flow/stateflow-and-sharedflow |
+ | C-50 | API | `api.yml` `CoroutineStart.LAZY` 的 `.LAZY` 那一段(帶它的 `async`/`launch` 直接接 `.await()`、`.join()` 的不收) | 方法名 | `DEFAULT` | (無) | (無) | — | 問「要不要等到需要時才開始做(條件不成立時就不做、省一次呼叫)?」:從等到 `start`/`await` 才開始變成建立當下就開始。`coroutineScope` 裡沒啟動的 LAZY 子協程會讓作用域永不結束(CO-18),守門測試要在條件不成立時取消那個子協程 | 官方 Composing suspending functions https://kotlinlang.org/docs/composing-suspending-functions.html  |
+ | C-51 | API | `api.yml` `BufferOverflow.DROP_OLDEST` 的 `.DROP_OLDEST` 那一段 | 方法名 | `DROP_LATEST` | (無) | (無) | D-16 | 問「來不及處理時留最新的還是最早的?」:緩衝滿時從丟掉最早的(留最新)變成丟掉最新的(留最早) | kotlinx.coroutines API 文件 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/ |
+ | C-52 | API | `api.yml` `BufferOverflow.DROP_LATEST` 的 `.DROP_LATEST` 那一段 | 方法名 | `DROP_OLDEST` | (無) | (無) | D-16 | 問「來不及處理時留最新的還是最早的?」:緩衝滿時從丟掉最新的(留最早)變成丟掉最早的(留最新) | kotlinx.coroutines API 文件 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/ |
+ | C-53 | API | `api.yml` `withContext(` 唯一引數是 `NonCancellable` 識別字(`finally` 裡的不收,CO-15) | 運算元起始 | `kotlin.coroutines.EmptyCoroutineContext` | (無) | (無) | D-17 | 問「使用者離開之後,這次寫入還要不要做完?」:取消之後從照常做完變成中途停掉 | 官方 Cancellation and timeouts https://kotlinlang.org/docs/cancellation-and-timeouts.html  |
+ | C-54 | API | `api.yml` 樣式 `$A.retry(…)`、`$A.retry(…) { … }`、`$A.retry { … }` 與 `?.` 版本(接收者最後一段是 `Result` 的不收) | 整個呼叫 | (拿掉呼叫) | (無) | (無) | D-11 | 問「失敗要不要重試?重試安全嗎?」:失敗時從重試變成直接把錯誤往下傳 | kotlinx.coroutines API 文件 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/ |
+ | C-55 | API | `api.yml` 樣式 `$A.retryWhen(…)`、`$A.retryWhen { … }` 與 `?.` 版本(接收者最後一段是 `Result` 的不收) | 整個呼叫 | (拿掉呼叫) | (無) | (無) | D-11 | 問「失敗要不要重試?重試安全嗎?」:失敗時從照條件重試變成直接把錯誤往下傳 | kotlinx.coroutines API 文件 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/ |
+ 
+ ## 乾節點規則
+ 
