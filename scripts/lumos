@@ -77161,6 +77161,7 @@ _CHOICE_PREC = {"*": 6, "/": 6, "%": 6, "+": 5, "-": 5, "<": 4, ">": 4, "<=": 4,
 _CHOICE_OP_RE = re.compile(rb"===|!==|==|!=|<=|>=|&&|\|\||[<>+\-*/%]")
 _CHOICE_GAP_SKIP_RE = re.compile(rb"(?:\s+|//[^\n]*(?:\n|$)|/\*.*?\*/)*", re.S)
 _CHOICE_ATOMIC_RE = re.compile(r"[\w.?!]+")
+_CHOICE_CALL_NAME_RE = re.compile(rb"(\?\.|\.)\s*([A-Za-z_]\w*)")   # `.` 或 `?.` 加方法名:「方法名」錨點與「整個呼叫」錨點(第三批)共用
 _CHOICE_STATUS_TEXT = {"none": "沒有壞法", "arid": "乾節點", "not_unique": "不唯一", "unrun": "沒跑"}
 
 
@@ -77404,11 +77405,19 @@ def _choice_anchor(b, hit, row, changed=None, starts=None):
     前綴 ! 是節點開頭)、運算元起始與陳述起始是節點開頭、方法名是 navigation_suffix 裡跳過 ?. 或 . 之後的識別字。對不上回 (None, None)。
     第二批([[Projects/選擇點表第二批常見誤用寫法_計劃]]〈用詞〉):NUL 類 `?:` 那一列的運算子只比字面 `?:`(`_CHOICE_OP_RE` 與
     `_CHOICE_PREC` 不動:那支正規式也給 _choice_top_prec 算優先層級,加進 `?:` 會查表查不到而當掉);安全呼叫符是 `?.` 那兩個字元;
-    引數是節點範圍內第一個改動行的開頭(changed 是改動行集合、starts 是每行開頭位移;範圍內沒有改動行或沒給就回節點開頭)。"""
+    引數是節點範圍內第一個改動行的開頭(changed 是改動行集合、starts 是每行開頭位移;範圍內沒有改動行或沒給就回節點開頭)。
+    第三批([[Projects/選擇點表第三批業務情境寫法_計劃]]〈用詞〉):整個呼叫是 `$A` 結尾跳過空白、換行與註解(_CHOICE_GAP_SKIP_RE)後
+    `.` 或 `?.` 後面那個識別字(換行寫法時錨點行是方法名那一行);沒有 `$A` 或比對不到回 (None, None)。"""
     mv = hit["mv"]
+    if row["anchor"] == "整個呼叫":
+        if "A" not in mv:
+            return None, None
+        k = _CHOICE_GAP_SKIP_RE.match(b, mv["A"][1], hit["e"]).end()
+        m = _CHOICE_CALL_NAME_RE.match(b, k, hit["e"])
+        return (m.start(2), (m.start(2), m.end(2))) if m else (None, None)
     if row["anchor"] == "方法名":
-        m = re.match(rb"(\?\.|\.)\s*([A-Za-z_]\w*)", b[hit["s"]:hit["e"]])
-        return (hit["s"] + m.start(2), (hit["s"] + m.start(2), hit["s"] + m.end(2))) if m else (None, None)
+        m = _CHOICE_CALL_NAME_RE.match(b, hit["s"], hit["e"])
+        return (m.start(2), (m.start(2), m.end(2))) if m else (None, None)
     if row["anchor"] == "安全呼叫符":
         s = hit["s"]
         return (s, (s, s + 2)) if b.startswith(b"?.", s) else (None, None)
@@ -77425,6 +77434,12 @@ def _choice_anchor(b, hit, row, changed=None, starts=None):
         m = _CHOICE_OP_RE.match(b, k, ge)
         return (k, (k, m.end())) if m else (None, None)
     return hit["s"], None
+
+
+def _choice_err_start(row, hit, anchor, line_of):
+    """ERROR 覆蓋判斷從哪一行起算:「整個呼叫」錨點從錨點行起(命中含整段接收者,接收者裡的 ERROR 不該讓 .retry 消失;
+    [[Projects/選擇點表第三批業務情境寫法_計劃]] 範圍 3),其他錨點照舊從命中第一行起。依錨點名稱分流的判斷都收在 _choice_anchor 這一帶。"""
+    return line_of(anchor) if row["anchor"] == "整個呼叫" else hit["line"]
 
 
 def _choice_line_index(b):
@@ -77583,8 +77598,12 @@ def _choice_anchor_edits(b, hit, row, op, tpl):
     """照錨點或樣板決定編法的幾種(_choice_edits 在通用樣板替換之前交過來)→ 編輯清單、None(產不出)或 _CHOICE_NOT_MINE(不是這幾種)。
     方法名交 _choice_api_edits;下面三種是第二批([[Projects/選擇點表第二批常見誤用寫法_計劃]] 範圍 3)。
     安全呼叫符:`?.` 換成 `.`,在它前面最後一個非空白字元之後插 `!!`(`?.` 另起一行時 `!!` 接在前一行結尾:`!!` 前面不能換行,`.` 前面可以);
-    引數:樣板直接蓋掉整個引數清單(不經「不是單一記號就加括號」);`$A!!`:`$A` 不是單一記號先包括號,整個結果放回運算式時照 _choice_ctx_safe 加括號。"""
+    引數:樣板直接蓋掉整個引數清單(不經「不是單一記號就加括號」);`$A!!`:`$A` 不是單一記號先包括號,整個結果放回運算式時照 _choice_ctx_safe 加括號。
+    整個呼叫(第三批,[[Projects/選擇點表第三批業務情境寫法_計劃]] 範圍 3):(拿掉呼叫)刪掉 `$A` 結尾到命中結尾(引數、尾隨 lambda 都在
+    語法樹的範圍內,不自己數括號);其他樣板或沒有 `$A` 回 None。"""
     s, e, mv = hit["s"], hit["e"], hit["mv"]
+    if row["anchor"] == "整個呼叫":
+        return [(mv["A"][1], e, b"")] if tpl == "drop_call" and "A" in mv else None
     if row["anchor"] == "方法名":
         return _choice_api_edits(b, s, e, op, tpl)
     if row["anchor"] not in ("安全呼叫符", "引數") and tpl != "$A!!":
@@ -77677,14 +77696,21 @@ def _choice_identity(rel, text, fp, row, edits, line_of, ctx=None):
     return None
 
 
-def _choice_also(text, row, b, op, new):
+def _choice_also(text, row, b, op, new, s=None, e=None):
     """API 列的需補 import(〈用詞〉選擇點表 API):檔頭逐一 import 了原寫法(套件.原名)時,補兄弟寫法那一行;走人裁的
-    _situation_rule_header_scan / _situation_rule_imports_problem(插入點、已 import 不補都照它)。沒有要補的回 None。"""
+    _situation_rule_header_scan / _situation_rule_imports_problem(插入點、已 import 不補都照它)。沒有要補的回 None。
+    原寫法:方法名錨點取 op 那個識別字;第三批([[Projects/選擇點表第三批業務情境寫法_計劃]] 範圍 3)起,運算元起始錨點而且那一列的
+    「需補的 import」欄不是(無)時(作用域兩列)取命中範圍 [s, e)(運算元起始的 op 一律是 None;條件看列的欄位,不看命中形狀)。"""
     imp = row.get("import")
-    if not imp or row["anchor"] != "方法名" or op is None:
+    if not imp:
+        return None
+    if row["anchor"] == "運算元起始" and s is not None and e is not None:
+        orig = b[s:e].decode("utf-8")
+    elif row["anchor"] == "方法名" and op is not None:
+        orig = b[op[0]:op[1]].decode("utf-8")
+    else:
         return None
     pkg = imp.rsplit(".", 1)[0]
-    orig = b[op[0]:op[1]].decode("utf-8")
     heads = _situation_rule_header_imports(_situation_rule_header_scan(text))
     if not any(re.sub(r"\s+", "", st[len("import"):]) == f"{pkg}.{orig}" for st in heads):
         return None
@@ -77714,7 +77740,7 @@ def _choice_pick(rel, text, b, line_of, ln, nodes, rows, categories, fp, ctx=Non
                     continue
                 ident = _choice_identity(rel, text, fp, row, edits, line_of, ctx)
                 return {"row": row["id"], "category": cat, "template": tpl, "line": ln, "edits": edits, "identity": ident,
-                        "also": _choice_also(text, row, b, n["op"], ident["new"]) if ident else None}
+                        "also": _choice_also(text, row, b, n["op"], ident["new"], n["s"], n["e"]) if ident else None}
     return None
 
 
@@ -77758,7 +77784,7 @@ def _choice_err_cover(err, line_of):
 def _choice_file_points(rel, text, lines_changed, scan, tables, deadline=None):
     """一支檔 → 改到的行清單 [{"file", "line", "fp", "decl", "status", "mutant"}]:只列錨點落在這一行的選擇點節點(含乾節點);
     status:mutant(挑到壞法)、not_unique(挑到了但身分不唯一,或行指紋跟同檔別行相同)、none(有選擇點但候選都被型別前提擋掉)、
-    arid(這一行的節點全落在乾節點範圍)。ERROR 節點重疊的節點不算。
+    arid(這一行的節點全落在乾節點範圍)。ERROR 節點重疊的節點不算(「整個呼叫」錨點只看錨點行到命中結尾,[[Projects/選擇點表第三批業務情境寫法_計劃]] 範圍 3)。
     乾節點與 ERROR 比對只對錨點在改到的行上的命中做,用排序區間加二分(代碼審 code-改動選擇點 r1 c14、r2:原本每個命中對每個乾節點與
     ERROR 掃一遍,大檔平方時間);字串串接鏈(_choice_str_chains)要看整支檔的 + 節點。deadline 給了,逐行之間過了就 raise
     _ChoiceUnverifiable(推送前那一道的時限管到這裡,不是算完才發現超時;r1 r2)。"""
@@ -77779,7 +77805,10 @@ def _choice_file_points(rel, text, lines_changed, scan, tables, deadline=None):
         if row is None:
             continue
         anchor, op = _choice_anchor(b, h, row, want, starts)
-        if anchor is None or line_of(anchor) not in want or err_hit(h["line"], h["end_line"]):
+        if anchor is None or line_of(anchor) not in want:
+            continue
+        # ERROR 覆蓋的起算行依錨點分流(_choice_err_start);乾節點覆蓋(位元組位移判整個命中落在同一個乾節點裡)不分流
+        if err_hit(_choice_err_start(row, h, anchor, line_of), h["end_line"]):
             continue
         n = dict(h, anchor=anchor, op=op, arid=arid_cover(h["s"], h["e"]), strcat=(h["s"], h["e"]) in strcat)
         by_line.setdefault(line_of(anchor), []).append(n)

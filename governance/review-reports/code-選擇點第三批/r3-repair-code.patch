@@ -1,0 +1,442 @@
+diff --git a/configs/ast-grep/kotlin-choice/rules-choice/api.yml b/configs/ast-grep/kotlin-choice/rules-choice/api.yml
+index 0bcc9257534aa2633bff2101a883e060e913827f..86d349160b6ac06eb26c49959ad03d7520631d02 100644
+--- a/configs/ast-grep/kotlin-choice/rules-choice/api.yml
++++ b/configs/ast-grep/kotlin-choice/rules-choice/api.yml
+@@ -295,46 +295,41 @@ rule:
+   # 尾隨 lambda 被當次要標記塞進每個命中,巢狀 remember 的輸出平方成長(代碼審 code-選擇點第二批 r1 r2:巢狀 150 層 57MB → 0.1MB)
+   not:
+     inside:
+       not:
+         kind: call_suffix
+         has: {kind: annotated_lambda}
+         inside:
+           kind: call_expression
+           has: {kind: simple_identifier, nthChild: 1, regex: '^remember$'}
+ ---
+-# 第三批([[Projects/選擇點表第三批業務情境寫法_計劃]]):業務情境寫法——兩種寫法都合法、哪一個對看需求。凡是用到關聯規則(has/inside/precedes)的
+-# 都寫成雙重否定,理由同 C-18、C-34~C-37(正面寫的關聯規則會把外層整段節點當次要標記塞進每個命中,輸出平方成長;Systems/kotlin規則包 的
+-# PITFALL),但形狀不同:既有那幾條把 not 放進關聯規則裡(not: {inside: {not: <父節點是 X>}}),適用於「父節點是 X」的單層判斷;這一批是
+-# 多層 has/inside/precedes 鏈(作用域往下配對、replay 往上三層再看外層呼叫),逐層把 not 塞進去不等價,所以整條關聯規則外包一層
+-# not: {not: …}——命中集合不變、輸出量降的幅度相同(S9 用合成輸入守住)。兩種寫法怎麼選見 Systems/kotlin規則包 那條 WHY。
++# 第三批([[Projects/選擇點表第三批業務情境寫法_計劃]]):業務情境寫法——兩種寫法都合法、哪一個對看需求。形狀照一條判準選(Systems/kotlin規則包
++# 那條 WHY,t_choice_rule_shape_batch3 守):規則用到往下找(has/precedes)或 inside 往上超過兩層的,整條關聯規則外包一層 not: {not: …}
++# (C-38、C-39 往下 has 加 precedes,C-48、C-49 往上三層再看外層呼叫,C-50、C-53 往上多層,C-51、C-52 往下看第一個子節點):正面寫的關聯規則
++# 會把外層整段節點當次要標記塞進每個命中、輸出平方成長(Systems/kotlin規則包 的 PITFALL),多層鏈逐層把 not 塞進去不等價,整條外包命中集合
++# 不變(S9 用合成輸入守住);其餘(C-40~C-47 只往上兩層)照第一版 C-19~C-31 一字不差正面寫,不包雙重否定。
+ # C-38、C-39 協程作用域:命中 call_expression 第一個子節點的 supervisorScope/coroutineScope 識別字(錨點「運算元起始」),而且這個作用域
+ # 有兩個以上子協程(計劃〈用詞〉):子協程是單一識別字 async/launch 的呼叫,往外最近一層 lambda 是作用域自己的大括號(或迴圈呼叫的大括號、
+ # 迴圈呼叫往外最近一層是作用域的大括號)。ast-grep 沒有計數:「兩個」用配對(含子協程的節點 X precedes 另一個含子協程的節點 Y);從作用域
+ # 大括號 L 往下找一律 stopBy 下一層 lambda_literal(停下那一層也算命中);沿固定鏈 call_suffix → annotated_lambda → lambda_literal 拿 L,
+ # 不用 stopBy: end(會越過內層作用域,外層被內層的 async 誤命中;設計審 r1 邊界席、r2 正確性席實跑)。
+ # utils 只在同一份規則文件裡有效,C-38 與 C-39 各一份,兩份要一字不差(t_choice_samples_batch3 比對)。
+ id: C-38
+ language: kotlin
+ severity: hint
+ message: 協程作用域 supervisorScope(換成 coroutineScope,一支失敗時兄弟一起取消)
+ utils:
+   child-co:
+-    # 子協程:呼叫名稱是單一識別字 async 或 launch(帶接收者的 scope.launch、this.async 開在別的作用域,不算);建立後同一個運算式就
+-    # .await()/.join() 的不算(做完才開下一支,兩種作用域必然等價;同 C-50 只看直接接在後面那一層,包在別的呼叫引數裡的照算;代碼審 r1 g1)
++    # 子協程:呼叫名稱是單一識別字 async 或 launch(帶接收者的 scope.launch、this.async 開在別的作用域,不算)。建立後立刻 .await()/.join()
++    # 的照算:不看先後的排除會把同時跑的兄弟一起排掉、又讓長方法鏈的掃描時間三次方成長,不收(計劃〈天花板〉第 3 條;代碼審 r2 c1 b1 g1 r1)
+     kind: call_expression
+     has: {kind: simple_identifier, nthChild: 1, regex: '^(async|launch)$'}
+-    not:
+-      inside:
+-        kind: navigation_expression
+-        has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(await|join)$'}
+-        inside: {kind: call_expression}
+   has-co:
+     # 本身是子協程,或往下(不越過下一層 lambda)有子協程
+     any:
+       - matches: child-co
+       - has: {matches: child-co, stopBy: {kind: lambda_literal}}
+   loop-call:
+     # 迴圈呼叫:.map/.forEach/.mapIndexed/.forEachIndexed/.flatMap 與頂層 repeat(…),大括號裡的子協程在它的固定鏈 lambda 裡
+     kind: call_expression
+     any:
+       - has: {kind: navigation_expression, nthChild: 1, has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(map|forEach|mapIndexed|forEachIndexed|flatMap)$'}}
+@@ -374,29 +369,24 @@ rule:
+           has:
+             kind: annotated_lambda
+             has: {matches: many-co}
+ ---
+ id: C-39
+ language: kotlin
+ severity: hint
+ message: 協程作用域 coroutineScope(換成 supervisorScope,一支失敗時兄弟照常做完)
+ utils:
+   child-co:
+-    # 子協程:呼叫名稱是單一識別字 async 或 launch(帶接收者的 scope.launch、this.async 開在別的作用域,不算);建立後同一個運算式就
+-    # .await()/.join() 的不算(做完才開下一支,兩種作用域必然等價;同 C-50 只看直接接在後面那一層,包在別的呼叫引數裡的照算;代碼審 r1 g1)
++    # 子協程:呼叫名稱是單一識別字 async 或 launch(帶接收者的 scope.launch、this.async 開在別的作用域,不算)。建立後立刻 .await()/.join()
++    # 的照算:不看先後的排除會把同時跑的兄弟一起排掉、又讓長方法鏈的掃描時間三次方成長,不收(計劃〈天花板〉第 3 條;代碼審 r2 c1 b1 g1 r1)
+     kind: call_expression
+     has: {kind: simple_identifier, nthChild: 1, regex: '^(async|launch)$'}
+-    not:
+-      inside:
+-        kind: navigation_expression
+-        has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(await|join)$'}
+-        inside: {kind: call_expression}
+   has-co:
+     # 本身是子協程,或往下(不越過下一層 lambda)有子協程
+     any:
+       - matches: child-co
+       - has: {matches: child-co, stopBy: {kind: lambda_literal}}
+   loop-call:
+     # 迴圈呼叫:.map/.forEach/.mapIndexed/.forEachIndexed/.flatMap 與頂層 repeat(…),大括號裡的子協程在它的固定鏈 lambda 裡
+     kind: call_expression
+     any:
+       - has: {kind: navigation_expression, nthChild: 1, has: {kind: navigation_suffix, regex: '^(\?\.|\.)\s*(map|forEach|mapIndexed|forEachIndexed|flatMap)$'}}
+@@ -430,124 +420,109 @@ rule:
+   not:
+     not:
+       inside:
+         kind: call_expression
+         has:
+           kind: call_suffix
+           has:
+             kind: annotated_lambda
+             has: {matches: many-co}
+ ---
+-# C-40~C-47 方法名各列:同第一版 `$R.方法名` 後接呼叫的 navigation_suffix(錨點「方法名」);關聯規則整條外包雙重否定(第三批開頭那段)。
++# C-40~C-47 方法名各列:同第一版 `$R.方法名` 後接呼叫的 navigation_suffix(錨點「方法名」),規則跟 C-19~C-31 一字不差(只往上兩層、不往下找,
++# 照第一版正面寫 inside;第三批開頭那段的形狀判準,t_choice_rule_shape_batch3 守)。
+ id: C-40
+ language: kotlin
+ severity: hint
+ message: 業務情境 singleOrNull(換成 firstOrNull,多筆時回 null 變成取第一筆)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*singleOrNull$'
+-  not:
+-    not:
+-      inside:
+-        kind: navigation_expression
+-        inside: {kind: call_expression}
++  inside:
++    kind: navigation_expression
++    inside: {kind: call_expression}
+ ---
+ id: C-41
+ language: kotlin
+ severity: hint
+ message: 業務情境 single(換成 first,多筆時丟例外變成取第一筆)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*single$'
+-  not:
+-    not:
+-      inside:
+-        kind: navigation_expression
+-        inside: {kind: call_expression}
++  inside:
++    kind: navigation_expression
++    inside: {kind: call_expression}
+ ---
+ id: C-42
+ language: kotlin
+ severity: hint
+ message: 業務情境 firstOrNull(換成 first,找不到時回 null 變成丟例外)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*firstOrNull$'
+-  not:
+-    not:
+-      inside:
+-        kind: navigation_expression
+-        inside: {kind: call_expression}
++  inside:
++    kind: navigation_expression
++    inside: {kind: call_expression}
+ ---
+ id: C-43
+ language: kotlin
+ severity: hint
+ message: 業務情境 toIntOrNull(換成 toInt,格式不對時回 null 變成丟例外)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*toIntOrNull$'
+-  not:
+-    not:
+-      inside:
+-        kind: navigation_expression
+-        inside: {kind: call_expression}
++  inside:
++    kind: navigation_expression
++    inside: {kind: call_expression}
+ ---
+ id: C-44
+ language: kotlin
+ severity: hint
+ message: 業務情境 toLongOrNull(換成 toLong,格式不對時回 null 變成丟例外)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*toLongOrNull$'
+-  not:
+-    not:
+-      inside:
+-        kind: navigation_expression
+-        inside: {kind: call_expression}
++  inside:
++    kind: navigation_expression
++    inside: {kind: call_expression}
+ ---
+ id: C-45
+ language: kotlin
+ severity: hint
+ message: 業務情境 toDoubleOrNull(換成 toDouble,格式不對時回 null 變成丟例外)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*toDoubleOrNull$'
+-  not:
+-    not:
+-      inside:
+-        kind: navigation_expression
+-        inside: {kind: call_expression}
++  inside:
++    kind: navigation_expression
++    inside: {kind: call_expression}
+ ---
+ id: C-46
+ language: kotlin
+ severity: hint
+ message: 業務情境 mapLatest(換成 map,新值來時不再取消舊的)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*mapLatest$'
+-  not:
+-    not:
+-      inside:
+-        kind: navigation_expression
+-        inside: {kind: call_expression}
++  inside:
++    kind: navigation_expression
++    inside: {kind: call_expression}
+ ---
+ id: C-47
+ language: kotlin
+ severity: hint
+ message: 業務情境 transformLatest(換成 transform,新值來時不再取消舊的)
+ rule:
+   kind: navigation_suffix
+   regex: '^(\?\.|\.)\s*transformLatest$'
+-  not:
+-    not:
+-      inside:
+-        kind: navigation_expression
+-        inside: {kind: call_expression}
++  inside:
++    kind: navigation_expression
++    inside: {kind: call_expression}
+ ---
+ # C-48、C-49 replay:命中具名引數 `replay = ` 後面那個整數字面值本身(錨點「運算元起始」;整個引數換掉會丟掉 `replay =`),外層呼叫是
+ # MutableSharedFlow 或 .shareIn(自訂函式的同名參數不收);位置引數寫法不收(計劃〈天花板〉)。關聯規則外包雙重否定。
+ # C-48 另排除換成 0 會在建構時丟例外的呼叫:帶值不是 SUSPEND 的 onBufferOverflow、又沒有值不是 0 的 extraBufferCapacity(kotlinx.coroutines
+ # 規定 replay 與 extraBufferCapacity 都是 0 時只准預設的 SUSPEND;任何建構它的測試都殺得掉,問不出需求)。顯式寫 SUSPEND(含裸名稱與完整
+ # 套件名)換 0 照樣合法,照常命中;「值是 0」認得 0、0x0、0b0、0L 與帶正負號的這幾種整數字面值,括號包住的 (0) 不認(計劃〈天花板〉;代碼審 r1 b2 c1)。
+ id: C-48
+ language: kotlin
+ severity: hint
+ message: 業務情境 replay = 1(換成 0,晚到的訂閱者看不到上一個值)
+diff --git a/configs/ast-grep/kotlin-choice/samples/choice-batch3.kt b/configs/ast-grep/kotlin-choice/samples/choice-batch3.kt
+index f763b84df94b6e208a626b2e86cdc1599172dbcd..a5184e577038928a7e1279df9fd5b6bdf87c735c 100644
+--- a/configs/ast-grep/kotlin-choice/samples/choice-batch3.kt
++++ b/configs/ast-grep/kotlin-choice/samples/choice-batch3.kt
+@@ -23,27 +23,32 @@ fun scopes(ids: List<Int>, list: List<Int>, c: Boolean) {
+     supervisorScope { val a = async { f() }; a.await() } // MISS C-38
+     coroutineScope { load { async { x() } } } // MISS C-39
+     list.map { coroutineScope { async { x() } } } // MISS C-39
+     supervisorScope { val x = coroutineScope { async { 1 }.await() }; val y = coroutineScope { async { 2 }.await() } } // MISS C-38 C-39
+     coroutineScope { scope.launch { a() }; scope.launch { b() } } // MISS C-39
+     supervisorScope { this.async { a() }; async { b() } } // MISS C-38
+     supervisorScope { list.map { ids.forEach { launch { f() } } } } // MISS C-38
+     supervisorScope { withContext(io) { launch { a() }; launch { b() } } } // MISS C-38
+     mySupervisorScope { launch { a() }; launch { b() } } // MISS C-38
+     x.supervisorScope { launch { a() }; launch { b() } } // MISS C-38
+-    // 建立後同一個運算式就 .await()/.join() 的不算子協程(同 C-50 只看直接接在後面那一層):做完才開下一支,兩種作用域必然等價
+-    supervisorScope { // MISS C-38
++    // 建立後立刻 .await()/.join() 的照樣算子協程:每支都立刻等的換寫法必然等價、落成等價放行(計劃〈天花板〉第 3 條);
++    // 不看先後的排除會把同時跑的兄弟一起排掉(代碼審 r2 正確性、邊界、通才三席實跑),所以不收這條排除
++    supervisorScope { // HIT C-38
+         val a = async { f() }.await()
+         val b = async { g() }.await()
+     }
+-    coroutineScope { launch { a() }.join(); launch { b() }.join() } // MISS C-39
+-    supervisorScope { val a = async { f() }.await(); launch { g() } } // MISS C-38
++    coroutineScope { launch { a() }.join(); launch { b() }.join() } // HIT C-39
++    supervisorScope { val a = async { f() }.await(); launch { g() } } // HIT C-38
++    // 先開一支不等、再開一支立刻等:兩支同時在跑,一定要命中
++    supervisorScope { launch { g() }; async { f() }.await() } // HIT C-38
++    supervisorScope { val a = async { f() }; val b = async { g() }.await(); a.await() } // HIT C-38
++    coroutineScope { launch { a() }; val r = async { b() }.await() } // HIT C-39
+     // 都沒有立刻等的、包在別的呼叫引數裡才等的,照常算
+     supervisorScope { // HIT C-38
+         val a = async { f() }
+         val b = async { g() }
+         a.await() + b.await()
+     }
+     coroutineScope { foo(async { a() }).await(); foo(async { b() }).await() } // HIT C-39
+ }
+ 
+ fun picks(users: List<U>, s: String, q: Flow<String>, id: Int) {
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 88e47da43119b1552baa7b8bf0643a67191a97a7..b7a3bd0f970db029bb728b7c01c8448037d589c8 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -146833,24 +146833,28 @@ def t_choice_points_batch3_api():
+ 
+ _CB3_IDS = {f"C-{i}" for i in range(38, 56)}   # 第三批暫定列號(範圍 1 的順序;範圍 7 實測後被擋下的列不給號)
+ # S5 的命中與不命中(計劃 S5 條款與預期值表 S5 各列):(HIT/MISS, 列號, 樣本裡要有的片段)。只核表裡還在的列(撤列時樣本標記一起拿掉,這裡跳過)
+ _CB3_S5_MARKS = (
+     ("HIT", "C-39", "awaitAll(async { a() }, async { b() })"), ("HIT", "C-38", "for (id in ids) { launch { load(id) } }"),
+     ("HIT", "C-38", "repeat(3) { launch { f() } }"), ("HIT", "C-39", "ids.map { async { load(it) } }.awaitAll()"),
+     ("MISS", "C-38", "supervisorScope { val a = async { f() }; a.await() }"), ("MISS", "C-39", "coroutineScope { load { async { x() } } }"),
+     ("MISS", "C-38", "supervisorScope { val x = coroutineScope { async { 1 }.await() }; val y = coroutineScope { async { 2 }.await() } }"),
+     ("MISS", "C-39", "supervisorScope { val x = coroutineScope { async { 1 }.await() }; val y = coroutineScope { async { 2 }.await() } }"),
+     ("MISS", "C-39", "list.map { coroutineScope { async { x() } } }"), ("MISS", "C-39", "coroutineScope { scope.launch { a() }; scope.launch { b() } }"),
+-    # 建立後同一個運算式就 .await()/.join() 的不算子協程(代碼審 r1 g1);多行寫法的標記在節點起始的第一行
+-    ("MISS", "C-38", "supervisorScope { // MISS C-38\n        val a = async { f() }.await()\n        val b = async { g() }.await()"),
+-    ("MISS", "C-39", "coroutineScope { launch { a() }.join(); launch { b() }.join() }"),
+-    ("MISS", "C-38", "supervisorScope { val a = async { f() }.await(); launch { g() } }"),
++    # 建立後立刻 .await()/.join() 的照樣算子協程:每支都立刻等的落成等價放行(計劃〈天花板〉第 3 條);先開一支不等、再開一支立刻等的
++    # 兩支同時在跑,一定要命中(代碼審 r2 c1 b1 g1:不看先後的排除把它們排掉)。多行寫法的標記在節點起始的第一行
++    ("HIT", "C-38", "supervisorScope { // HIT C-38\n        val a = async { f() }.await()\n        val b = async { g() }.await()"),
++    ("HIT", "C-39", "coroutineScope { launch { a() }.join(); launch { b() }.join() }"),
++    ("HIT", "C-38", "supervisorScope { val a = async { f() }.await(); launch { g() } }"),
++    ("HIT", "C-38", "supervisorScope { launch { g() }; async { f() }.await() }"),
++    ("HIT", "C-38", "supervisorScope { val a = async { f() }; val b = async { g() }.await(); a.await() }"),
++    ("HIT", "C-39", "coroutineScope { launch { a() }; val r = async { b() }.await() }"),
+     ("HIT", "C-38", "supervisorScope { // HIT C-38\n        val a = async { f() }\n        val b = async { g() }\n        a.await() + b.await()"),
+     ("HIT", "C-39", "coroutineScope { foo(async { a() }).await(); foo(async { b() }).await() }"),
+     ("MISS", "C-50", "async(start = CoroutineStart.LAZY) { f() }.await()"), ("MISS", "C-50", "launch(start = CoroutineStart.LAZY) { f() }.join()"),
+     ("MISS", "C-53", "finally { withContext(NonCancellable) { close() } }"), ("MISS", "C-48", "MutableSharedFlow<Int>(replay = 2)"),
+     ("MISS", "C-49", "MutableSharedFlow<Int>(replay = 2)"),
+     ("MISS", "C-48", "MutableSharedFlow<Int>(replay = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)"),
+     # 同一個呼叫拆兩行(一行只能標一種):replay 那一列不命中、DROP_OLDEST 那一列照常命中;片段含換行時比對連續幾行、標記看最後一行
+     ("MISS", "C-48", "MutableSharedFlow<Int>(replay = 1, //"),
+     ("HIT", "C-51", "MutableSharedFlow<Int>(replay = 1, // MISS C-48\n        onBufferOverflow = BufferOverflow.DROP_OLDEST)"),
+     ("MISS", "C-48", "MutableSharedFlow<Int>(replay = 1, extraBufferCapacity = 0, onBufferOverflow = BufferOverflow.DROP_OLDEST)"),
+@@ -146865,20 +146869,21 @@ _CB3_S5_MARKS = (
+ _CB3_SCOPE_UTILS = ("child-co", "has-co", "loop-call", "many-co")
+ 
+ 
+ def t_choice_samples_batch3():
+     """[第三批 S5] 真規則對第三批樣本檔:表裡還在的每條第三批規則命中該命中的、不命中不該命中的;命中包含同一個陳述裡兩個 `async`、`for` 本體裡的
+     `launch`、`repeat(n) { launch { } }`;不命中包含作用域裡只有一個 `async`、`load { async { } }`、外層作用域裡只有內層作用域的 `async`、
+     `list.map { coroutineScope { async { } } }`、`scope.launch { }` 兩個、建立後立刻 `.await()`/`.join()` 的 LAZY、`finally` 裡的
+     `withContext(NonCancellable)`、`replay = 2`、`replay = 1` 加 `onBufferOverflow` 而沒有 `extraBufferCapacity` 或 `extraBufferCapacity = 0`、
+     `Foo(replay = 1)`、`Result.retry()`、`ListenableWorker.Result.retry()`。表裡已沒有的列號跳過;樣本檔不存在整個跳過(撤列不會讓它紅)。
+     判準來源:計劃 S5 條款與預期值表 S5 各列。翻紅釘:作用域規則的固定鏈改成 stopBy: end → 外層 supervisorScope 那條 MISS 紅;
++    子協程加回「建立後立刻 await/join 的不算」→ 先開一支不等、再開一支立刻等的那幾條 HIT 紅;
+     C-48 拿掉 onBufferOverflow 排除 → 那條 MISS 紅;C-54 拿掉 Result 排除 → Result.retry() 那條紅。"""
+     kp = _ktpack()
+     smp = kp.CHOICE / "samples" / "choice-batch3.kt"
+     if not smp.is_file():
+         raise _SrcOnly("第三批樣本檔不在(整批撤掉了),這段跳過")
+     tables, probs = kp.choice_tables(_choice_real_cat().read_text(encoding="utf-8"))
+     check("S5 真型錄讀得懂", not probs, str(probs)[:300])
+     have = {r["id"] for r in tables["choice"]} & _CB3_IDS
+     lines = smp.read_text(encoding="utf-8").split("\n")
+     for kind, rid, snip in _CB3_S5_MARKS:
+@@ -147115,20 +147120,71 @@ def t_choice_scope_rule_output():
+                 rc, size, hits = res["neg"]
+                 check(f"S9 {lab} {label}:輸出不超過 1MB(實得 {size} 位元組;正面寫 {res['pos'][1]} 位元組)", rc in (0, 1) and size <= 1_000_000,
+                       str(res["neg"][:2]))
+                 check(f"S9 {lab} {label}:命中 {n_hit} 處、跟拿掉雙重否定時相同", len(hits) == n_hit and hits == res["pos"][2],
+                       f"{len(hits)} vs {len(res['pos'][2])}")
+                 if grows:
+                     check(f"S9 {lab} {label}:拿掉雙重否定的輸出至少是 10 倍(雙重否定確實在壓輸出量)", res["pos"][1] >= 10 * max(size, 1),
+                           f"{res['pos'][1]} vs {size}")
+ 
+ 
++def _cb3_rule_shape(doc):
++    """規則文件 → (要不要包雙重否定, `rule:` 頂層有沒有包, 別處有沒有雙重否定)。要包:去掉註解行後用到 has 或 precedes(往下找),
++    或 inside 巢狀超過兩層(往上超過兩層);照 Systems/kotlin規則包 那條雙重否定形狀的 WHY。"""
++    code = [ln for ln in doc.split("\n") if ln.strip() and not ln.lstrip().startswith("#")]
++    down = any(_re_mod.search(r"\b(has|precedes):", ln) for ln in code)
++    depth, stack = 0, []
++    for ln in code:
++        ind, body = len(ln) - len(ln.lstrip()), ln.strip()
++        while body.startswith("- "):
++            ind, body = ind + 2, body[2:].lstrip()
++        while stack and stack[-1][0] >= ind:
++            stack.pop()
++        depth = max(depth, sum(c for _i, c in stack) + body.count("inside:"))
++        if body.endswith(":"):
++            stack.append((ind, 1 if body == "inside:" else 0))
++    top = any(code[i] == "  not:" and code[i + 1] == "    not:" and "rule:" in code[:i] for i in range(len(code) - 1))
++    nested = [i for i in range(len(code) - 1) if code[i].strip() in ("not:", "- not:")
++              and code[i + 1].strip() == "not:" and len(code[i + 1]) - len(code[i + 1].lstrip()) > len(code[i]) - len(code[i].lstrip())]
++    other = any(_re_mod.search(r"not:\s*\{\s*not:", ln) for ln in code) or any(not (code[i] == "  not:" and "rule:" in code[:i]) for i in nested)
++    return down or depth > 2, top, other
++
++
++def t_choice_rule_shape_batch3():
++    """[第三批 S11] 真 api.yml 的第三批每一條規則:用到往下找(has/precedes)或 inside 往上超過兩層的,`rule:` 頂層必須是 not: {not: …};
++    其餘不准包雙重否定(照第一版 C-19~C-31 正面寫)。表裡已沒有、規則檔裡也沒有的列號跳過;一條第三批規則都沒有時整段跳過(撤列)。
++    判準來源:計劃 S11 條款與預期值表 S11 兩列(代碼審 code-選擇點第三批 r2 a2:兩種形狀的適用條件要有測試守,不靠筆記文字)。
++    翻紅釘:C-40 改回包雙重否定 → C-40 那條紅;C-38 拿掉雙重否定 → C-38 那條紅。"""
++    kp = _ktpack()
++    api = (kp.CHOICE / "rules-choice" / "api.yml").read_text(encoding="utf-8")
++    docs = {}
++    for doc in _re_mod.split(r"^---\s*$", api, flags=_re_mod.M):
++        m = _re_mod.search(r"^id:\s*(C-\d+)\s*$", doc, _re_mod.M)
++        if m:
++            docs[m.group(1)] = doc
++    mine = sorted((r for r in docs if r in _CB3_IDS), key=lambda r: int(r[2:]))
++    if not mine:
++        raise _SrcOnly("api.yml 裡沒有第三批規則(整批撤掉了),這段跳過")
++    if "C-19" in docs:
++        check("S11 判準本身:第一版 C-19(只往上兩層)判成不用包", _cb3_rule_shape(docs["C-19"])[0] is False, docs["C-19"][-200:])
++    need_any = False
++    for rid in mine:
++        need, top, other = _cb3_rule_shape(docs[rid])
++        need_any = need_any or need
++        if need:
++            check(f"S11 {rid} 往下找或往上超過兩層 → rule 頂層包 not: {{not: …}}", top and not other, docs[rid][-300:])
++        else:
++            check(f"S11 {rid} 只往上兩層以內、不往下找 → 不包雙重否定(照第一版正面寫)", not top and not other, docs[rid][-300:])
++    if {"C-38", "C-39"} & set(mine):
++        check("S11 判準本身:作用域列判成要包(往下 has 加 precedes)", need_any, str(mine))
++
++
+ def t_gov_stats_choice_by_row():
+     """[第二批 S8] gov --stats 選擇點段「依列號」:壞法以 (檔, 行指紋, 列號) 計,曾殺掉算殺掉、否則曾存活算存活、否則跑不出結果;
+     基準不綠沒跑的不算;同一行多筆放行只算最後一筆(照 UTC 秒數比,混時區偏移也對);沒有列號的放行另計;列號照數字排序、怪列號不讓整段當掉。
+     判準來源:計劃預期值表 S8 列(C-32 那一列數字照抄);C-9 那一列與時區、怪列號是代碼審 r1(a1、b1、b3、c2)補的。
+     翻紅釘:放行取第一筆或直接比字串 → C-32 放行變「不適用」紅;終態取最後一筆 → C-9 先殺掉後存活變存活、紅;不排除基準不綠 → 壞法 5 紅;
+     排序照字串 → C-32 排在 C-9 前面、紅;isdigit 擋不住上標數字 → `C-²` 那條例外紅。"""
+     import io
+     import contextlib
+     import json as _j
+     import shutil
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index 083b8c80962e6c6c64e390c56e202de6b5ae7da3..88aac5d82884bc3f9332d60837aab0196bf4dbd8 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -1699,22 +1699,22 @@
+ | C-28 | API | `api.yml` `$R.flatMapLatest` 後接呼叫 | 方法名 | `flatMapConcat` | (無) | `kotlinx.coroutines.flow.flatMapConcat` | D-4 | 新值來時取消前一個對上每一個都做完(搜尋框只要最新一次) | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-29 | API | `api.yml` `$R.flatMapConcat` 後接呼叫 | 方法名 | `flatMapMerge` | (無) | `kotlinx.coroutines.flow.flatMapMerge` | D-4 | 依序做完對上同時做、結果交錯 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-30 | API | `api.yml` `$R.flatMapMerge` 後接呼叫 | 方法名 | `flatMapConcat` | (無) | `kotlinx.coroutines.flow.flatMapConcat` | D-4 | 同時做對上依序做 | MutApi(API 兄弟寫法改寫表);Mutant-Kraken(Kotlin 集合 any/all/none 互換);論文2.2(在語法樹上產生) |
+ | C-31 | API | `api.yml` `$R.distinctUntilChanged` 後接呼叫 | 方法名 | (拿掉呼叫) | (無) | (無) | — | 連續相同的值會再送一次 | MutApi(API 兄弟寫法改寫表);論文2.2 |
+ | C-32 | NUL | `nul.yml` `$A ?: $B` | 運算子 | `$A!!` | 運算元有 null 字面值 | (無) | — | 遇到 null 從用預設值變成當掉 | Kotlin 官方 null safety https://kotlinlang.org/docs/null-safety.html ;Detekt UnsafeCallOnNullableType https://detekt.dev/docs/rules/potential-bugs ;論文表 1 形狀 |
+ | C-33 | NUL | `nul.yml` navigation_suffix 開頭的 `?.`(前一個兄弟節點是註解時不收) | 安全呼叫符 | `!!.` | (無) | (無) | — | 遇到 null 從略過變成當掉 | Kotlin 官方 null safety https://kotlinlang.org/docs/null-safety.html ;Detekt UnsafeCallOnNullableType https://detekt.dev/docs/rules/potential-bugs |
+ | C-34 | API | `api.yml` `$R.let` 後接呼叫、回傳值確定被用到(`sbr.yml` 的 value-pos,再排除外層 if/when/try 自己掛在另一個分支底下的位置) | 方法名 | `also` | (無) | (無) | — | 回傳值從區塊結果變成接收者本身 | Kotlin 官方範圍函式 https://kotlinlang.org/docs/scope-functions.html ;MutApi(API 兄弟寫法改寫表) |
+ | C-35 | API | `api.yml` 接收者寫法 `$R.combine` 後接呼叫(完整套件名的頂層呼叫不收) | 方法名 | `zip` | (無) | `kotlinx.coroutines.flow.zip` | D-5、D-6 | 任一邊有新值就輸出對上兩邊成對才輸出 | Kotlin 官方 Flow https://kotlinlang.org/docs/flow.html ;MutApi(API 兄弟寫法改寫表) |
+ | C-36 | API | `api.yml` `LaunchedEffect(…)` 帶尾隨 lambda、引數不全是字面值的引數清單 | 引數 | `(Unit)` | (無) | (無) | D-32 | key 變了不重跑 | Android 官方 Compose 副作用 https://developer.android.com/develop/ui/compose/side-effects |
+ | C-37 | API | `api.yml` `remember(…)` 帶尾隨 lambda、引數不全是字面值的引數清單 | 引數 | (刪掉) | (無) | (無) | — | 參數變了還顯示舊值 | Android 官方 Compose 狀態 https://developer.android.com/develop/ui/compose/state |
+-| C-38 | API | `api.yml` 呼叫名稱是 `supervisorScope` 的識別字,作用域大括號裡有兩個以上子協程(同一個陳述裡兩個、或一個落在迴圈裡也算;建立後立刻 `.await()`、`.join()` 的不算) | 運算元起始 | `coroutineScope` | (無) | `kotlinx.coroutines.coroutineScope` | D-8、D-9 | 問「其中一支壞了,其他還要不要照常顯示?」:一支子協程失敗時,兄弟從照常做完變成一起取消 | 官方例外處理 Supervision 一節 https://kotlinlang.org/docs/exception-handling.html |
+-| C-39 | API | `api.yml` 呼叫名稱是 `coroutineScope` 的識別字,作用域大括號裡有兩個以上子協程(同上) | 運算元起始 | `supervisorScope` | (無) | `kotlinx.coroutines.supervisorScope` | D-8、D-9 | 問「其中一支壞了,其他還要不要照常顯示?」:一支子協程失敗時,兄弟從一起取消變成照常做完 | 官方例外處理 Supervision 一節 https://kotlinlang.org/docs/exception-handling.html |
++| C-38 | API | `api.yml` 呼叫名稱是 `supervisorScope` 的識別字,作用域大括號裡有兩個以上子協程(同一個陳述裡兩個、或一個落在迴圈裡也算;建立後立刻 `.await()`、`.join()` 的照算) | 運算元起始 | `coroutineScope` | (無) | `kotlinx.coroutines.coroutineScope` | D-8、D-9 | 問「其中一支壞了,其他還要不要照常顯示?」:一支子協程失敗時,兄弟從照常做完變成一起取消;每支子協程都建立後立刻 `.await()`、`.join()` 的(做完才開下一支)換寫法必然等價,放行理由寫「等價」(規則不看先後,排除會把同時跑的兄弟一起排掉,不收) | 官方例外處理 Supervision 一節 https://kotlinlang.org/docs/exception-handling.html |
++| C-39 | API | `api.yml` 呼叫名稱是 `coroutineScope` 的識別字,作用域大括號裡有兩個以上子協程(同上) | 運算元起始 | `supervisorScope` | (無) | `kotlinx.coroutines.supervisorScope` | D-8、D-9 | 問「其中一支壞了,其他還要不要照常顯示?」:一支子協程失敗時,兄弟從一起取消變成照常做完;每支子協程都建立後立刻 `.await()`、`.join()` 的換寫法必然等價,放行理由寫「等價」(同 C-38) | 官方例外處理 Supervision 一節 https://kotlinlang.org/docs/exception-handling.html |
+ | C-40 | API | `api.yml` `$R.singleOrNull` 後接呼叫 | 方法名 | `firstOrNull` | (無) | `kotlinx.coroutines.flow.firstOrNull` | — | 問「符合條件的一定只有一筆嗎?多筆算資料錯誤嗎?」:多筆時從回 null 變成取第一筆 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-41 | API | `api.yml` `$R.single` 後接呼叫 | 方法名 | `first` | (無) | `kotlinx.coroutines.flow.first` | — | 問「符合條件的一定只有一筆嗎?多筆算資料錯誤嗎?」:多筆時從丟例外變成取第一筆 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-42 | API | `api.yml` `$R.firstOrNull` 後接呼叫 | 方法名 | `first` | (無) | `kotlinx.coroutines.flow.first` | D-26 | 問「找不到是正常情況還是錯誤?」:找不到時從回 null 變成丟例外 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-43 | API | `api.yml` `$R.toIntOrNull` 後接呼叫 | 方法名 | `toInt` | (無) | (無) | — | 問「格式不對是正常情況還是錯誤?」:解析失敗時從回 null 變成丟例外 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-44 | API | `api.yml` `$R.toLongOrNull` 後接呼叫 | 方法名 | `toLong` | (無) | (無) | — | 問「格式不對是正常情況還是錯誤?」:解析失敗時從回 null 變成丟例外 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-45 | API | `api.yml` `$R.toDoubleOrNull` 後接呼叫 | 方法名 | `toDouble` | (無) | (無) | — | 問「格式不對是正常情況還是錯誤?」:解析失敗時從回 null 變成丟例外 | Kotlin 標準庫 https://kotlinlang.org/api/core/kotlin-stdlib/ |
+ | C-46 | API | `api.yml` `$R.mapLatest` 後接呼叫 | 方法名 | `map` | (無) | `kotlinx.coroutines.flow.map` | D-4 | 問「新的值來了,舊的那次還要做完嗎?」:新值來時從取消舊的那次變成每一次都做完 | kotlinx.coroutines API 文件 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/ |
+ | C-47 | API | `api.yml` `$R.transformLatest` 後接呼叫 | 方法名 | `transform` | (無) | `kotlinx.coroutines.flow.transform` | D-4 | 問「新的值來了,舊的那次還要做完嗎?」:新值來時從取消舊的那次變成每一次都做完 | kotlinx.coroutines API 文件 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/ |
+ | C-48 | API | `api.yml` `MutableSharedFlow(…)` 或 `.shareIn(…)` 具名引數 `replay = 1` 的整數字面值(帶值不是 `SUSPEND` 的 `onBufferOverflow` 又沒有值不是 0 的 `extraBufferCapacity` 的不收:換 0 會建構就丟例外) | 運算元起始 | `0` | (無) | (無) | D-7、D-15 | 問「畫面重建後要不要再看到上一個值?這是狀態還是只發一次的事件?」:晚到的訂閱者從收到上一個值變成什麼都收不到 | Android 官方 StateFlow 與 SharedFlow https://developer.android.com/kotlin/flow/stateflow-and-sharedflow;MutableSharedFlow API 文件 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-mutable-shared-flow.html |
+ | C-49 | API | `api.yml` `MutableSharedFlow(…)` 或 `.shareIn(…)` 具名引數 `replay = 0` 的整數字面值 | 運算元起始 | `1` | (無) | (無) | D-7、D-15 | 問「畫面重建後要不要再看到上一個值?這是狀態還是只發一次的事件?」:晚到的訂閱者從什麼都收不到變成再收到上一個值 | Android 官方 StateFlow 與 SharedFlow https://developer.android.com/kotlin/flow/stateflow-and-sharedflow |

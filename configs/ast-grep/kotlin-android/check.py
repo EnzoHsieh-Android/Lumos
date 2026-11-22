@@ -1391,7 +1391,8 @@ _CHOICE_HEADER = ("列號", "類別", "ast-grep 規則", "錨點", "候選壞法
 _ARID_HEADER = ("列號", "ast-grep 規則", "乾的範圍", "論文對應節", "為什麼沒用", "加入日期與依據")
 # 論文表 1 的五個運算子 + API 兄弟寫法 + 第二批的 null-safety 運算子(NUL);順序也是 lumos 洗牌前的基準順序(NUL 加在尾端,不動第一版的相對順序)
 CHOICE_CATEGORIES = ("AOR", "LCR", "ROR", "UOI", "SBR", "API", "NUL")
-CHOICE_ANCHORS = ("運算子", "運算元起始", "陳述起始", "方法名", "安全呼叫符", "引數")
+# 「整個呼叫」是第三批([[Projects/選擇點表第三批業務情境寫法_計劃]]〈用詞〉):樣式命中整個呼叫、$A 是接收者;加在尾端,不動既有順序
+CHOICE_ANCHORS = ("運算子", "運算元起始", "陳述起始", "方法名", "安全呼叫符", "引數", "整個呼叫")
 _CHOICE_RETIRED_RE = re.compile(r"^已撤列號[:\uff1a](.*)$")   # 〈選擇點表〉說明段一行(半形或全形冒號):撤掉的列號不准再出現在表或規則 id(列號不重用)
 CHOICE_PRECONDITIONS = ("(無)", "運算元有 null 字面值", "運算元是字串")   # 論文 3.2.1 事前擋編不過的壞法;語法樹沒有型別,只能用語法情境近似
 CHOICE_SPECIALS = {"(刪掉)": "delete", "(拿掉呼叫)": "drop_call"}
