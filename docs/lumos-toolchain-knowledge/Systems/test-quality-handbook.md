@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-10-07
-updated: 2026-10-23
+updated: 2026-11-24
 responsibility: 固定手冊兩臂試行與證據歸因；只測隔離的小型題目，不推論所有語言或模型
 self_audit: GPT-6-Codex-clean-agent/2026-10-07
 aliases: []
@@ -17,6 +17,7 @@ tags:
 summary: |-
   WHY: 凍結兩臂與題目後才量測手冊效果 [出處:2026-10-07 使用者要求先實驗再決定推送] [因:掃描器考卷通過不能證明模型會讀取或遵循規範]
   PITFALL:測試造的帳或資料寫死日期、被測指令又只看近 N 天時,日子一過整批掉出窗外,測試在沒人改程式的那天突然翻紅 [出處:2026-10-23 t_gov_denoise 與 t_gov_adversarial_increment 同天翻紅,帳日期 2026-07-24、gov 預設近 90 天] [根因:測試資料用絕對日期,被測行為用相對今天的時間窗] [修法:測試函式內 import datetime,日期取今天往前幾天(跟檔內其他相對日期的測試同寫法)] [test:t_gov_denoise]
+  PITFALL:測試驗的是分類結果,卻跟著產品的總時間預算跑,CI 並跑變慢時後面的項目被歸到「預算用完、略過」,測試在沒人改程式時翻紅 [出處:2026-11-24 主線 CI 合併加速功能後 t_dispatch_lens_spec_mode_core 連兩次紅] [根因:逐檔 impact 每支約 7 秒、預算 30 秒,斷言只看 too_generic 不看 skipped_files] [修法:只驗分類的測試在呼叫期間把預算調寬、finally 還原;預算用完的行為留給專門那支測試驗] [test:t_dispatch_lens_spec_mode_core]
 related:
   - "[[Systems/test-quality-scan]]"
 verified_by:
@@ -60,7 +61,7 @@ PITFALL: 模型命令逾時只停止claude直屬程序，子工作者仍可能�
 
 WHY: 模型程序清理控制回到 handbook 自有測試入口 [出處:code-test-quality-native-push/r2-架構-codex.md、r2-defender.md] [因:原先修正關卡經 CLI 控制已守住，但只跑本模組控制的日後維護會漏驗；此為所有權補齊，不宣稱已證 runtime 回歸]。獨立 fake executable 先驗實際 worker 啟動，再觀察逾時後停止；既有 grader 控制同一入口執行，runner 入口為 t_test_quality_handbook_controls。
 
-WHY: `scripts/test_lumos.py` 在此節點只負責 t_test_quality_handbook_controls 的總測試入口，把手冊獨立控制接進推送前既有測試器。來源：第二輪入口驗證。
+WHY: `scripts/test_lumos.py` 在此節點主要負責 t_test_quality_handbook_controls 的總測試入口，把手冊獨立控制接進推送前既有測試器；摘要裡測試寫法類的 PITFALL 也會用 `[test:]` 綁到這支檔裡的個別測試（例：t_dispatch_lens_spec_mode_core）。來源：第二輪入口驗證。
 
 PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launcher rc1、關閉管線的 worker 繼續跑」；直接 child 已退出不代表同群 descendants 結束。第四輪改為 `model_command` 返回前一律清理自己建立的 POSIX 程序群，timeout 與一般錯誤各有 fake worker 控制；證據見 [[Verification/測試品質第四輪修補驗證]]。Windows 資格仍不在本輪範圍。
 
