@@ -1,0 +1,242 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/選擇點變異加速_計劃.md b/docs/lumos-toolchain-knowledge/Projects/選擇點變異加速_計劃.md
+index 71187fba3..644c847e1 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/選擇點變異加速_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/選擇點變異加速_計劃.md
+@@ -56,21 +56,21 @@ FACT:實驗機器 10 核、32GB 記憶體 [來源:人工] [confirmed:2026-11-23]
+ - **判法**(每筆治理帳 choice-kill 事件的 `judged`,字串):`merged`(這個壞法在每個有配方的平台組都由合併快篩判全部存活)、`single`(其他:至少一個平台組走了逐支流程,或根本沒跑合併)。帳上沒有 `judged` 的事件(上線前的舊帳、`situation-rule --point` 成功後寫的那筆)讀時當 `single`。
+ 
+ ## 做法
+ 
+ ### 1. 什麼時候合併、怎麼組指令(不另起切詞器)
+ 
+ - **合併開著**:沒帶 `--no-merge`,而且環境變數 `LUMOS_SKIP_CHOICE_MERGE` 不等於 `1`(只認 `1`,其他值與沒設一樣)。名稱是使用者 2026-11-23 定的;語意(關掉一個預設開的功能)跟既有 `LUMOS_SKIP_*`(多半是跳過一道檢查)不完全相同,第三輪設計審架構對齊席提過,使用者放行。
+ - **這次呼叫要不要試合併**:這次要跑的壞法少於 2 個(含 `--only` 只指一行)→ 不合併(單一壞法量齊基準只會更慢)。
+ - **一個平台組能合併的條件**(全部成立;任一不成立這個平台組這次呼叫照現在逐支、基準照現在用到才量,不印字):
+   - run_cmd 恰好一個 `{method}`。
+-  - 用既有的 `_gradle_task_list(run_cmd)` 看:恰好一個 Gradle 段、那一段恰好一個任務被新的小函式 `_gradle_unit_test_task(task)` 認成帶模組路徑的單元測試任務(最後一段是 `test` 或 `test<變體>UnitTest`,模組各段用既有的 `_SR_MODULE_PART` 驗;回 (模組各段, 任務名) 或 None)。不改既有的 `_gradle_test_module`:它的呼叫端 `_gradle_blocked_tasks` 靠「變體任務回 None」判「不擋」,改了 Android 的 `testDebugUnitTest` 會被當成要擋的任務。
++  - 用既有的 `_gradle_task_list(run_cmd)` 看:恰好一個 Gradle 段、那一段恰好一個任務被新的小函式 `_gradle_unit_test_task(task)` 認成帶模組路徑的單元測試任務(最後一段是 `test` 或 `test<變體>UnitTest`,模組各段用既有的 `_SR_MODULE_PART` 驗;回 (模組各段, 任務名) 或 None)。`_gradle_test_module` 只跟它共用模組各段的檢查(`_gradle_module_parts`),回傳不變:它的呼叫端 `_gradle_blocked_tasks` 靠「變體任務回 None」判「不擋」,改成認變體任務的話 Android 的 `testDebugUnitTest` 會被當成要擋的任務。
+   - 含 `{method}` 的那個詞:在原字串上取 `{method}` 前後連續不含空白的那一段(本專案的 run_cmd 寫法是 `'*{method}'`),這一段的單引號、雙引號各自成對,而且它前面緊接的是 `--tests` 加空白、或它自己以 `--tests=` 開頭。這只是在原字串上找一段字,不切詞;任務與 `-p` 仍由 `_gradle_task_list` 判。找不到這樣一段 → 不合併。
+   - 平台沒標 flaky、計劃筆記沒有未提交改動(兩個現有的弱證據來源;run_cmd 有 `{method}` 所以不會是整套一起跑)。
+   - 守的測試每支都過了現有的兩道名稱檢查(`_test_name_ok`、`_name_collision_reason`);有一支沒過 → 這個平台組不合併(沒過的照現在記 error 列)。
+   - **時限夠量齊**:剩下的總時限(`--max-seconds` 從 `t0` 算起的餘額)≥ 守的測試支數 × 10 秒 × 1.5。10 秒是單支基準的保守單價(實驗專案一次約 5–6 秒,取近兩倍);× 1.5 給合併基準與至少一個壞法留餘裕。不夠 → 這個平台組不合併、照現在用到才量(不讓量基準吃光整次預算、一個壞法都不判)。64 支是 960 秒,預設 1800 秒夠。這道只是用單價估的門;單支基準實際比單價貴時,由〈做法〉2 第 1 步的實測重估收手。
+ - **組指令**:對合併道每支測試,把上面那一段字交給 `_run_cmd_expand(那段字, 測試名, name_filter=平台的 name_filter)`——跟逐支跑時同一支代換與同一套引號;依測試名排序,用「空白加 `--tests` 加空白」接起來(`--tests=` 形狀則直接用空白接),放回原字串那一段的位置;最後整條再交 `_run_cmd_expand(整條)` 代換 `{python}` 這類其餘佔位符。每一段的字面跟逐支跑時那條指令裡的那一段一模一樣,沒有第二套切詞或引號規則。
+ - **長度上限**:組出的指令超過 32768 位元組(UTF-8;Windows 8191 字元)就這個平台組這次呼叫不合併:`_kill_run` 經 `sh -c` 把整條指令當一個參數交出,Linux 單一參數上限 131072 位元組,留四倍;Windows 的 cmd.exe 一行上限 8191 字元。
+ - **結果資料夾**:`_under_root(執行目錄, 那一段 -p 的值)`(沒有 `-p` 就是執行目錄)再接 `<模組各段>/build/test-results/<任務名>/`(Gradle 預設位置)。圍欄照 `_kill_run_dir` 的判法:真實路徑要以工作樹真實路徑加分隔符開頭;不在工作樹裡(`-p` 是絕對路徑、含 `..`、符號連結)→ 這個平台組這次呼叫不合併(不刪、不讀)。每次合併呼叫之前刪掉這個資料夾,讀到的一定是這次寫的。
+ 
+ ### 2. 基準(開跑時一次量齊)
+ 
+@@ -102,21 +102,21 @@ FACT:實驗機器 10 核、32GB 記憶體 [來源:人工] [confirmed:2026-11-23]
+ ### 4. 中斷與時限
+ 
+ - 現在 choice-kill 用 `_situation_rule_signals` 的延後模式:SIGINT、SIGTERM、SIGHUP 三種走同一個處理器;第一個只記下,`should_stop` 在配方之間生效;第二個強制結束(收 `_KILL_RUN_LIVE` 裡的程序群組、印留下的工作樹、立刻離開)。
+ - **登記**:合併快篩與合併基準的程序照現在經 `_kill_run` 登記進 `_KILL_RUN_LIVE`,`_kill_run` 多一個選用參數讓呼叫端給這筆登記加上「合併」標記(在 Popen 物件上設一個屬性);不另開登記表。
+ - **第一個訊號**:`_situation_rule_signals` 的狀態物件多一個選用回呼;choice-kill 設的回呼在第一個訊號(三種訊號一樣)時,把 `_KILL_RUN_LIVE` 裡帶「合併」標記的程序群組當場用 `_kill_proc_group` 收掉。`_kill_run` 隨之返回,`cmd_guard_kill` 看到停止旗標:
+   - 收掉的是合併快篩 → 這個壞法不交任何列、照現在還原壞法,在下一個檢查點停;不記帳,算進「還有 M 個沒跑」。合併快篩不判殺掉,丟掉它不會少記任何殺掉。
+   - 收掉的是合併基準 → 這次呼叫不合併,接著停。
+   - 沒有帶標記的程序在跑(單支基準、逐支流程)→ 照現在等那一支跑完(約 5–6 秒)。
+ - 不設回呼的呼叫端(人裁 `situation-rule` 等)行為不變。
+ - **兩個空窗都補上**:套壞法之後、開快篩之前看一次停止旗標(〈做法〉3);合併基準可被當場收掉(上一點)。訊號若落在看完停止旗標之後、合併程序登記之前,回呼收不到它:`_kill_run` 登記完合併程序之後再看一次「已收到第一個訊號」,是就當場收掉(代碼審 r1 正確性 #2;用 `pthread_sigmask` 包 Popen 不可靠,見 Python 文件 signal 一節與 bpo-1975)。所以收到第一個訊號後,最長的等待是正在跑的那一支單支基準或逐支配方,跟現在同一個量級;對話工具逾時、`timeout` 這類先送 SIGTERM、隔幾秒送 SIGKILL 的情境,不會被合併呼叫拖過寬限期。
+-- 總時限照現在在配方之間看;合併快篩一次最長是它的逾時上限(估 2.5–5 分鐘),所以一次呼叫最多超出 `--max-seconds` 一個合併快篩加一支逐支的時間。
++- 總時限照現在在配方之間看;合併快篩與合併基準的上限都不超過剩下的總時限(最少 1 秒),所以一次呼叫最多超出 `--max-seconds` 約 1 秒加一支逐支的時間(逐支照完整上限跑)。
+ 
+ ### 5. 介面、帳與旗標
+ 
+ - **介面**:`cmd_guard_kill` 多一個選用參數 `merge`,給的是一個跟 `_KillHooks` 同形的選用物件(不傳時是 None,行為與輸出不變;S12 守):
+   - 帶進去:剩下總時限的期限(絕對的 monotonic 時間,給〈做法〉1 時限夠量齊與〈做法〉2 上限用)、這次要跑的壞法數(給「少於 2 個不合併」用)、斷路器門檻(5)。
+   - 帶出來:每個平台組有沒有啟用合併與沒啟用的原因、每個平台組被快篩判全部存活的 `group` 集合、斷路器有沒有跳開、量基準花的秒數。
+   - `cmd_guard_kill` 拿它決定要不要合併、量基準與快篩、更新斷路器;`_ChoiceKillRun` 建它、傳進去,收列時從「判全部存活的 group 集合」決定每個壞法的 `judged`(每個有配方的平台組都在集合裡 → merged,否則 single),收尾時讀斷路器狀態與量基準秒數寫 run 事件。停止旗標仍經既有的 `should_stop`。
+ - **choice-kill 事件**多 `judged`(字串 `merged` 或 `single`,〈用詞〉)。`--no-merge` 或關閉開關時一律 `single`。
+ - **run 事件**多 `merged`、`single` 兩個整數(這次各判法的壞法數,相加等於這次判定的壞法數)、`merge_tripped`(布林)、`base_secs`(整數,開跑量基準花的秒數,無條件進位;量了就記,量到一半就收手也照記;沒量是 0)。RETIRE-IF ② 扣掉它的理由:它是每次呼叫開頭一次性的成本,不隨壞法數增減,只比壞法階段才看得出合併本身省多少。
+ - **登記**:`judged`、`merged`、`single`、`merge_tripped`、`base_secs`,以及 `ran`(現在只有型別登記、還不在 `ck` 子字典,這次新加進去)照 `_gov_row` 現有的 choice-kill `ck` 子字典慣例加進去(`secs`、`changed` 那類統計欄就在那裡);型別照既有慣例登記進 `_GOV_FIELD_TYPES`(`judged` 字串、計數與秒數整數、`merge_tripped` 布林)。讀帳時缺 `judged` 當 `single`。
+@@ -162,37 +162,37 @@ FACT:實驗機器 10 核、32GB 記憶體 [來源:人工] [confirmed:2026-11-23]
+ - 不跨呼叫快取基準;不自動停 Gradle 背景程序、不改使用者的 run_cmd。
+ - 不改判定規則、推送閘、回報上限、`--max-mutants` 與 `--max-seconds` 的預設值;不改「放行過的行算有效處置」的規則(只在 `--only` 碰到時多印一行)。
+ - 不處理 T44「開跑後又改程式」:帳以行指紋為鍵,改過的行自然變缺紀錄。
+ - 不碰合約殺傷力(`lumos guard kill` 指令本身)與人裁 `situation-rule`:它們不傳 `merge`、不設新的訊號回呼,行為不變。
+ 
+ ## 驗收條款
+ 
+ - [S1] 當平台 run_cmd 是 `./gradlew :app:testDebugUnitTest --tests '*{method}'`、守三支測試時,choice-kill 應 組出一條帶三段 `--tests`(依測試名排序、每一段的字面跟逐支跑時那一段相同)的合併指令;run_cmd 不是 Gradle、`{method}` 出現兩次、任務不帶模組路徑、含 `{method}` 的那一段引號不成對或前面不是 `--tests`、有一支名稱檢查沒過、平台標 flaky、或組出的指令超過長度上限時,那個平台組 應 不合併、照逐支跑 [test:t_choice_kill_merge_cmd]
+ - [S2] 當假 Gradle 對某個壞法的合併呼叫寫出全部通過的結果檔、rc 0 時,choice-kill 應 判那個壞法存活、`judged` 是 merged,而且那個壞法只呼叫一次 Gradle [test:t_choice_kill_merge_all_survive]
+ - [S3] 當合併快篩有一支失敗(排序 a、b、c,b 與 c 失敗)時,choice-kill 應 丟掉合併結果、照逐支流程跑,判殺掉 by b、`judged` 是 single;壞法階段(開頭量基準之後)的逐支呼叫順序與判定 應 跟 `--no-merge` 的壞法階段相同(只多一次合併呼叫) [test:t_choice_kill_merge_failure_goes_single]
+-- [S4] 當合併快篩逾時、rc 不是 0 而沒有失敗案例、結果資料夾不在、結果檔被拒收、單檔超過 8 MiB、某支對不到完整名、或輸出符合編譯錯誤樣式而沒有新結果檔時,choice-kill 應 照逐支流程跑、判定跟 `--no-merge` 相同,而且 應 不判殺掉、不判編不過 [test:t_choice_kill_merge_unclean_goes_single]
++- [S4] 當合併快篩逾時、rc 不是 0 而沒有失敗案例、結果資料夾不在、結果檔被拒收、單檔超過 8 MiB、某支對不到完整名、或輸出符合編譯錯誤樣式而沒有新結果檔時,choice-kill 應 照逐支流程跑、判定跟 `--no-merge` 相同,而且 應 不判殺掉、不判編不過 [test:t_choice_kill_merge_unclean_goes_single][test:t_choice_kill_merge_screen_cap][test:t_choice_kill_merge_edges]
+ - [S5] 當寫入後修改時間沒錯開、或套壞法失敗(old 對不到、also 錯、路徑逃逸)時,choice-kill 應 不跑合併快篩,套不上的照現在記列、其餘照逐支流程;快篩通過而還原後修改時間沒錯開時,那批存活列 應 帶弱證據、判定照現在變跑不出結果 [test:t_choice_kill_merge_weak_skips]
+-- [S6] 當合併開著時,choice-kill 應 在第一個壞法之前把每支守的測試的單支基準在乾淨的樹上量齊、再跑一次合併基準;合併基準逾時、rc 不是 0、讀不出、有支對不到、有失敗、或編不過時 應 在標準錯誤印出實際原因、這個平台組這次不合併、逐支流程直接用已量的單支基準 [test:t_choice_kill_merge_baseline]
+-- [S7] 當單支基準總和是 S 秒時,合併基準的上限 應 是 min(max(S × 2, 下限), 剩下的總時限);基準階段收到第一個中斷訊號或總時限到時 應 在下一支基準之前停、記 run [test:t_choice_kill_merge_baseline_deadline]
++- [S6] 當合併開著時,choice-kill 應 在第一個壞法之前把每支守的測試的單支基準在乾淨的樹上量齊、再跑一次合併基準;合併基準逾時、rc 不是 0、讀不出、有支對不到、有失敗、或編不過時 應 在標準錯誤印出實際原因、這個平台組這次不合併、逐支流程直接用已量的單支基準 [test:t_choice_kill_merge_baseline][test:t_choice_kill_merge_budget_reestimate][test:t_choice_kill_merge_budget_edge]
++- [S7] 當單支基準總和是 S 秒時,合併基準的上限 應 是 min(max(S × 2, 下限), 剩下的總時限);基準階段收到第一個中斷訊號或總時限到時 應 在下一支基準之前停、記 run [test:t_choice_kill_merge_baseline_deadline][test:t_choice_kill_merge_edges]
+ - [S8] 當同一個平台組連續 5 個壞法的合併快篩逾時或讀不出時,choice-kill 應 印一行、這次呼叫剩下的壞法不再跑合併,run 那筆 `merge_tripped` 是真;中間夾一次「通過」 應 把計數歸零;夾著「有失敗」或「編不過」的壞法 應 既不計數也不歸零 [test:t_choice_kill_merge_breaker]
+-- [S9] 當合併快篩或合併基準正在跑時收到第一個 SIGINT、SIGTERM 或 SIGHUP,choice-kill 應 當場收掉那個合併的程序群組:快篩那案那個壞法不記帳,基準那案這次不合併,兩案都記 interrupted 的 run、rc 2;套完壞法、開快篩之前已收到第一個訊號時 應 還原壞法、不開快篩、不記帳;逐支流程或單支基準正在跑時收到第一個訊號 應 照現在等那一支跑完;第二個訊號 應 照現在強制結束 [test:t_choice_kill_merge_interrupt]
++- [S9] 當合併快篩或合併基準正在跑時收到第一個 SIGINT、SIGTERM 或 SIGHUP,choice-kill 應 當場收掉那個合併的程序群組:快篩那案那個壞法不記帳,基準那案這次不合併,兩案都記 interrupted 的 run、rc 2;套完壞法、開快篩之前已收到第一個訊號時 應 還原壞法、不開快篩、不記帳;逐支流程或單支基準正在跑時收到第一個訊號 應 照現在等那一支跑完;第二個訊號 應 照現在強制結束 [test:t_choice_kill_merge_interrupt][test:t_choice_kill_merge_signal_race]
+ - [S10] 當兩個 kotlin-junit 平台都守同一個壞法、平台 A 合併快篩全部存活、平台 B 逐支殺掉時,choice-kill 應 判殺掉 by 平台 B 的那支、`judged` 是 single;兩個平台都快篩全部存活時 應 判存活、`judged` 是 merged;平台 A 已決定性殺掉這個壞法時,平台 B 應 不跑快篩、照現在交略過列 [test:t_choice_kill_merge_multi_platform]
+ - [S11] 當一次呼叫有合併判存活、逐支判殺掉、檔不在平台 repo 的壞法各至少一個時,治理帳 應 每個壞法一筆 choice-kill 帶對的 `judged`,run 那筆 應 有 `merged` + `single` = 判定的壞法數、`base_secs` 大於 0、`merge_tripped` 等於選用物件帶出的斷路器狀態;`gov` 讀帳 應 在 `ck` 帶出 `ran`、`base_secs`、`merged`、`single`、`merge_tripped`、`judged`,缺 `judged` 的舊帳讀成 single [test:t_choice_kill_merge_ledger_counts]
+ - [S12] 當 `cmd_guard_kill` 沒傳 `merge` 時,行為與輸出 應 跟現在相同(既有 rc 優先序、--json 純度、選用參數測試照綠;結果列與 `--json` 輸出沒有 `judged`)(擴充既有測試,加這個參數的案例) [test:t_choice_guard_kill_new_params]
+ - [S13] 當帶 `--no-merge`、或設 `LUMOS_SKIP_CHOICE_MERGE=1` 時,choice-kill 的輸出與帳 應 跟現在相同(除 `judged` 一律 single 與 run 的新欄),Gradle 呼叫數與順序 應 跟現在相同;`LUMOS_SKIP_CHOICE_MERGE` 是 `0`、空字串或 `true` 時 應 照沒設(合併開著) [test:t_choice_kill_no_merge_unchanged]
+ - [S14] 當結果資料夾的真實路徑不在工作樹裡(`-p` 是絕對路徑或含 `..`)時,choice-kill 應 不刪也不讀那個資料夾、那個平台組這次不合併 [test:t_choice_kill_merge_results_dir_fence]
+ - [S15] 當 `_secev_junit_facts` 回的身分是 `p.Outer$Inner::aCase(int)`、`::aCase()`(空 classname)、`p.K::a::b` 時,choice-kill 應 分別對得到綁成 `Inner.aCase`、`aCase`、`a::b` 的測試;`p.K::[1] 5` 應 對不到(那個壞法走逐支);一份結果檔零案例或超過案例數上限 應 算沒跑乾淨而不當掉 [test:t_choice_kill_merge_junit_read]
+ - [S16] 當在實驗專案用合併模式跑一批壞法時,每個壞法的平均秒數、存活與被殺比例、斷路器有沒有跳開 應 記下來跟〈預期效益〉對照 [manual:在 Android 實驗專案跑 lumos choice-kill(合併),讀治理帳 run 的 secs、base_secs、ran、merged、single、merge_tripped 與每筆的 judged,寫進驗證紀錄]
+ - [S17] 當在實驗專案讓一個壞法的合併快篩逾時之後,30 秒內 應 沒有殘留的測試行程,而且接著的逐支流程 應 沒有被判成測試掛住 [manual:在實驗專案挑一個會掛住的壞法(或調小逾時讓合併快篩逾時),逾時後 30 秒內跑 ps -ax 篩 'Gradle Test Executor' 與那棵隔離工作樹的路徑,通過條件是沒有任何一筆,而且治理帳那個壞法的判定不是「測試掛住」(那個壞法本身就會掛住的除外,改挑不會掛住、只是調小逾時的壞法驗);不通過就寫進驗證紀錄、關掉合併預設直到處理]
+ - [S18] 當在實驗專案抽 10 個合併判存活的壞法用 `--no-merge --only <檔>:<行>` 重跑時,判定 應 都是存活 [manual:用 lumos choice-points 找標「存活(合併快篩判)」的行挑 10 行,已放行的先略過,逐一跑 lumos choice-kill --no-merge --only <檔>:<行>,通過條件是 10 筆都判存活;任一筆判殺掉就照 RETIRE-IF ① 處理並寫進驗證紀錄]
+-- [S19] 當剩下的總時限小於守的測試支數 × 10 秒 × 1.5、或這次要跑的壞法少於 2 個(含 `--only` 只指一行)時,choice-kill 應 不合併、不先量齊基準,照現在用到才量 [test:t_choice_kill_merge_budget]
+-- [S20] 當守的測試有一支單支基準不綠時,choice-kill 應 不把它組進合併指令;合併快篩通過時那支 應 照現在交 abort 列而不是 survived;單支基準綠的不到 2 支時那個平台組 應 不合併 [test:t_choice_kill_merge_baseline_red]
++- [S19] 當剩下的總時限小於守的測試支數 × 10 秒 × 1.5、或這次要跑的壞法少於 2 個(含 `--only` 只指一行)時,choice-kill 應 不合併、不先量齊基準,照現在用到才量 [test:t_choice_kill_merge_budget][test:t_choice_kill_merge_edges]
++- [S20] 當守的測試有一支單支基準不綠時,choice-kill 應 不把它組進合併指令;合併快篩通過時那支 應 照現在交 abort 列而不是 survived;單支基準綠的不到 2 支時那個平台組 應 不合併 [test:t_choice_kill_merge_baseline_red][test:t_choice_kill_merge_no_lane_chunk]
+ - [S21] 當帳上某行最新一筆是合併判的存活時,choice-points 應 在那一行印「存活(合併快篩判)」;當 `--only` 指到已放行的行時,choice-kill 應 印一行說不會重跑、要先撤放行,而且 應 不跑那一行 [test:t_choice_kill_merge_rollback_lines]
+ 
+ ## 預期值表
+ 
+ | 條款 | 輸入 | 預期 | 來源 |
+ |---|---|---|---|
+ | S1 | run_cmd `./gradlew :app:testDebugUnitTest --tests '*{method}'`,守 `cCase`、`aCase`、`bCase`;另幾案 `{python} tests/run.py {method}`、`./gradlew testDebugUnitTest --tests '*{method}'`、`--tests "* {method}"`、組出 40000 位元組 | 第一案一條指令依序含 `--tests '*aCase'`、`--tests '*bCase'`、`--tests '*cCase'`;其餘各案每支各一次 Gradle | 使用者 2026-11-23 裁合併;Gradle 文件多個 `--tests` 都生效;第二輪 a1、b1 |
+ | S2 | 3 支測試,合併呼叫的結果檔 3 筆案例都 passed、rc 0 | 存活、judged merged、該壞法 Gradle 呼叫 1 次 | 使用者 2026-11-23 第二輪後裁:合併只確認全部存活 |
+ | S3 | 排序 a、b、c;壞法讓 b、c 失敗 | 壞法階段:合併 1 次後逐支 a 存活、b 殺掉、c 略過;killed by b、judged single;`--no-merge` 壞法階段同為 a、b 兩次逐支 | 同上;第三輪 b7:只比壞法階段 |
+ | S4 | 七案:逾時/rc 1 無失敗案例/不寫結果檔/零案例結果檔/9 MiB 結果檔/某支對不到/rc 1 輸出 `e: file:///x.kt:3` 無結果檔 | 七案都照逐支流程,判定跟 `--no-merge` 相同;編不過那案的編不過來自逐支第一支 | 同上:合併永遠不判殺掉、編不過 |
+diff --git a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+index 2062b4128..75f131117 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
++++ b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+@@ -48,21 +48,24 @@ summary: |-
+   WHY:guard kill 的基準與壞法在隔離工作樹裡的平台根跑 run_cmd(工作樹加上平台根相對所在 repo 最上層的路徑,_kill_run_dir),跟推送前的合約測試閘(_run_bound_tests 在平台根跑)同一處;平台根就是 repo 最上層時是工作樹本身、行為不變;平台根在 HEAD 那一版不是資料夾(沒提交)判 error、基準不跑;配方的 file 照舊從工作樹最上層算,撞名判定與人裁的模組候選本來就從平台根算 [出處:[[Projects/人裁殺傷力在真實Android專案跑得起來_計劃]] 範圍 2;代碼審 code-人裁殺傷力android r1 g1] [因:原本殺傷力在工作樹最上層跑、合約測試閘在平台根跑,平台根是子資料夾時同一條 run_cmd 只能顧一邊——人裁叫人加 cd <平台根> && 讓殺傷力過,之後每次推送的合約測試閘都紅] [不選:run_cmd 前面加 cd 的慣例(只顧殺傷力一邊);兩處各一條 run_cmd(同一個設定兩種語意)] [代價:平台根是子資料夾、run_cmd 原本寫成從 repo 最上層跑的舊設定要改成從平台根寫(合約測試閘本來就照平台根跑,這種設定原本在推送前就是紅的)] [test:t_guard_kill_runs_at_platform_root] [test:t_isolated_worktree_shared]
+   WHY:cmd_guard_kill 多四個選用參數給改動選擇點的 choice-kill(都不傳時行為與輸出不變):source 記到殺傷力帳本(是 choice-kill 時整個不寫帳本)、stop_group_on(配方的 group 同一組出現強 killed、編不過、逾時就把其餘記 skipped 略過,skipped 不算進 rc)、on_row(每條配方結束就交出那一列,weak 當場蓋好)、should_stop(配方之間問要不要停);活著的隔離工作樹登記在 _KILL_WT_LIVE,第二個終止訊號強制結束時印出路徑 [出處:論文 2.1 每個壞法只跑相關測試的近似 https://arxiv.org/pdf/2102.11378;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 2] [因:沒有覆蓋率挑最小測試集,一個壞法已判定就不該再花 Gradle 時間] [不選:另抽一支共用的殺傷力函式(本篇既有否決)] [test:t_choice_kill_batch]
+   WHY:背書讀者(_backing_kill_rows:doctor P2、表態與資安背書)改成殺傷力帳本那筆 source 非空就略過,不再只認 situation-rule:臨時配方不是筆記宣告的配方,任何呼叫端帶的都不算背書 [出處:[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 5] [因:將來別的臨時配方呼叫端帶 source 時不用再改讀者] [test:t_kill_log_situation_rule_rows_skipped]
+   PITFALL:帶弱證據的 killed(修改時間沒錯開、平台標 flaky)也被當成決定性結果,stop_group_on 停組、同組其餘測試記略過,壞法落成 no_result,本來能強殺它的下一支測試沒跑 [出處:代碼審 code-改動選擇點 r1 b21;論文 2.1 https://arxiv.org/pdf/2102.11378] [根因:_KillHooks.flush 的停組鍵三元式兩邊都回 killed] [修法:弱證據的 killed 記成 killed_weak(不在 stop_group_on 裡)] [test:t_choice_kill_weak_evidence]
+   PITFALL:兩個平台各有一支同名測試守同一個壞法時,配方身分(_kill_recipe_id 不含平台)撞號,choice-kill 收列時一支永遠收不到、存活被記成缺結果、殺掉被記到另一個平台 [出處:代碼審 code-改動選擇點 r1 b22] [根因:_ChoiceKillRun 只用配方身分對回列] [修法:對回時用 (配方身分, 平台);列上本來就帶平台] [test:t_choice_kill_same_name_two_platforms]
+   PITFALL:guard kill 原地數 old 與配方判讀用 str.count(不算重疊出現),old 在檔裡重疊出現兩次時被當成恰好一次、replace 第一處改到的可能是別處 [出處:代碼審 code-改動選擇點 r1 b11 同族] [根因:Python str.count 只算不重疊 https://docs.python.org/3/library/stdtypes.html#str.count] [修法:兩處改走 _count_overlapping(重疊也算;說明字面照舊「命中 N 次」「原文出現 N 次」)] [test:t_choice_unique_overlapping]
+   WHY:cmd_guard_kill 的新選用參數(stop_group_on、on_row、should_stop、source)另有一支直接守「不傳時同組兩條都跑、沒有略過列;傳 stop_group_on 時略過列不算進 rc 與全部 killed 的配方數」 [出處:代碼審 code-改動選擇點 r1 k4;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 2] [因:rc 優先序與 --json 純度兩條合約原本只靠 choice-kill 的端到端測試間接守] [test:t_choice_guard_kill_new_params]
+   WHY:cmd_guard_kill 多一個選用參數 merge(_KillMerge,跟 _KillHooks 同形)給 choice-kill 的合併快篩:能合併的平台組(_kill_merge_ready:run_cmd 是帶模組的 Gradle 單元測試任務、恰好一個 {method} 接在 --tests 後、名稱檢查都過、不 flaky、筆記沒未提交、剩下時限夠量齊、結果資料夾在工作樹裡、指令不超長)開跑先在乾淨樹上量齊單支基準、再跑一次合併基準;每個壞法先把單支基準綠的測試合成一次 Gradle 呼叫,結果檔逐檔交 _secev_junit_facts,乾淨而且沒有失敗才整批記存活,其餘配方原樣交回逐支迴圈本體(_kill_merge_iter 是產生器,本體一字不改);同一平台組連續 5 次逾時、讀不出、沒有結果檔或被系統收掉就停用(斷路器);不傳時行為與輸出不變 [出處:[[Projects/選擇點變異加速_計劃]];Gradle 文件多個 --tests 都生效 https://docs.gradle.org/current/userguide/java_testing.html] [因:存活的壞法要跑完全部測試,每次 Gradle 呼叫的固定成本是大頭;合併只判存活,判錯的方向是多擋不是放行] [不選:合併也判殺掉(兩輪設計審卡在歸因);另抽一支共用的殺傷力函式(本篇既有否決)] [test:t_choice_kill_merge_all_survive]
+   WHY:合併快篩照計劃做法 3 的步驟分成套壞法 _kill_merge_apply、讀結果檔 _choice_merge_facts、斷路器 _kill_merge_breaker、交存活列 _kill_merge_emit,_kill_merge_screen 只留順序 [出處:2026-11-23 代碼審派審前 lint-new] [因:新增告警閘擋複雜度超過 10 的函式,這個 repo 正式程式的先例是拆函式、不放行,只有一次性量測腳本放行過] [不選:lint-waive 放行] [test:t_choice_kill_merge_breaker]
+   WHY:訊號處理 _situation_rule_signals 的狀態物件多一個選用回呼 on_first:第一個訊號(SIGINT、SIGTERM、SIGHUP 一樣)記下之後呼叫一次,回呼出錯不擋;choice-kill 設成 _KillMerge.on_signal,當場收掉 _KILL_RUN_LIVE 裡帶合併標記的程序群組(_kill_run 的 merge 給 _KillMerge 時在 Popen 物件上設 _lumos_merge、先標再登記,登記後再看一次 interrupted),合併快篩那個壞法不交列、合併基準那次不合併,接著停;單支基準與逐支配方照現在等那一支跑完;套完壞法、開快篩之前再看一次停止旗標;不設回呼的呼叫端(人裁 situation-rule、guard kill)行為不變 [出處:[[Projects/選擇點變異加速_計劃]] 做法 4;第三輪設計審資源席的兩個空窗] [因:合併呼叫一次可能 2.5–5 分鐘,對話工具逾時與 timeout 先送 SIGTERM、隔幾秒送 SIGKILL,不當場收會拖過寬限期] [不選:另開一張程序登記表;第一個訊號就收所有測試程序(逐支流程照現在只等一支)] [test:t_choice_kill_merge_interrupt]
+-  PITFALL:合併快篩開跑量齊單支基準時,單支實際比「支數 × 10 秒 × 1.5」那道門的單價貴,會把總時限吃光、一個壞法都不判(--no-merge 同情境至少判 1 個);第一個訊號落在看完停止旗標之後、合併程序登記之前,回呼收不到、合併呼叫跑完整段;快篩逾時上限不受剩下總時限約束 [出處:代碼審 code-選擇點變異加速 r1 正確性 #1 #2、資源 #1 #2 #3] [根因:門檻只用固定單價估、被截斷而逾時的那支照寫進基準又丟停止;收程序只靠回呼看登記表] [修法:量完一支就用實測平均重估剩下的(業界 Stryker、Blinky 用不帶壞法那一輪實測的耗時估),不夠就不合併、退回逐支、已量的留著,截斷的那支不寫進基準(_kill_merge_singles);_kill_run 登記合併程序之後再看一次 interrupted、是就當場收(pthread_sigmask 包 Popen 不可靠,bpo-1975);快篩上限加 min(…, max(剩下總時限, 1))(_choice_merge_screen_cap);配方一支都不在合併道的壞法不開快篩(_kill_merge_in_lane);判法只在 _ChoiceKillRun 算一份,on_row 不帶] [test:t_choice_kill_merge_budget_reestimate]
++  PITFALL:合併快篩開跑量齊單支基準時,單支實際比「支數 × 10 秒 × 1.5」那道門的單價貴,會把總時限吃光、一個壞法都不判(--no-merge 同情境至少判 1 個) [出處:代碼審 code-選擇點變異加速 r1 正確性 #1、資源 #3、r2 邊界 #1] [根因:門檻只用固定單價估、被截斷而逾時的那支照寫進基準又丟停止] [修法:量完一支就用實測平均重估剩下的(業界 Stryker、Blinky 用不帶壞法那一輪實測的耗時估),不夠就不合併、退回逐支、已量的留著,截斷的那支不寫進基準(_kill_merge_singles)] [test:t_choice_kill_merge_budget_reestimate] [test:t_choice_kill_merge_budget_edge]
++  PITFALL:第一個訊號落在看完停止旗標之後、合併程序登記之前,回呼收不到、合併呼叫跑完整段 [出處:代碼審 code-選擇點變異加速 r1 正確性 #2、資源 #1、通才 #4] [根因:收程序只靠回呼看登記表] [修法:_kill_run 登記合併程序之後再看一次 interrupted、是就當場收(pthread_sigmask 包 Popen 不可靠,bpo-1975)] [test:t_choice_kill_merge_signal_race]
++  PITFALL:快篩逾時上限不受剩下總時限約束,一次快篩可能超出 --max-seconds 好幾分鐘;只測上限的純函式時,呼叫端改回舊算式測試照綠 [出處:代碼審 code-選擇點變異加速 r1 資源 #2、r2 通才 #1] [根因:上限只看合併基準耗時與下限] [修法:快篩上限加 min(…, max(剩下總時限, 1))(_choice_merge_screen_cap),另有端到端案例斷言快篩在剩下時限到時被收掉] [test:t_choice_kill_merge_screen_cap]
++  PITFALL:比對兩次各自卡總時限的 choice-kill 測試(合併對 --no-merge),把睡眠與時限同比例縮小會在機器忙時隨機紅,兩邊跑到的壞法數誰多誰少都會發生(合併要先量基準、多一段開銷) [出處:代碼審 code-選擇點變異加速 r2 修正關卡,減半版並行三份兩份紅] [根因:固定開銷不隨比例縮小,絕對餘裕不夠] [修法:這類測試保留原本的絕對時限;要縮短耗時改用直接呼叫函式、換掉執行與剩餘時限的卡線測試] [test:t_choice_kill_merge_budget_reestimate]
+ related:
+   - "[[Projects/guard殺傷力驗證_計劃]]"
+   - "[[Systems/check-t-sentinel]]"
+   - "[[Systems/test-profile-multiplatform]]"
+   - "[[Verification/2026-07-10_guard殺傷力驗證]]"
+   - "[[Projects/併發與效能表態要合約背書_計劃]]"
+   - "[[Projects/殺傷力配方失配提醒_計劃]]"
+ aliases:
+   - 殺傷力驗證
+ decisions:
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 2f27e03e8..3894a9405 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,22 +1,22 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "1487ad5177385af0e97dbd4c85dbd08211000366ab913d1053eff861bc188fab",
++    "scripts/test_lumos.py": "b72ebebcbb27869bf80a752cd8f51e5a4c7d7b2c563c3f549f4d9f6929b6bf99",
+     "scripts/test_autonomous_loop.py": "d7f2b030e6c54d4061b39bf3e185c78691c6b4ab1dc7b933439fc841a7f95052",
+     "scripts/hooks/pre-commit": "fe862788786f29c8272c59599cc626f9c1be40ebec40abe8af8222432cfc9208",
+     "scripts/hooks/pre-push": "1db8c21cdf2180d0e122de2e844d5956c210280c0942d107357c62bb800056db",
+     "scripts/hooks/post-commit": "c0ec92bcab278cadce95626ddd5f1769f85a17afa7ac3842190a5a535e702f72",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "d98b0885badfcb2a3faa7a591299f7f2f52d0b32570ea4354bf0efbe7fd96de9",
+     "scripts/hooks/claude/lumos-entry-hook.py": "dee040ffcdfce8143c4856c6358607978d3833845671c6c3689fedd69cf16758",
+     "scripts/hooks/claude/impact-hook.py": "228bd39f909d87325199f0c5ec2f601c1b7f1587379c63b857b3c98f5dc4245f",
+     "scripts/hooks/claude/check-graph-sync.py": "6b75c4f3921c8929627e7d3b660fdfa45cc0f1b4b1d96961d5f4114b1629e8a8",
+     "scripts/hooks/claude/ci-status-hook.py": "4c0ca5e7809ccab6073b4ab2d098e3b0ef247e208e7ecb36107a3b428635cb4d",
+     "scripts/hooks/claude/memory-sweep.py": "9a110293588dd05a4be535aea9ab654048663aa048a099f5ccd89e3323957d0e",
+     "scripts/hooks/claude/bypass-ask-hook.py": "656529581b2c220c97da69a5ef2de623a320452dc5393ca280df8400c35694a9",
+     "scripts/hooks/claude/_hookevent.py": "034bfe001290469a71c9a8d7b702b8e98afc9ec76fe826509b158a97675e187f",
+     "scripts/hooks/claude/stop-lint-hook.py": "947aa26417e3108e261960637c48957d2aa98cf4f859b1d309c3278faad4a9d3",
+     "scripts/hooks/claude/_hookshared.py": "057d332803d0098ff552e7bd56566e226d9ed1de44e0945c2ac53bcee3a12a5c"
+   },
+-  "approved_at": "2026-11-23T20:26:08+08:00",
+-  "note": "使用者於對話回「簽」(2026-11-23):核可選擇點加速代碼審第一輪修補的測試檔改動(新增時限重估、中斷空窗、快篩上限、卡線值、無合併道五支測試;改假 Gradle 超大輸出、中斷測試保留工作目錄、測試資料補平台欄位)"
++  "approved_at": "2026-11-23T23:28:56+08:00",
++  "note": "使用者在對話中核可,原話「簽」(2026-11-23);核可內容:重估測試 t_choice_kill_merge_budget_reestimate 整支換回加速前原版(減半版在負載下隨機紅),判準不變、沒有放寬"
+ }
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f5713106c..56a4b4e2d 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -147199,20 +147199,43 @@ def t_choice_kill_merge_budget_reestimate():
+             mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2]), source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON,
+             on_row=rows.append, should_stop=lambda: False, merge=mm._KillMerge(_ckm_time.monotonic() + 6, 2)), log=log)
+         vs = [(r["group"], r["test"], r["verdict"]) for r in rows]
+         check("r1 正確性 #1 bravo 基準被剩下時限截斷 → 不記成基準非綠:六列都 survived、bravo 的基準照完整上限重量一次", len(vs) == 6
+               and all(v == "survived" for _g, _t, v in vs) and _ckm_calls(log).count(("bravoCase", "base")) == 2, f"{vs} {_ckm_calls(log)}")
+     finally:
+         m._CHOICE_MERGE_UNIT_SECS = saved
+         _ck_cleanup(root, fake, tmp)
+ 
+ 
++def t_choice_kill_merge_budget_edge():
++    """[代碼審 code-選擇點變異加速 r2 邊界 #1] 量基準中途重估的卡線:剩下時限剛好等於「還沒量的支數 × 已量平均 × 1.5」照量(超過才收手),少一點就收手。
++    直接呼叫 _kill_merge_singles,單支耗時固定 2 秒(換掉 _kill_run)、剩下時限固定,不睡。三支:量完第一支剩兩支 → 門檻 2 × 2 × 1.5 = 6。
++    翻紅釘:< 改 <= → 剩 6.0 那案收手而紅;拿掉重估 → 剩 5.99 那案量齊而紅。"""
++    import types
++    m = _load_lumos_inproc()
++    orig = m._kill_run
++    uniq = ["aCase", "bCase", "cCase"]
++    cmd_of = {x: f"run {x}" for x in uniq}
++    try:
++        m._kill_run = lambda cmd, run_dir, cap, **_kw: (0, "", 2.0, False)
++        for rem, ok in ((6.0, True), (5.99, False)):
++            mg = m._KillMerge(0, 2)
++            mg.remaining = lambda rem=rem: rem
++            c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
++                                      mstate={"unsure": False})
++            got = m._kill_merge_singles(mg, c, uniq, cmd_of)
++            check(f"r2 邊界 #1 已量 2 秒、剩兩支、剩 {rem} 秒(門檻 6)→ {'量齊' if ok else '收手'}", got is ok and (len(c.baselines) == 3) == ok,
++                  f"{got} {sorted(c.baselines)}")
++    finally:
++        m._kill_run = orig
++
++
+ def t_choice_kill_merge_signal_race():
+     """[代碼審 code-選擇點變異加速 r1 正確性 #2、資源 #1、通才 #4] 第一個訊號落在「看停止旗標」之後、合併程序登記進 _KILL_RUN_LIVE 之前:回呼收不到它,
+     合併呼叫會跑完整段。修法:登記之後再看一次 interrupted,是就當場收掉(用 pthread_sigmask 包 Popen 不可靠,Python 文件與 bpo-1975)。
+     做法照正確性席 race.py:在 _choice_merge_clear 裡觸發 on_signal。判準:合併基準與快篩兩處都當場收掉(假 Gradle 睡 60 秒,這次呼叫很快結束、沒有 end)。
+     翻紅釘:登記後不再看 → 等到 60 秒逾時而紅。"""
+     m = _load_lumos_inproc()
+     one = "alphaCase,bravoCase,charlieCase"
+     tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+     roots = []
+     try:
+@@ -147259,20 +147282,39 @@ def t_choice_kill_merge_screen_cap():
+     try:
+         log = tmp / "run.log"
+         root, fake = _ckm_repo(2, {"__base_sleep__": 1, "__msleep__": {"base": 1.5, "1": 4}})
+         r = _ck_run(root, fake, runlog=log, floor="1")
+         ph = _ckm_phase(_ckm_calls(log))
+         e1 = _ck_by_file(_ck_gov(root, kind="choice-kill")).get(_ck_fp(1, 2), {})
+         check("r1 邊界 #3 合併基準約 1.5 秒(大於下限 1)、快篩 4 秒(介於下限與基準 × 5)→ 快篩通過、judged merged", ph.get("1") == ["alphaCase,bravoCase,charlieCase"]
+               and e1.get("judged") == "merged", f"{ph} {e1}\n{r.stderr[-300:]}")
+     finally:
+         _ck_cleanup(root, fake, tmp)
++    # 端到端(r2 通才 #1):呼叫端要真的把剩下時限傳進上限,只測純函式時呼叫端改回 max(基準 × 5, 下限) 照綠。
++    # 下限 30、合併基準很快、壞法 1 的快篩要睡 6 秒、總時限只給 3 秒 → 快篩在剩下時限(約 2 秒)到時被收掉、沒有 end;
++    # 呼叫端不帶剩下時限 → 上限 30,快篩睡滿 6 秒寫出 end 而紅。
++    one = "alphaCase,bravoCase,charlieCase"
++    saved = m._CHOICE_MERGE_UNIT_SECS
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
++    root, fake = _ckm_repo(2, {"__msleep__": {"1": 6}})
++    try:
++        m._CHOICE_MERGE_UNIT_SECS = 0.5
++        log = tmp / "run.log"
++        _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
++            mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2]), source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON,
++            on_row=lambda _r: None, should_stop=lambda: False, merge=mm._KillMerge(_ckm_time.monotonic() + 3, 2)), log=log, floor="30")
++        rows = _ck_log(log)
++        check("r2 通才 #1 下限 30、總時限 3 秒、快篩要睡 6 秒 → 快篩有開跑、被剩下時限收掉(沒有 end)",
++              [one, "1", "start"] in rows and [one, "1", "end"] not in rows, str(rows))
++    finally:
++        m._CHOICE_MERGE_UNIT_SECS = saved
++        _ck_cleanup(root, fake, tmp)
+ 
+ 
+ def t_choice_kill_merge_edges():
+     """[代碼審 code-選擇點變異加速 r1 邊界 #1 #4 #5] 卡線:每檔都不超過單檔上限、合計超過合計上限 → 沒跑乾淨;單檔剛好等於上限不算超過;rc 127 不算被系統收掉、
+     rc 128 算;剩下時限剛好等於「支數 × 單價 × 1.5」照合併;量基準中途總時限到(不是訊號)→ 下一支基準不跑、不交列。上限常數縮小來測同一個比較式(省寫 64 MiB)。
+     翻紅釘:拿掉合計條件 → 合計那案通過而紅;> 改 >= → 剛好等於那案紅;128 改 129 或 127 也算 → 那兩案紅;< 改 <= → 剛好等於門檻那案紅;基準之間不看停止旗標 → 第三支跑了而紅。"""
+     import types
+     m = _load_lumos_inproc()
+     tq = m._secev_tq()
+     tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
