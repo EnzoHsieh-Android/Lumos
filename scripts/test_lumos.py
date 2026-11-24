@@ -56376,8 +56376,15 @@ def t_dispatch_lens_spec_mode_core():
     m = _load_lumos_module()
     repo = Path(GRAPHCTL).resolve().parent.parent
     buf = _io.StringIO()
-    with _cl.redirect_stdout(buf):
-        rc = m.cmd_dispatch_lens_spec("docs/lumos-toolchain-knowledge/Projects/Codex行為精修_計劃.md", repo=str(repo), as_json=True)
+    # 這支驗「太泛的檔歸 too_generic」,不驗時間預算(預算用完的行為另有 t_dispatch_lens_spec_scan_budget_truncates)。
+    # 逐檔 impact 每支約 7 秒,CI 兩份並跑時 30 秒預算會讓後面的檔落進 skipped_files、這裡就紅(2026-11-24 主線 CI)。
+    _old_budget = m._LENS_SPEC_BUDGET
+    try:
+        m._LENS_SPEC_BUDGET = 120.0
+        with _cl.redirect_stdout(buf):
+            rc = m.cmd_dispatch_lens_spec("docs/lumos-toolchain-knowledge/Projects/Codex行為精修_計劃.md", repo=str(repo), as_json=True)
+    finally:
+        m._LENS_SPEC_BUDGET = _old_budget
     d = _j.loads(buf.getvalue().strip().splitlines()[-1])
     check("lens-spec: rc0、mode=spec、抓到計劃提到的 hook 檔", rc == 0 and d["mode"] == "spec" and "scripts/hooks/claude/check-graph-sync.py" in d["code_files"], str(d.get("code_files")))
     check("lens-spec: 太泛的單檔 CLI/總測試檔整檔略過並列在 too_generic", any(x.startswith("scripts/lumos(") for x in d["too_generic"]), str(d["too_generic"]))
