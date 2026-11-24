@@ -61,6 +61,7 @@ summary: |-
   PITFALL:壞法的配方一支都不在合併道(那幾支單支基準全紅)時照開一次快篩,還把它記成合併判 [出處:代碼審 code-選擇點變異加速 r1 通才 #2] [根因:開快篩前沒看配方跟合併道有沒有交集] [修法:_kill_merge_in_lane 先看,沒有交集就不套壞法、直接交逐支] [test:t_choice_kill_merge_no_lane_chunk]
   PITFALL:判法(judged)在交出的列與收尾各記一份,交出列上那份沒有讀者、兩份可能不一致 [出處:代碼審 code-選擇點變異加速 r1 整合 #4、通才 #1、架構對齊 #2、r4 整合 #1] [根因:建構後才設的合併旗標讓兩處各算一次] [修法:判法只在 _ChoiceKillRun 收尾算一份,結果列不帶 judged(on_row 與 result_out 照欄位白名單另組列,只有 --json 會整列吐出,測試看 --json)] [test:t_choice_kill_merge_cap_wiring] [test:t_choice_kill_merge_ledger_counts]
   PITFALL:比對兩次各自卡總時限的 choice-kill 測試(合併對 --no-merge),把睡眠與時限同比例縮小會在機器忙時隨機紅,兩邊跑到的壞法數誰多誰少都會發生(合併要先量基準、多一段開銷) [出處:代碼審 code-選擇點變異加速 r2 修正關卡,減半版並行三份兩份紅] [根因:固定開銷不隨比例縮小,絕對餘裕不夠] [修法:這類測試保留原本的絕對時限;要縮短耗時改用直接呼叫函式、換掉執行與剩餘時限的卡線測試] [test:t_choice_kill_merge_budget_reestimate]
+  PITFALL:測試總檔新加的小工具函式跟既有的同名時,後定義的會靜靜蓋掉前面那個,兩處都改用新版本、本機子集照綠,只有全套的重複定義檢查會紅 [出處:2026-11-24 選擇點加速 PR CI 紅] [根因:功能分支推送前只跑文件子集,重複定義檢查只在全套跑] [修法:新工具函式先 grep 測試總檔有沒有同名] [test:t_test_file_no_duplicate_defs]
 related:
   - "[[Projects/guard殺傷力驗證_計劃]]"
   - "[[Systems/check-t-sentinel]]"

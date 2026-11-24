@@ -146967,7 +146967,7 @@ def t_choice_kill_no_merge_unchanged():
         vol = {"ts", "token", "run_id", "commit", "secs", "judged", "merged", "single", "merge_tripped", "base_secs", "tests", "head_sha"}
 
         def strip(evs):
-            return sorted(_json_mod_dumps({k: v for k, v in e.items() if k not in vol}) for e in evs)
+            return sorted(_json_sorted_dumps({k: v for k, v in e.items() if k not in vol}) for e in evs)
         for label in ("--no-merge", "SKIP=1"):
             calls, evs, runs, r = got[label]
             check(f"S13 {label}:Gradle 呼叫數與順序跟現在相同(基準用到才量、殺掉就停組)", calls == now, f"{calls}\n{r.stderr[-300:]}")
@@ -146986,7 +146986,7 @@ def t_choice_kill_no_merge_unchanged():
         _ck_cleanup(*roots, tmp)
 
 
-def _json_mod_dumps(d):
+def _json_sorted_dumps(d):
     import json as _j
     return _j.dumps(d, ensure_ascii=False, sort_keys=True)
 
