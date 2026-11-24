@@ -145608,7 +145608,10 @@ def t_choice_guard_kill_new_params():
     rec = [{"invariant": f"g|{t}", "test": t, "file": _CHOICE_MAIN, "old": old, "new": old.replace("===", "!=="), "group": "g"} for t in ("alphaCase", "bravoCase")]
     try:
         res = {}
-        for label, kw in (("default", {}), ("stop", {"stop_group_on": frozenset({"killed"}), "on_row": lambda _r: None})):
+        seen = []
+        for label, kw in (("default", {}), ("stop", {"stop_group_on": frozenset({"killed"}), "on_row": lambda _r: None}),
+                          ("merge_none", {"merge": None}), ("merge_none_row", {"merge": None, "stop_group_on": frozenset({"killed"}), "on_row": seen.append}),
+                          ("json", {"merge": None, "as_json": True})):
             out, buf = {}, io.StringIO()
             with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
                 rc = m.cmd_guard_kill(m.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=[dict(r) for r in rec], result_out=out, **kw)
@@ -145624,6 +145627,16 @@ def t_choice_guard_kill_new_params():
     rc, vs, txt = res["stop"]
     check("G6 傳 stop_group_on → 第二條略過;略過列不算進 rc 與配方數(全部 killed(1 配方)、rc 0)", rc == 0 and vs == ["killed", "skipped"]
           and "全部 killed(1 配方)" in txt, f"rc={rc} {vs}\n{txt[-300:]}")
+    # [選擇點變異加速 S12] merge 不傳(None)時行為與輸出跟現在相同;結果列、--json、on_row 交出的列都沒有 judged
+    def body(t):   # 第一次跑寫了殺傷力帳本,之後幾次多一行「repo 有未提交變更」提醒;比對時去掉那一行
+        return [ln for ln in t.splitlines() if not ln.startswith("⚠")]
+    check("S12 merge=None → rc、判定、輸出跟不傳逐字相同", res["merge_none"][:2] == res["default"][:2]
+          and body(res["merge_none"][2]) == body(res["default"][2]), f"{res['merge_none']}\n{res['default']}")
+    check("S12 merge=None 傳 on_row → 列裡沒有 judged", seen and all("judged" not in r for r in seen), str(seen)[:300])
+    import json as _j
+    js = [ln for ln in res["json"][2].splitlines() if ln.startswith("{")]
+    rows = _j.loads(js[0])["results"] if js else []
+    check("S12 --json 純度照舊、結果列沒有 judged", len(js) == 1 and rows and all("judged" not in r for r in rows), res["json"][2][-300:])
 
 
 def t_choice_unique_overlapping():
@@ -146230,6 +146243,1220 @@ def t_choice_kill_waive_hint_shell_quote():
                   argv[:3] == ["lumos", "lint-waive", f"choice:{f}:12"] and argv[3:5] == ["--note", "不適用:<理由>"], f"{cmd}\n{argv}")
     finally:
         m._choice_gate_event = saved
+
+
+# ── 選擇點變異加速(Projects/選擇點變異加速_計劃):合併快篩 ──
+# 判準來源:計劃〈預期值表〉S1–S15、S19–S21 各列(輸入照抄、預期照抄;S16–S18 是 manual)。假 Gradle(_CKM_GRADLE)放在假 ast-grep 那個
+# PATH 目錄,照 --tests 收測試名、照 Vm.kt 現在套的壞法與 tests/beh.json 決定每支紅綠,並照 Gradle 預設位置寫 JUnit 結果檔;
+# 一次帶兩支以上 --tests 就是合併呼叫,beh.json 的 __merge__ 照「狀態」(base 或壞法編號)指定合併呼叫的怪樣子(逾時、rc 1、不寫結果檔…)。
+_CKM_GRADLE = r'''import json, os, re, sys, time
+args = sys.argv[1:]
+names, i = [], 0
+while i < len(args):
+    a = args[i]
+    if a == "--tests" and i + 1 < len(args):
+        names.append(args[i + 1].lstrip("*"))
+        i += 2
+        continue
+    if a.startswith("--tests="):
+        names.append(a[len("--tests="):].lstrip("*"))
+    i += 1
+top = os.getcwd()
+while not os.path.exists(os.path.join(top, "tests", "beh.json")):
+    top = os.path.dirname(top)
+src = open(os.path.join(top, "app/src/main/java/x/Vm.kt"), encoding="utf-8").read()
+beh = json.load(open(os.path.join(top, "tests", "beh.json"), encoding="utf-8"))
+muts = [int(x) for x in re.findall(r"a(\d+) !== b\1", src)]
+mut = muts[0] if muts else None
+merged = len(names) > 1
+state = "base" if mut is None else str(mut)
+log = os.environ.get("CK_RUNLOG")
+
+
+def note(tag):
+    if log:
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(",".join(names) + "\t" + state + "\t" + tag + "\n")
+
+
+note("start")
+if mut is None and len(names) == 1:
+    time.sleep(beh.get("__base_sleep__", 0) + (beh.get("__base_sleep_by__") or {}).get(names[0], 0))   # 單支基準的耗時(量基準時限那幾案)
+if merged:
+    time.sleep((beh.get("__msleep__") or {}).get(state, 0))   # 合併呼叫的耗時(快篩逾時上限那幾案)
+mode = (beh.get("__merge__") or {}).get(state) if merged else None
+mark = beh.get("__mark__") or {}
+if os.environ.get("CK_MARK") and mark.get("names") == ",".join(names) and mark.get("state") == state:
+    open(os.environ["CK_MARK"], "w").close()
+    time.sleep(mark.get("sleep", 2))
+rdir = os.path.join(os.getcwd(), "app", "build", "test-results", "testDebugUnitTest")
+
+
+def write(body):
+    os.makedirs(rdir, exist_ok=True)
+    with open(os.path.join(rdir, "TEST-x.VmTest.xml"), "w", encoding="utf-8") as fh:
+        fh.write(body)
+
+
+def done(rc):
+    note("end")
+    sys.exit(rc)
+
+
+if mode == "hang" or (not merged and mut is not None and mut in beh.get(names[0], {}).get("hang", [])):
+    time.sleep(60)
+if mode == "compile" or (mut is not None and any(mut in beh.get(n, {}).get("compile", []) for n in names)):
+    print("e: file:///w/app/src/main/java/x/Vm.kt:5:20 Unresolved reference: !==")
+    done(1)
+if mode == "noxml":
+    done(0)
+if mode == "zero":
+    write('<testsuite name="x.VmTest" tests="0"/>')
+    done(0)
+if mode == "big":   # 每支都寫進去、都通過,只有大小超過上限:測到的是大小檢查
+    write('<testsuite name="x.VmTest" tests="%d">%s<system-out>%s</system-out></testsuite>'
+          % (len(names), "".join('<testcase name="%s" classname="x.VmTest"/>' % n for n in names), "x" * (9 * 1048576)))
+    done(0)
+fails = [n for n in names if (mut is None and beh.get(n, {}).get("base_red")) or (mut is not None and mut in beh.get(n, {}).get("kill", []))]
+if mode == "fail":
+    fails = fails or names[:1]
+shown = [n + ("X" if mode == "misname" and k == 0 else "") for k, n in enumerate(names)]
+cases = "".join('<testcase name="%s" classname="x.VmTest">%s</testcase>'
+                % (s, '<failure message="boom" type="java.lang.AssertionError">boom</failure>' if n in fails else "")
+                for n, s in zip(names, shown))
+write('<?xml version="1.0" encoding="UTF-8"?><testsuite name="x.VmTest" tests="%d" failures="%d" errors="0" skipped="0">%s</testsuite>'
+      % (len(names), len(fails), cases))
+for n in names:
+    print(n + (" FAILED" if n in fails else " PASSED"))
+done(1 if fails or mode == "rc1" else 0)
+'''
+import re as _ckm_re
+import time as _ckm_time
+
+_CKM_CMD = "gradlew :app:testDebugUnitTest --tests '*{method}'"
+_CKM_TESTS = ("alphaCase", "bravoCase", "charlieCase")
+
+
+def _ckm_repo(n, beh, tests=_CKM_TESTS, run_cmd=_CKM_CMD, config=None):
+    """合併快篩用的臨時 repo:_ck_repo 加上每支測試一條條款、alpha/bravo 以外的測試放 MoreTest.kt、run_cmd 是 Gradle 單元測試任務,
+    假 Gradle 放進 PATH 目錄 → (root, PATH 目錄)。"""
+    clauses = "".join(f"- [S{i}] 當使用者給第 {i} 種輸入,系統 應 顯示第 {i} 種結果 [test:{t}]\n" for i, t in enumerate(tests, 1))
+    more = [t for t in tests if t not in ("alphaCase", "bravoCase")]
+    extra = {"app/src/test/java/x/MoreTest.kt": "package x\n\nimport org.junit.Test\n\nclass MoreTest {\n"
+             + "".join(f"    @Test fun {t}() {{}}\n" for t in more) + "}\n"} if more else {}
+    root, fake = _ck_repo(n, beh, config=config or {"test_profile": "kotlin-junit", "test": {"run_cmd": run_cmd}}, clauses=clauses, extra=extra)
+    (Path(fake) / "gradlew").write_text(f"#!{sys.executable}\n" + _CKM_GRADLE, encoding="utf-8")
+    (Path(fake) / "gradlew").chmod(0o755)
+    return root, fake
+
+
+def _ckm_run_many(jobs):
+    """幾次 choice-kill 同時跑(各自的臨時 repo,互不相干;省牆上時間,單支測試別超過 180 秒)。jobs:[(root, fake, args, log, floor, env)…]
+    → 依序的 SimpleNamespace(returncode, stdout, stderr)。"""
+    import types
+    procs = []
+    for root, fake, args, log, floor, env in jobs:
+        procs.append(subprocess.Popen([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "choice-kill", "--diff", "main..HEAD", *args], cwd=root,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_ck_env(fake, log, floor, **env), stdin=subprocess.DEVNULL))
+    out = []
+    for p in procs:
+        o, e = p.communicate(timeout=300)
+        out.append(types.SimpleNamespace(returncode=p.returncode, stdout=o, stderr=e))
+    return out
+
+
+def _ckm_calls(log):
+    """假 Gradle 的執行紀錄 → [(測試名逗號串, 狀態)](只取開始那筆;狀態是 base 或壞法編號)。"""
+    return [(x[0], x[1]) for x in _ck_log(log) if len(x) > 2 and x[2] == "start"]
+
+
+def _ckm_phase(calls):
+    """壞法階段:{壞法編號: [依序每次呼叫的測試名逗號串]}(開頭量基準那幾次不算)。"""
+    out = {}
+    for names, st in calls:
+        if st != "base":
+            out.setdefault(st, []).append(names)
+    return out
+
+
+def _ckm_inproc(root, fake, fn, log=None, **env):
+    """在行程內跑 fn(模組)(cwd 是 root、環境照 _ck_env)→ (回傳值, 標準輸出, 標準錯誤)。"""
+    import contextlib
+    import io
+    m = _load_lumos_inproc()
+    o_env, o_cwd = dict(_os_mod.environ), _os_mod.getcwd()
+    _os_mod.environ.update(_ck_env(fake, log, **env))
+    _os_mod.chdir(root)
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            got = fn(m)
+    finally:
+        _os_mod.chdir(o_cwd)
+        _os_mod.environ.clear()
+        _os_mod.environ.update(o_env)
+    return got, out.getvalue(), err.getvalue()
+
+
+def _ckm_recipes(groups, tests=_CKM_TESTS, plat=None):
+    """壞法編號 → 臨時配方(每支測試一條、group g<編號>);old 給字串時照用(S5 對不到的那案)。"""
+    out = []
+    for g in groups:
+        old = g if isinstance(g, str) else f"        val k{g} = a{g} === b{g}"
+        new = old.replace("===", "!==")
+        name = "gx" if isinstance(g, str) else f"g{g}"
+        out += [{"invariant": f"{name}|{t}", "test": t, "file": _CHOICE_MAIN, "old": old, "new": new, "group": name,
+                 **({"platform": plat} if plat else {})} for t in tests]
+    return out
+
+
+def t_choice_kill_merge_cmd():
+    """[選擇點變異加速 S1] 合併指令怎麼組、什麼時候不合併。判準來源:計劃預期值表 S1(run_cmd `./gradlew :app:testDebugUnitTest --tests '*{method}'`
+    守 cCase、aCase、bCase → 一條指令依序 `--tests '*aCase'`、`'*bCase'`、`'*cCase'`;非 Gradle、不帶模組、`--tests "* {method}"`、組出 40000 位元組
+    → 每支各一次)與〈做法〉1 的條件(名稱檢查沒過、平台 flaky 也不合併)。翻紅釘:不排序 → 第一條紅;另起一套引號 → 「每段字面相同」紅;
+    拿掉任一條件 → 那一案紅。"""
+    import types
+    m = _load_lumos_inproc()
+    cmd = "./gradlew :app:testDebugUnitTest --tests '*{method}'"
+    sh = m._choice_merge_shape(cmd)
+    got = m._choice_merge_cmd(cmd, sh, ["cCase", "aCase", "bCase"], "ident") if sh else ""
+    check("S1 守 cCase、aCase、bCase → 一條指令依名排序三段 --tests", got == "./gradlew :app:testDebugUnitTest --tests '*aCase' --tests '*bCase' --tests '*cCase'", got)
+    names = ["a Case", "b'Case", "cCase"]
+    got = m._choice_merge_cmd(cmd, sh, names, "ident") if sh else ""
+    pre = "./gradlew :app:testDebugUnitTest --tests "
+    segs = [m._run_cmd_expand(cmd, n)[len(pre):] for n in sorted(names)]
+    check("S1 每一段的字面跟逐支跑時那一段相同(名字含空白與單引號)", got == pre + " --tests ".join(segs), f"{got}\n{segs}")
+    eq = "./gradlew :app:testDebugUnitTest --tests='*{method}'"
+    sh2 = m._choice_merge_shape(eq)
+    got = m._choice_merge_cmd(eq, sh2, ["bCase", "aCase"], "ident") if sh2 else ""
+    check("S1 `--tests=` 形狀:各段用空白接", got == "./gradlew :app:testDebugUnitTest --tests='*aCase' --tests='*bCase'", got)
+    py = "{python} -m x && ./gradlew :lib:test --tests '*{method}'"
+    sh3 = m._choice_merge_shape(py)
+    got = m._choice_merge_cmd(py, sh3, ["aCase", "bCase"], "ident") if sh3 else ""
+    check("S1 其餘佔位符照 _run_cmd_expand 代換、`:lib:test` 認得", sh3 is not None and "{python}" not in got and got.endswith("--tests '*aCase' --tests '*bCase'"), got)
+    for label, c in (("非 Gradle `{python} tests/run.py {method}`", "{python} tests/run.py {method}"),
+                     ("任務不帶模組 `./gradlew testDebugUnitTest`", "./gradlew testDebugUnitTest --tests '*{method}'"),
+                     ("引號不成對 `--tests \"* {method}\"`", "./gradlew :app:testDebugUnitTest --tests \"* {method}\""),
+                     ("{method} 兩次", "./gradlew :app:testDebugUnitTest --tests '*{method}' --tests '{method}X'"),
+                     ("前面不是 --tests", "./gradlew :app:testDebugUnitTest -Pm='*{method}'"),
+                     ("兩個 Gradle 段", "./gradlew :app:assemble && ./gradlew :app:testDebugUnitTest --tests '*{method}'"),
+                     ("兩個 Gradle 段(測試任務在前)", "./gradlew :app:testDebugUnitTest --tests '*{method}' && ./gradlew :app:lint"),
+                     ("引號包著空白(那一段引號不成對)", "./gradlew :app:testDebugUnitTest --tests '*{method} x'"),
+                     ("兩個單元測試任務", "./gradlew :app:testDebugUnitTest :lib:test --tests '*{method}'")):
+        check(f"S1 {label} → 不合併", m._choice_merge_shape(c) is None, str(m._choice_merge_shape(c)))
+    check("S1 `_gradle_unit_test_task`:`:app:testDebugUnitTest`、`a:b:test` 認得;`testDebugUnitTest`、`:app:testDebug`、`:app:..:test` 不認",
+          m._gradle_unit_test_task(":app:testDebugUnitTest") == (["app"], "testDebugUnitTest") and m._gradle_unit_test_task("a:b:test") == (["a", "b"], "test")
+          and all(m._gradle_unit_test_task(t) is None for t in ("testDebugUnitTest", ":app:testDebug", ":app:..:test", "test", ":test")))
+    check("S1 `_gradle_test_module` 照舊(變體任務回 None,擋 Android test 那支靠它)", m._gradle_test_module(":app:testDebugUnitTest") is None
+          and m._gradle_test_module(":app:test") == ["app"])
+    long_names = [f"n{i:05d}" + "x" * 30 for i in range(1100)]
+    big = m._choice_merge_cmd(cmd, sh, long_names, "ident")
+    check("S1 組出 40000 位元組以上 → 超過長度上限", len(big.encode()) > 40000 and m._choice_merge_too_long(big)
+          and not m._choice_merge_too_long(m._choice_merge_cmd(cmd, sh, long_names[:5], "ident")), str(len(big)))
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    try:
+        mg = m._KillMerge(_ckm_time.monotonic() + 1800, 3)
+        base = dict(plat="app", run_cmd=cmd, pentry={"root": str(tmp), "profile": {"name_filter": "ident"}, "profile_name": "kotlin-junit"},
+                    coll_cache={}, run_dir=str(tmp), wt=str(tmp), flaky=False, node_dirty=False)
+        ok = m._kill_merge_ready(mg, types.SimpleNamespace(**base), ["aCase", "bCase"])
+        check("S1 ★對照★ 條件都成立 → 合併(結果資料夾在工作樹裡的 app/build/test-results/testDebugUnitTest)",
+              ok is not None and str(ok["rdir"]).endswith(_os_mod.path.join("app", "build", "test-results", "testDebugUnitTest")), str(ok))
+        for label, kw, methods in (("有一支名稱檢查沒過", {}, ["aCase", "b,Case"]), ("平台標 flaky", {"flaky": True}, ["aCase", "bCase"]),
+                                   ("計劃筆記有未提交改動", {"node_dirty": True}, ["aCase", "bCase"]),
+                                   ("組出的指令超過長度上限", {}, long_names)):
+            got = m._kill_merge_ready(m._KillMerge(_ckm_time.monotonic() + 10 ** 6, 3), types.SimpleNamespace(**dict(base, **kw)), methods)
+            check(f"S1 {label} → 那個平台組不合併", got is None, str(got))
+    finally:
+        _ck_cleanup(tmp)
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    root = fake = None
+    try:
+        log = tmp / "run.log"
+        root, fake = _ckm_repo(2, {}, run_cmd="gradlew testDebugUnitTest --tests '*{method}'")
+        r = _ck_run(root, fake, runlog=log)
+        calls = _ckm_calls(log)
+        check("S1 e2e:任務不帶模組 → 每支各一次 Gradle(沒有合併呼叫)、照判存活", calls and all("," not in n for n, _s in calls)
+              and len(_ck_gov(root, kind="choice-kill")) == 2, f"{calls}\n{r.stderr[-400:]}")
+    finally:
+        _ck_cleanup(root, fake, tmp)
+
+
+def t_choice_kill_merge_all_survive():
+    """[選擇點變異加速 S2] 合併呼叫寫出全部通過的結果檔、rc 0 → 判存活、judged merged、那個壞法只呼叫一次 Gradle。判準來源:計劃預期值表 S2
+    (3 支測試、結果檔 3 筆都 passed → 存活、judged merged、該壞法 1 次)。翻紅釘:快篩通過照樣走逐支 → 「只一次」紅;judged 沒帶 → merged 那條紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    root = fake = None
+    try:
+        log = tmp / "run.log"
+        root, fake = _ckm_repo(2, {})
+        r = _ck_run(root, fake, runlog=log)
+        ph = _ckm_phase(_ckm_calls(log))
+        one = "alphaCase,bravoCase,charlieCase"
+        check("S2 每個壞法只呼叫一次 Gradle、帶三支", ph == {"1": [one], "2": [one]}, f"{ph}\n{r.stderr[-400:]}")
+        evs = _ck_by_file(_ck_gov(root, kind="choice-kill"))
+        got = [(evs.get(_ck_fp(i, 2), {}).get("verdict"), evs.get(_ck_fp(i, 2), {}).get("judged")) for i in (1, 2)]
+        check("S2 兩個壞法都判存活、judged merged、rc 1", got == [("survived", "merged")] * 2 and r.returncode == 1, f"rc={r.returncode} {got}")
+    finally:
+        _ck_cleanup(root, fake, tmp)
+
+
+def t_choice_kill_merge_failure_goes_single():
+    """[選擇點變異加速 S3] 合併快篩有失敗(排序 a、b、c,b 與 c 失敗)→ 丟掉合併結果、照逐支流程:a 存活、b 殺掉、c 略過,killed by b、judged single;
+    壞法階段跟 --no-merge 的壞法階段只差開頭那一次合併呼叫。判準來源:計劃預期值表 S3。翻紅釘:合併有失敗就判殺掉(歸給第一個失敗的)→ 逐支
+    呼叫不見那條紅;合併有失敗卻記存活 → killed 那條紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    try:
+        beh = {"bravoCase": {"kill": [1]}, "charlieCase": {"kill": [1]}}
+        got, jobs = {}, []
+        for label, args in (("merge", ()), ("single", ("--no-merge",))):
+            root, fake = _ckm_repo(2, beh)
+            roots += [root, fake]
+            jobs.append((label, root, fake, args, tmp / f"{label}.log"))
+        rs = _ckm_run_many([(rt, fk, a, lg, "3", {}) for _l, rt, fk, a, lg in jobs])
+        for (label, rt, _fk, _a, lg), r in zip(jobs, rs):
+            got[label] = (_ckm_phase(_ckm_calls(lg)), _ck_by_file(_ck_gov(rt, kind="choice-kill")), r)
+        ph, evs, r = got["merge"]
+        check("S3 壞法 1:合併 1 次後逐支 a、b(c 略過)", ph.get("1") == ["alphaCase,bravoCase,charlieCase", "alphaCase", "bravoCase"], f"{ph}\n{r.stderr[-300:]}")
+        e1 = evs.get(_ck_fp(1, 2), {})
+        check("S3 壞法 1 killed by bravoCase、judged single", e1.get("verdict") == "killed" and e1.get("killing_test") == "kotlin-junit:bravoCase"
+              and e1.get("judged") == "single", str(e1))
+        ph2, evs2, _r2 = got["single"]
+        check("S3 --no-merge 壞法階段是 a、b 兩次逐支,跟合併版去掉開頭那次相同", ph2.get("1") == ["alphaCase", "bravoCase"] and ph.get("1", [])[1:] == ph2.get("1"),
+              f"{ph2} {ph}")
+        check("S3 兩種跑法判定相同", [(evs[k].get("verdict"), evs[k].get("killing_test")) for k in sorted(evs)]
+              == [(evs2[k].get("verdict"), evs2[k].get("killing_test")) for k in sorted(evs2)], f"{evs}\n{evs2}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_kill_merge_unclean_goes_single():
+    """[選擇點變異加速 S4] 合併快篩沒跑乾淨的七案(逾時/rc 1 無失敗案例/不寫結果檔/零案例結果檔/9 MiB 結果檔/某支對不到/rc 1 輸出編譯錯誤而無結果檔)
+    都照逐支流程跑、判定跟 --no-merge 相同;合併不判殺掉、不判編不過(編不過那案的編不過來自逐支第一支)。判準來源:計劃預期值表 S4。
+    翻紅釘:任一類被當成通過 → 那個壞法少了逐支呼叫、判定變存活而紅;編不過那案由合併判 → 逐支第一支不見而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    try:
+        beh = {"__merge__": {"1": "hang", "2": "rc1", "3": "noxml", "4": "zero", "5": "big", "6": "misname"},
+               "alphaCase": {"compile": [7], "kill": [1, 3, 4, 5]}}   # 結果檔讀不到的四案在逐支第一支就殺掉(少跑幾支);rc 1 與對不到兩案要沒有失敗
+        got, jobs = {}, []
+        for label, args in (("merge", ()), ("single", ("--no-merge",))):
+            root, fake = _ckm_repo(7, beh)
+            roots += [root, fake]
+            jobs.append((label, root, fake, args, tmp / f"{label}.log"))
+        rs = _ckm_run_many([(rt, fk, a, lg, "3", {}) for _l, rt, fk, a, lg in jobs])
+        for (label, rt, _fk, _a, lg), r in zip(jobs, rs):
+            got[label] = (_ckm_phase(_ckm_calls(lg)), _ck_by_file(_ck_gov(rt, kind="choice-kill")), r)
+        ph, evs, r = got["merge"]
+        ph2, evs2, _r2 = got["single"]
+        cases = ("逾時", "rc 1 無失敗案例", "不寫結果檔", "零案例結果檔", "9 MiB 結果檔", "某支對不到", "rc 1 編譯錯誤無結果檔")
+        for i, label in enumerate(cases, 1):
+            k = str(i)
+            a, b = evs.get(_ck_fp(i, 7), {}), evs2.get(_ck_fp(i, 7), {})
+            check(f"S4 {label}:先一次合併、再照逐支(跟 --no-merge 的逐支呼叫相同)",
+                  (ph.get(k) or [""])[0] == "alphaCase,bravoCase,charlieCase" and ph.get(k, [])[1:] == ph2.get(k) and ph2.get(k), f"{ph.get(k)} {ph2.get(k)}")
+            check(f"S4 {label}:判定與原因跟 --no-merge 相同、judged single",
+                  (a.get("verdict"), a.get("killing_test"), str(a.get("reason", "")).split(":")[0]) == (b.get("verdict"), b.get("killing_test"), str(b.get("reason", "")).split(":")[0])
+                  and a.get("verdict") and a.get("judged") == "single", f"{a}\n{b}\n{r.stderr[-300:]}")
+        e7 = evs.get(_ck_fp(7, 7), {})
+        check("S4 編不過那案:no_result「壞法編不過」,來自逐支第一支(alphaCase 跑過)", e7.get("verdict") == "no_result"
+              and str(e7.get("reason", "")).startswith("壞法編不過") and ph.get("7", [])[1:] == ["alphaCase"], f"{e7} {ph.get('7')}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_kill_merge_weak_skips():
+    """[選擇點變異加速 S5] 寫入後修改時間沒錯開 → 不跑合併、逐支流程;old 在檔裡出現 2 次 → 記 drifted、不跑任何 Gradle;快篩通過而還原後
+    修改時間沒錯開 → 存活列帶弱證據、判跑不出結果。判準來源:計劃預期值表 S5 三列。翻紅釘:寫入沒錯開照跑合併 → 第一案紅;drifted 那組跑了 Gradle → 第二案紅;
+    還原沒錯開不記 _mtime_unsure → 第三案判成存活而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    root = fake = None
+    m = _load_lumos_inproc()
+    orig = m._kill_after_write
+
+    def patched(fail_at):
+        n = [0]
+
+        def f(path, state):
+            n[0] += 1
+            return False if n[0] == fail_at else orig(path, state)
+        return f
+    try:
+        log = tmp / "a.log"
+        root, fake = _ckm_repo(2, {})
+        m._kill_after_write = patched(1)
+        try:
+            rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_choice_kill(mm.Env(Path(root) / _KSP_V), diff="main..HEAD"), log=log)
+        finally:
+            m._kill_after_write = orig
+        ph = _ckm_phase(_ckm_calls(log))
+        check("S5 套壞法 1 寫入後修改時間沒錯開 → 不跑合併、逐支 a、b、c", ph.get("1") == ["alphaCase", "bravoCase", "charlieCase"], f"{ph}\n{err[-300:]}")
+        check("S5 ★對照★ 壞法 2 照跑合併", ph.get("2") == ["alphaCase,bravoCase,charlieCase"], str(ph))
+        _ck_cleanup(root, fake)
+        log = tmp / "b.log"
+        root, fake = _ckm_repo(2, {})
+        rows = []
+        mg = m._KillMerge(_ckm_time.monotonic() + 600, 2)
+        rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
+            mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes(["===", 2]), source="choice-kill",
+            stop_group_on=mm._CHOICE_STOP_ON, on_row=rows.append, should_stop=lambda: False, merge=mg), log=log)
+        gx = [r["verdict"] for r in rows if r.get("group") == "gx"]
+        calls = _ckm_calls(log)
+        check("S5 old 在檔裡出現 2 次 → 三條都記 drifted", gx == ["drifted"] * 3, f"{rows}\n{err[-300:]}")
+        check("S5 drifted 那組沒跑任何 Gradle(只有基準與壞法 2)", {s for _n, s in calls} <= {"base", "2"} and ("alphaCase,bravoCase,charlieCase", "2") in calls, str(calls))
+        _ck_cleanup(root, fake)
+        log = tmp / "c.log"
+        root, fake = _ckm_repo(2, {})
+        m._kill_after_write = patched(2)
+        try:
+            rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_choice_kill(mm.Env(Path(root) / _KSP_V), diff="main..HEAD"), log=log)
+        finally:
+            m._kill_after_write = orig
+        ph = _ckm_phase(_ckm_calls(log))
+        e1 = _ck_by_file(_ck_gov(root, kind="choice-kill")).get(_ck_fp(1, 2), {})
+        check("S5 快篩通過而還原後修改時間沒錯開 → 只跑合併那次、判跑不出結果(弱證據:修改時間沒錯開)", ph.get("1") == ["alphaCase,bravoCase,charlieCase"]
+              and e1.get("verdict") == "no_result" and "修改時間沒錯開" in str(e1.get("reason")), f"{ph} {e1}\n{err[-300:]}")
+    finally:
+        m._kill_after_write = orig
+        _ck_cleanup(root, fake, tmp)
+
+
+def t_choice_kill_merge_baseline():
+    """[選擇點變異加速 S6] 合併開著:第一個壞法之前把單支基準在乾淨樹上量齊(各 1 次)、再跑一次合併基準;合併基準有失敗或 rc 不是 0 → 標準錯誤印
+    實際原因、這次不合併、逐支流程直接用已量的單支基準。判準來源:計劃預期值表 S6 三案。翻紅釘:基準照舊用到才量 → 「第一個壞法之前」紅;
+    合併基準不看就啟用 → 後兩案出現合併呼叫而紅;原因不印 → 那兩條紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    try:
+        one = "alphaCase,bravoCase,charlieCase"
+        cases = (("全綠", {}, None), ("aCase 只在一起跑時紅", {"__merge__": {"base": "fail"}}, "合併基準有失敗"),
+                 ("rc 1", {"__merge__": {"base": "rc1"}}, "合併基準 rc 不是 0"))
+        jobs = []
+        for i, (_label, beh, _word) in enumerate(cases):
+            root, fake = _ckm_repo(2, beh)
+            roots += [root, fake]
+            jobs.append((root, fake, (), tmp / f"{i}.log", "3", {}))
+        rs = _ckm_run_many(jobs)
+        for (label, _beh, word), job, r in zip(cases, jobs, rs):
+            calls = _ckm_calls(job[3])
+            check(f"S6 {label}:三支單支基準各 1 次、在第一個壞法之前,接著一次合併基準", calls[:4] == [(t, "base") for t in _CKM_TESTS] + [(one, "base")]
+                  and sum(1 for c in calls if c[1] == "base") == 4, f"{calls}\n{r.stderr[-300:]}")
+            ph = _ckm_phase(calls)
+            if word is None:
+                check(f"S6 {label} → 啟用合併", ph.get("1") == [one], str(ph))
+            else:
+                check(f"S6 {label} → 標準錯誤印「{word}」、不合併(壞法階段沒有合併呼叫)", word in r.stderr
+                      and all("," not in n for v in ph.values() for n in v) and ph.get("1") == list(_CKM_TESTS), f"{ph}\n{r.stderr[-400:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_kill_merge_baseline_deadline():
+    """[選擇點變異加速 S7] 合併基準上限 = min(max(單支總和 × 2, 下限), 剩下的總時限);量到第 3 支單支基準時收到 SIGINT → 第 4 支基準沒跑、記 interrupted 的 run。
+    判準來源:計劃預期值表 S7(300 秒、下限 20、剩 3000 → 600;剩 400 → 400)。翻紅釘:沒取 min → 400 那條紅;基準之間不看停止旗標 → 第 4 支跑了而紅。"""
+    import signal as _sig
+    m = _load_lumos_inproc()
+    check("S7 單支總和 300、下限 20、剩 3000 → 600", m._choice_merge_base_cap(300.0, 20.0, 3000.0) == 600.0)
+    check("S7 剩 400 → 400", m._choice_merge_base_cap(300.0, 20.0, 400.0) == 400.0)
+    check("S7 總和很小時用下限", m._choice_merge_base_cap(3.0, 20.0, 3000.0) == 20.0)
+    if not hasattr(_sig, "SIGINT") or _os_mod.name == "nt":
+        raise _SrcOnly("非 POSIX,中斷那段沒驗到")
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    root = fake = None
+    try:
+        log, mark = tmp / "run.log", tmp / "mark"
+        tests = _CKM_TESTS + ("deltaCase",)
+        root, fake = _ckm_repo(2, {"__mark__": {"names": "charlieCase", "state": "base", "sleep": 2}}, tests=tests)
+        p = subprocess.Popen([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "choice-kill", "--diff", "main..HEAD"], cwd=root,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_ck_env(fake, log, CK_MARK=str(mark)),
+                             stdin=subprocess.DEVNULL, preexec_fn=_ppc_sigint_default)
+        t0 = _ckm_time.time()
+        while not mark.exists() and p.poll() is None and _ckm_time.time() - t0 < 120:
+            _ckm_time.sleep(0.05)
+        p.send_signal(_sig.SIGINT)
+        _out, err = p.communicate(timeout=120)
+        calls = _ckm_calls(log)
+        runs = _ck_gov(root, kind="run")
+        check("S7 第 3 支基準跑完就停:第 4 支(deltaCase)基準沒跑、沒有壞法呼叫", ("charlieCase", "base") in calls and ("deltaCase", "base") not in calls
+              and not _ckm_phase(calls), f"{calls}\n{err[-300:]}")
+        check("S7 記 interrupted 的 run、rc 2、沒有判定", len(runs) == 1 and runs[0].get("interrupted") is True and p.returncode == 2
+              and not _ck_gov(root, kind="choice-kill"), f"rc={p.returncode} {runs}")
+    finally:
+        _ck_cleanup(root, fake, tmp)
+
+
+def t_choice_kill_merge_breaker():
+    """[選擇點變異加速 S8] 同一平台組連續 5 個壞法的合併快篩逾時 → 印一行、剩下的壞法不再跑合併、run 的 merge_tripped 是真;中間夾一次「通過」歸零;
+    夾「編不過」「有失敗」既不計數也不歸零(數到第 7 個才跳開)。判準來源:計劃預期值表 S8 三案。翻紅釘:門檻差一 → 第一案第 6 個仍合併或第 5 個就停;
+    通過不歸零 → 第二案跳開而紅;編不過或有失敗歸零 → 第三案沒跳開而紅;計數 → 第 5 個就跳開而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    one = "alphaCase,bravoCase,charlieCase"
+    try:
+        cases = (("連續 5 次逾時", 6, {str(i): "hang" for i in (1, 2, 3, 4, 5, 6)}, {}, 5, True),
+                 ("第 3 個通過", 6, {str(i): "hang" for i in (1, 2, 4, 5, 6)}, {}, 6, False),
+                 ("第 3 個編不過、第 4 個有失敗", 8, {str(i): "hang" for i in (1, 2, 5, 6, 7, 8)},
+                  {"alphaCase": {"compile": [3]}, "bravoCase": {"kill": [4]}}, 7, True))
+        jobs = []
+        for i, (_label, n, mm, beh, _mn, _tr) in enumerate(cases):
+            hangs = [int(k) for k, v in mm.items() if v == "hang"]
+            # 逾時的壞法在逐支第一支就殺掉(少跑幾支,省時間;斷路器只看合併那一次)
+            root, fake = _ckm_repo(n, dict(beh, __merge__=mm, alphaCase=dict(beh.get("alphaCase", {}), kill=hangs)))
+            roots += [root, fake]
+            jobs.append((root, fake, (), tmp / f"{i}.log", "2", {}))
+        rs = _ckm_run_many(jobs)
+        for (label, n, mm, beh, merged_n, tripped), job, r in zip(cases, jobs, rs):
+            root = job[0]
+            ph = _ckm_phase(_ckm_calls(job[3]))
+            had = [i for i in range(1, n + 1) if (ph.get(str(i)) or [""])[0] == one]
+            runs = _ck_gov(root, kind="run")
+            check(f"S8 {label}:前 {merged_n} 個跑合併、之後不跑", had == list(range(1, merged_n + 1)), f"{had} {ph}\n{r.stderr[-300:]}")
+            check(f"S8 {label}:{'印一行、merge_tripped 真' if tripped else '沒跳開、merge_tripped 假'}",
+                  (("合併連續 5 次沒跑乾淨" in r.stderr) == tripped) and runs and runs[-1].get("merge_tripped") is tripped, f"{runs}\n{r.stderr[-300:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_kill_merge_interrupt():
+    """[選擇點變異加速 S9] 中斷:合併快篩跑到一半送 SIGTERM → 當場收掉、那個壞法無帳、run interrupted、rc 2;合併基準跑到一半送 SIGHUP → 當場收掉、不合併;
+    套完壞法、開快篩前收到 → 還原、不開快篩、無帳;逐支流程中送 SIGINT → 那一支跑完才停;連送兩次 → 強制結束。判準來源:計劃預期值表 S9 五案。
+    翻紅釘:第一個訊號的回呼不收合併程序 → 前兩案等到 60 秒逾時而紅;開快篩前不看停止旗標 → 第三案多一次合併呼叫而紅。"""
+    import signal as _sig
+    if not hasattr(_sig, "SIGHUP") or _os_mod.name == "nt":
+        raise _SrcOnly("非 POSIX,這段沒驗到")
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    one = "alphaCase,bravoCase,charlieCase"
+
+    def go(beh, sig, twice=False):
+        log, mark = tmp / "run.log", tmp / "mark"
+        log.unlink(missing_ok=True)
+        mark.unlink(missing_ok=True)
+        root, fake = _ckm_repo(2, beh)
+        roots.extend([root, fake])
+        p = subprocess.Popen([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "choice-kill", "--diff", "main..HEAD"], cwd=root,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_ck_env(fake, log, floor="60", CK_MARK=str(mark)),
+                             stdin=subprocess.DEVNULL, preexec_fn=_ppc_sigint_default)
+        t0 = _ckm_time.time()
+        while not mark.exists() and p.poll() is None and _ckm_time.time() - t0 < 120:
+            _ckm_time.sleep(0.05)
+        t1 = _ckm_time.time()
+        p.send_signal(sig)
+        if twice:
+            _ckm_time.sleep(0.5)
+            p.send_signal(sig)
+        _out, err = p.communicate(timeout=120)
+        return root, p.returncode, _ckm_time.time() - t1, _ck_log(log), err
+    try:
+        root, rc, secs, rows, err = go({"__mark__": {"names": one, "state": "1", "sleep": 60}}, _sig.SIGTERM)
+        runs = _ck_gov(root, kind="run")
+        check("S9 合併快篩中送 SIGTERM → 當場收掉(不等 60 秒)、那個壞法無帳", secs < 30 and [one, "1", "end"] not in rows
+              and not _ck_gov(root, kind="choice-kill"), f"{secs:.1f}s {rows}\n{err[-300:]}")
+        check("S9 快篩那案:run interrupted、rc 2", rc == 2 and len(runs) == 1 and runs[0].get("interrupted") is True, f"rc={rc} {runs}")
+        root, rc, secs, rows, err = go({"__mark__": {"names": one, "state": "base", "sleep": 60}}, _sig.SIGHUP)
+        runs = _ck_gov(root, kind="run")
+        check("S9 合併基準中送 SIGHUP → 當場收掉、不合併(沒有壞法呼叫)、run interrupted、rc 2", secs < 30 and not [x for x in rows if x[1] != "base"]
+              and rc == 2 and len(runs) == 1 and runs[0].get("interrupted") is True, f"{secs:.1f}s rc={rc} {rows} {runs}\n{err[-300:]}")
+        root, rc, secs, rows, err = go({"bravoCase": {"kill": [1]}, "__mark__": {"names": "alphaCase", "state": "1", "sleep": 2}}, _sig.SIGINT)
+        calls = [tuple(x[:3]) for x in rows]
+        check("S9 逐支流程中送 SIGINT → 那一支跑完(有 end)才停、下一支沒跑、run interrupted", ("alphaCase", "1", "end") in calls
+              and ("bravoCase", "1", "start") not in calls and rc == 2, f"rc={rc} {calls}\n{err[-300:]}")
+        root, rc, secs, rows, err = go({"bravoCase": {"kill": [1]}, "__mark__": {"names": "alphaCase", "state": "1", "sleep": 60}}, _sig.SIGINT, twice=True)
+        check("S9 連送兩次 → 強制結束(不等那一支)、rc 2", secs < 30 and rc == 2 and "強制結束" in err, f"{secs:.1f}s rc={rc}\n{err[-300:]}")
+    finally:
+        _ck_cleanup(*roots)
+    m = _load_lumos_inproc()
+    root, fake = _ckm_repo(2, {})
+    orig = m._kill_after_write
+    flag, rows = [False], []
+
+    def f(path, state):
+        flag[0] = True   # 套完壞法、寫入讀回之後:模擬這時收到第一個訊號
+        return orig(path, state)
+    try:
+        log = tmp / "c.log"
+        log.unlink(missing_ok=True)
+        m._kill_after_write = f
+        try:
+            rc, out, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
+                mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2]), source="choice-kill", keep_worktree=True,
+                stop_group_on=mm._CHOICE_STOP_ON, on_row=rows.append, should_stop=lambda: flag[0], merge=m._KillMerge(_ckm_time.monotonic() + 600, 2)), log=log)
+        finally:
+            m._kill_after_write = orig
+        calls = _ckm_calls(log)
+        check("S9 套完壞法、開快篩前已收到訊號 → 沒開快篩、沒有任何列(不記帳)", not _ckm_phase(calls) and rows == [], f"{calls} {rows}\n{err[-300:]}")
+        kept = next((ln.split("現場保留: ", 1)[1].strip() for ln in out.splitlines() if "現場保留: " in ln), "")
+        now = (Path(kept) / _CHOICE_MAIN).read_text(encoding="utf-8") if kept and (Path(kept) / _CHOICE_MAIN).is_file() else None
+        check("r1 邊界 #2 開快篩前已停 → 被改的檔內容回到原文(保留的工作樹裡讀)", now == (Path(root) / _CHOICE_MAIN).read_text(encoding="utf-8"),
+              f"{kept} {now!r}"[:300])
+        if kept:
+            _ck_cleanup(str(Path(kept).parent))
+    finally:
+        _ck_cleanup(root, fake, tmp)
+
+
+def t_choice_kill_merge_multi_platform():
+    """[選擇點變異加速 S10] 兩個平台守同一個壞法:A 合併快篩全部存活、B 逐支殺掉 → killed by B 那支、judged single;兩邊都快篩全存活 → survived、judged merged;
+    A 已決定性殺掉 → B 不跑快篩、交略過列。判準來源:計劃預期值表 S10 三案。翻紅釘:judged 只看任一平台 → 第一案 merged 而紅;
+    B 不看 stopped 就跑快篩 → 第三案多一次合併呼叫而紅。"""
+    import contextlib
+    import io
+    import types
+    m = _load_lumos_inproc()
+    loc = f"{_CHOICE_MAIN}:5"
+    ident = {"file": _CHOICE_MAIN, "fp": "f" * 16, "row": "C-7", "old": "o", "new": "n", "new_sha": "a" * 16}
+    names = (("app", "aCase"), ("app", "bCase"), ("lib", "kCase"), ("lib", "lCase"))
+    tests = [{"plat": p, "name": n, "ref": f"{p}:{n}", "clauses": [f"Projects/選擇_計劃#S{i}"], "plans": ["Projects/選擇_計劃.md"],
+              "keys": [("Projects/選擇_計劃.md", i)]} for i, (p, n) in enumerate(names, 1)]
+    guard = {"tests": tests, "live": ["Projects/選擇_計劃.md"]}
+
+    def go(verdicts, merged_plats):
+        kr = m._ChoiceKillRun(types.SimpleNamespace(find=lambda _n: "Projects/選擇_計劃.md"), Path("/nonexistent"), "d" * 40, guard, {}, "s" * 16, 60)
+        kr.out = io.StringIO()
+        x = {"file": _CHOICE_MAIN, "line": 5, "fp": "f" * 16, "mutant": {"row": "C-7", "identity": ident}}
+        kr.plan_of[loc] = {"x": x, "order": list(names), "tests": {(t["plat"], t["name"]): t for t in tests}, "rows": {}, "done": False,
+                           "plats": {p for p, _n in names}}
+        kr.recipes = [{"invariant": f"{loc}|{n}", "test": n, "platform": p, "file": _CHOICE_MAIN, "old": "o", "new": "n", "group": loc} for p, n in names]
+        got = []
+
+        def fake_gk(env, node, recipes_override=None, on_row=None, merge=None, **_kw):
+            for p in merged_plats:
+                merge.survived.setdefault(p, set()).add(loc)
+            for r in recipes_override:
+                on_row({"recipe_id": m._kill_recipe_id("Projects/選擇_計劃.md", r), "platform": r["platform"], "group": r["group"],
+                        "verdict": verdicts[(r["platform"], r["test"])], "weak": False, "weak_why": [], "detail": "", "compile_error": False, "fail_excerpt": ""})
+            return 0
+        saved = (m.cmd_guard_kill, m._choice_record)
+        m.cmd_guard_kill, m._choice_record = fake_gk, (lambda _rr, _h, extra: got.append(extra) or True)
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                kr.run()
+        finally:
+            m.cmd_guard_kill, m._choice_record = saved
+        return got
+    got = go({("app", "aCase"): "survived", ("app", "bCase"): "survived", ("lib", "kCase"): "killed", ("lib", "lCase"): "skipped"}, ["app"])
+    check("S10 A 快篩全存活、B 的 kCase 殺掉 → killed by lib:kCase、judged single", got and got[0]["verdict"] == "killed"
+          and got[0]["killing_test"] == "lib:kCase" and got[0].get("judged") == "single", str(got)[:400])
+    got = go({k: "survived" for k in names}, ["app", "lib"])
+    check("S10 兩邊都快篩全存活 → survived、judged merged", got and got[0]["verdict"] == "survived" and got[0].get("judged") == "merged", str(got)[:400])
+    got = go({k: "survived" for k in names}, ["app"])
+    check("S10 ★對照★ 只有 A 快篩判存活、B 逐支存活 → survived、judged single", got and got[0]["verdict"] == "survived" and got[0].get("judged") == "single",
+          str(got)[:400])
+    cfg = {"platforms": {"app": {"profile": "kotlin-junit", "root": ".", "run_cmd": _CKM_CMD},
+                         "lib": {"profile": "kotlin-junit", "root": ".", "run_cmd": _CKM_CMD}}, "default_platform": "app"}
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    root, fake = _ckm_repo(2, {"alphaCase": {"kill": [1]}}, tests=("alphaCase", "bravoCase", "kiloCase", "limaCase"), config=cfg)
+    try:
+        log = tmp / "run.log"
+        rows = []
+        recs = _ckm_recipes([1, 2], tests=("alphaCase", "bravoCase"), plat="app") + _ckm_recipes([1, 2], tests=("kiloCase", "limaCase"), plat="lib")
+        rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
+            mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=recs, source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON,
+            on_row=rows.append, should_stop=lambda: False, merge=mm._KillMerge(_ckm_time.monotonic() + 600, 2)), log=log)
+        calls = _ckm_calls(log)
+        lib1 = [r["verdict"] for r in rows if r.get("platform") == "lib" and r.get("group") == "g1"]
+        check("S10 A 已決定性殺掉壞法 1 → B 不跑快篩、交略過列", lib1 == ["skipped", "skipped"] and ("kiloCase,limaCase", "1") not in calls
+              and ("kiloCase,limaCase", "2") in calls, f"{lib1} {calls}\n{err[-300:]}")
+    finally:
+        _ck_cleanup(root, fake, tmp)
+
+
+def t_choice_kill_merge_ledger_counts():
+    """[選擇點變異加速 S11] 一次呼叫有合併判存活 2 個、逐支殺掉 1 個、檔不在平台 repo 1 個 → 帳上每個壞法一筆帶對的 judged(依序 merged、merged、single、single),
+    run 那筆 merged 2、single 2、base_secs > 0、merge_tripped 等於選用物件帶出的斷路器狀態;gov 讀帳在 ck 帶出 ran、base_secs、merged、single、
+    merge_tripped、judged,缺 judged 的舊帳讀成 single。判準來源:計劃預期值表 S11。翻紅釘:run 不數判法 → merged/single 紅;ck 少欄 → gov 那條紅。"""
+    import contextlib
+    import io
+    import json as _j
+    import types
+    m = _load_lumos_inproc()
+    root, fake = _ckm_repo(1, {})
+    o_cwd = _os_mod.getcwd()
+    try:
+        _os_mod.chdir(root)
+        tests = [{"plat": "kotlin-junit", "name": n, "ref": n, "clauses": [f"Projects/選擇_計劃#S{i}"], "plans": ["Projects/選擇_計劃.md"],
+                  "keys": [("Projects/選擇_計劃.md", i)]} for i, n in enumerate(("aCase", "bCase"), 1)]
+        guard = {"tests": tests, "live": ["Projects/選擇_計劃.md"]}
+        kr = m._ChoiceKillRun(types.SimpleNamespace(find=lambda _n: "Projects/選擇_計劃.md"), Path(root), "d" * 40, guard, {}, "s" * 16, 60)
+        kr.out = io.StringIO()
+        order = [("kotlin-junit", "aCase"), ("kotlin-junit", "bCase")]
+        for i in (1, 2, 3, 4):
+            loc = f"{_CHOICE_MAIN}:{i}"
+            ident = {"file": _CHOICE_MAIN, "fp": f"{i:016x}", "row": "C-7", "old": "o", "new": "n", "new_sha": "a" * 16}
+            x = {"file": _CHOICE_MAIN, "line": i, "fp": ident["fp"], "mutant": {"row": "C-7", "identity": ident}}
+            kr.plan_of[loc] = {"x": x, "order": list(order), "tests": {(t["plat"], t["name"]): t for t in tests}, "rows": {}, "done": False,
+                               "plats": set() if i == 4 else {"kotlin-junit"}}   # 同 add():有配方的平台
+            if i == 4:
+                for k in order:
+                    kr.plan_of[loc]["rows"][k] = {"verdict": "error", "weak": False, "compile_error": False, "weak_why": [], "detail": "不在平台 repo",
+                                                  "fail_excerpt": ""}
+                continue
+            kr.recipes += [{"invariant": f"{loc}|{n}", "test": n, "platform": p, "file": _CHOICE_MAIN, "old": "o", "new": "n", "group": loc} for p, n in order]
+
+        def fake_gk(env, node, recipes_override=None, on_row=None, merge=None, **_kw):
+            merge.survived.setdefault("kotlin-junit", set()).update({f"{_CHOICE_MAIN}:1", f"{_CHOICE_MAIN}:2"})
+            merge.base_secs, merge.tripped = 0.4, True
+            for r in recipes_override:
+                v = "killed" if r["group"].endswith(":3") and r["test"] == "aCase" else ("skipped" if r["group"].endswith(":3") else "survived")
+                on_row({"recipe_id": m._kill_recipe_id("Projects/選擇_計劃.md", r), "platform": r["platform"], "group": r["group"], "verdict": v,
+                        "weak": False, "weak_why": [], "detail": "", "compile_error": False, "fail_excerpt": ""})
+            return 0
+        saved = m.cmd_guard_kill
+        m.cmd_guard_kill = fake_gk
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                kr.run()
+                m._choice_kill_report(kr, {"changed": 4, "lines": [], "ast_grep": "", "unverified": []}, Path(root), "d" * 40, {}, [], 0, 0, 30, 60)
+        finally:
+            m.cmd_guard_kill = saved
+        evs = _ck_gov(root, kind="choice-kill")
+        got = [(e.get("fp"), e.get("verdict"), e.get("judged")) for e in evs]
+        check("S11 judged 依序 merged、merged、single(逐支殺掉)、single(檔不在平台 repo)",
+              sorted(got) == [(f"{1:016x}", "survived", "merged"), (f"{2:016x}", "survived", "merged"), (f"{3:016x}", "killed", "single"),
+                              (f"{4:016x}", "no_result", "single")], str(got))
+        runs = _ck_gov(root, kind="run")
+        rx = runs[-1] if runs else {}
+        check("S11 run:merged 2、single 2、相加等於判定數、base_secs > 0、merge_tripped 等於斷路器狀態(真)",
+              rx.get("merged") == 2 and rx.get("single") == 2 and rx.get("merged", 0) + rx.get("single", 0) == rx.get("ran")
+              and type(rx.get("base_secs")) is int and rx["base_secs"] > 0 and rx.get("merge_tripped") is True, str(rx))
+        p = Path(root) / "docs" / ".governance-log.jsonl"
+        old = dict(evs[0], token="0" * 16, fp="9" * 16)
+        old.pop("judged", None)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(_j.dumps(old, ensure_ascii=False) + "\n")
+        seen = []
+        saved = m._render_gov_choice
+        m._render_gov_choice = lambda rows: seen.extend(rows)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                m.cmd_gov(m.Env(Path(root) / _KSP_V), stats=True)
+        finally:
+            m._render_gov_choice = saved
+        ck = [r.get("ck") or {} for r in seen if r.get("gate") == "choice-kill"]
+        run_ck = next((c for c in ck if c.get("merged") is not None), {})
+        check("S11 gov 讀帳:run 的 ck 帶 ran、base_secs、merged、single、merge_tripped", run_ck.get("ran") == 4 and run_ck.get("merged") == 2
+              and run_ck.get("single") == 2 and run_ck.get("merge_tripped") is True and run_ck.get("base_secs") == rx.get("base_secs"), str(run_ck))
+        judged = {c.get("fp"): c.get("judged") for c in ck if c.get("fp")}
+        check("S11 gov 讀帳:每筆的 ck 帶 judged、缺 judged 的舊帳讀成 single", judged.get(f"{1:016x}") == "merged" and judged.get("9" * 16) == "single"
+              and judged.get(f"{3:016x}") == "single", str(judged))
+    finally:
+        _os_mod.chdir(o_cwd)
+        _ck_cleanup(root, fake)
+
+
+def t_choice_kill_no_merge_unchanged():
+    """[選擇點變異加速 S13] 帶 --no-merge 或 LUMOS_SKIP_CHOICE_MERGE=1 → 輸出與帳跟現在相同(除 judged 一律 single 與 run 的新欄)、Gradle 呼叫數與順序
+    跟現在相同(基準用到才量、跟壞法交錯);值是 0、空字串、true → 照沒設、合併開著。判準來源:計劃預期值表 S13。現在的呼叫順序照
+    〈用詞〉逐支流程寫出(基準每條指令第一次用到才量、殺掉就停組)。翻紅釘:開關只認「有設」→ 0 那案沒合併而紅;--no-merge 仍先量齊基準 → 順序那條紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    beh = {"bravoCase": {"kill": [1]}}
+    now = [("alphaCase", "base"), ("alphaCase", "1"), ("bravoCase", "base"), ("bravoCase", "1"), ("alphaCase", "2"), ("bravoCase", "2"),
+           ("charlieCase", "base"), ("charlieCase", "2")]
+    try:
+        got, jobs = {}, []
+        for i, (label, args, env) in enumerate((("--no-merge", ("--no-merge",), {}), ("SKIP=1", (), {"LUMOS_SKIP_CHOICE_MERGE": "1"}),
+                                                ("SKIP=0", (), {"LUMOS_SKIP_CHOICE_MERGE": "0"}), ("SKIP 空字串", (), {"LUMOS_SKIP_CHOICE_MERGE": ""}),
+                                                ("SKIP=true", (), {"LUMOS_SKIP_CHOICE_MERGE": "true"}))):
+            root, fake = _ckm_repo(2, beh)
+            roots += [root, fake]
+            jobs.append((label, (root, fake, args, tmp / f"{i}.log", "3", env)))
+        rs = _ckm_run_many([j for _l, j in jobs])
+        for (label, j), r in zip(jobs, rs):
+            got[label] = (_ckm_calls(j[3]), _ck_gov(j[0], kind="choice-kill"), _ck_gov(j[0], kind="run"), r)
+        vol = {"ts", "token", "run_id", "commit", "secs", "judged", "merged", "single", "merge_tripped", "base_secs", "tests", "head_sha"}
+
+        def strip(evs):
+            return sorted(_json_sorted_dumps({k: v for k, v in e.items() if k not in vol}) for e in evs)
+        for label in ("--no-merge", "SKIP=1"):
+            calls, evs, runs, r = got[label]
+            check(f"S13 {label}:Gradle 呼叫數與順序跟現在相同(基準用到才量、殺掉就停組)", calls == now, f"{calls}\n{r.stderr[-300:]}")
+            check(f"S13 {label}:每筆 judged single、run 的 merged 0、single 2、merge_tripped 假、base_secs 0",
+                  [e.get("judged") for e in evs] == ["single", "single"] and runs and runs[0].get("merged") == 0 and runs[0].get("single") == 2
+                  and runs[0].get("merge_tripped") is False and runs[0].get("base_secs") == 0, f"{evs}\n{runs}")
+        a, b = got["--no-merge"], got["SKIP=1"]
+        def mask(t):
+            return _ckm_re.sub(r"耗時 \d+ 秒", "耗時 N 秒", t)
+        check("S13 --no-merge 與 SKIP=1 的帳(去掉新欄與隨機欄)與輸出逐字相同", strip(a[1]) == strip(b[1]) and strip(a[2]) == strip(b[2])
+              and mask(a[3].stdout) == mask(b[3].stdout), f"{a[3].stdout[-300:]}\n{b[3].stdout[-300:]}")
+        for label in ("SKIP=0", "SKIP 空字串", "SKIP=true"):
+            calls = got[label][0]
+            check(f"S13 LUMOS_SKIP_CHOICE_MERGE {label} → 照沒設、合併開著", ("alphaCase,bravoCase,charlieCase", "base") in calls, str(calls))
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def _json_sorted_dumps(d):
+    import json as _j
+    return _j.dumps(d, ensure_ascii=False, sort_keys=True)
+
+
+def t_choice_kill_merge_results_dir_fence():
+    """[選擇點變異加速 S14] 結果資料夾的真實路徑不在工作樹裡(-p 是絕對路徑或含 ..)→ 不刪不讀、那個平台組不合併、逐支跑。判準來源:計劃預期值表 S14
+    (-p /tmp/elsewhere;-p ../x)。翻紅釘:不圍 → 絕對路徑那案先刪掉樹外的哨兵檔而紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    try:
+        wt = tmp / "wt"
+        wt.mkdir()
+        out = tmp / "elsewhere"
+        for label, cmd in (("-p 絕對路徑", f"./gradlew -p {out} :app:testDebugUnitTest --tests '*{{method}}'"),
+                           ("-p ../x", "./gradlew -p ../x :app:testDebugUnitTest --tests '*{method}'")):
+            sh = m._choice_merge_shape(cmd)
+            check(f"S14 {label} → 結果資料夾不在工作樹裡、不合併", sh is not None and m._choice_merge_results_dir(str(wt), str(wt), sh) is None, str(sh))
+        sh = m._choice_merge_shape("./gradlew -p sub :app:testDebugUnitTest --tests '*{method}'")
+        got = m._choice_merge_results_dir(str(wt), str(wt), sh) if sh else None
+        check("S14 ★對照★ -p sub → <工作樹>/sub/app/build/test-results/testDebugUnitTest", got is not None
+              and Path(got) == Path(_os_mod.path.realpath(wt)) / "sub" / "app" / "build" / "test-results" / "testDebugUnitTest", str(got))
+        keep = out / "app" / "build" / "test-results" / "testDebugUnitTest" / "TEST-keep.xml"
+        keep.parent.mkdir(parents=True)
+        keep.write_text("<testsuite/>", encoding="utf-8")
+        log = tmp / "run.log"
+        root, fake = _ckm_repo(2, {}, run_cmd=f"gradlew -p {out} :app:testDebugUnitTest --tests '*{{method}}'")
+        roots += [root, fake]
+        r = _ck_run(root, fake, runlog=log)
+        calls = _ckm_calls(log)
+        check("S14 e2e -p 絕對路徑:樹外的哨兵檔沒被刪、沒有合併呼叫、逐支照判", keep.is_file() and calls and all("," not in n for n, _s in calls)
+              and len(_ck_gov(root, kind="choice-kill")) == 2, f"{calls}\n{r.stderr[-300:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_kill_merge_junit_read():
+    """[選擇點變異加速 S15] 完整名與對名:身分 `p.Outer$Inner::aCase(int)` 對到 `Inner.aCase`、`::aCase()` 對到 `aCase`、`p.K::a::b` 對到 `a::b`;
+    `p.K::[1] 5` 對不到(走逐支);零案例或超過案例數上限的結果檔 → 沒跑乾淨、不丟例外。判準來源:計劃預期值表 S15。
+    翻紅釘:$ 不換 → 第一案紅;在最後一個 :: 切 → 第三案紅;參數尾巴不去 → 第一、二案紅;拒收沒接 → 後兩案丟例外。"""
+    m = _load_lumos_inproc()
+    for cid, name in (("p.Outer$Inner::aCase(int)", "Inner.aCase"), ("::aCase()", "aCase"), ("p.K::a::b", "a::b")):
+        full = m._choice_merge_fullname(cid)
+        check(f"S15 {cid} 對到 {name}", m._choice_merge_hits([full], name) == 1, full)
+    full = m._choice_merge_fullname("p.K::[1] 5")
+    check("S15 `p.K::[1] 5` 對不到(`[1] 5`、`K`、`5` 都不算)", all(m._choice_merge_hits([full], n) == 0 for n in ("[1] 5", "5", "aCase")), full)
+    check("S15 兩個完整名都對到同一支 → 不是恰好一個", m._choice_merge_hits(["p.A.aCase", "q.B.aCase"], "aCase") == 2)
+    check("S15 只在名字中段吻合不算(`p.A.xaCase` 對不到 `aCase`;要在 . 邊界)", m._choice_merge_hits(["p.A.xaCase"], "aCase") == 0)
+    tq = m._secev_tq()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    saved = m._SECEV_FACTS_MAX
+    try:
+        def put(body):
+            for p in tmp.glob("*.xml"):
+                p.unlink()
+            (tmp / "TEST-x.xml").write_text(body, encoding="utf-8")
+        ok = ('<testsuite name="x" tests="2"><testcase classname="p.Outer$Inner" name="aCase(int)"/>'
+              '<testcase classname="" name="bCase()"/></testsuite>')
+        put(ok)
+        check("S15 ★對照★ 兩筆都通過、對得到 Inner.aCase 與 bCase → 通過", m._choice_merge_classify(0, "", False, str(tmp), ["Inner.aCase", "bCase"], tq)[0] == "pass")
+        check("S15 名字對不到 → 沒跑乾淨(不計斷路器)", m._choice_merge_classify(0, "", False, str(tmp), ["Inner.aCase", "cCase"], tq)[:3:2] == ("unclean", False))
+        for label, rc, tail in (("rc 是負數(被訊號收掉)", -9, ""), ("rc 137", 137, ""), ("Gradle 背景程序消失", 1, "Gradle build daemon disappeared unexpectedly"),
+                                ("測試行程被收掉", 1, "Process 'Gradle Test Executor 3' finished with non-zero exit value 137")):
+            got = m._choice_merge_classify(rc, tail, False, str(tmp), ["Inner.aCase", "bCase"], tq)
+            check(f"S15 {label} → 沒跑乾淨(被系統收掉)、計斷路器(結果檔再乾淨也一樣)", got[0] == "unclean" and got[2] is True, str(got))
+        got = m._choice_merge_classify(1, "e: file:///w/x.kt:3 boom", False, str(tmp / "nope"), ["aCase"], tq)
+        check("S15 rc 1、輸出編譯錯誤、沒有結果資料夾 → 編不過、不計斷路器", got[0] == "compile" and got[2] is False, str(got))
+        got = m._choice_merge_classify(0, "", False, str(tmp / "nope"), ["aCase"], tq)
+        check("S15 rc 0、沒有結果資料夾 → 沒跑乾淨、計斷路器", got[0] == "unclean" and got[2] is True, str(got))
+        put('<testsuite name="x" tests="2"><testcase classname="p.Outer$Inner" name="aCase(int)"><failure message="m">x</failure></testcase>'
+            '<testcase classname="" name="bCase()"/></testsuite>')
+        got = m._choice_merge_classify(1, "", False, str(tmp), ["Inner.aCase", "bCase"], tq)
+        check("S15 結果檔有 failure → 有失敗、不計斷路器", got[0] == "fail" and got[2] is False, str(got))
+        put('<testsuite name="x" tests="2"><testcase classname="p.Outer$Inner" name="aCase(int)"/><testcase classname="" name="bCase()"/>'
+            '<system-out>' + "x" * (9 * 1048576) + '</system-out></testsuite>')
+        got = m._choice_merge_classify(0, "", False, str(tmp), ["Inner.aCase", "bCase"], tq)
+        check("S15 單檔 9 MiB(內容本身全通過)→ 沒跑乾淨、計斷路器", got[0] == "unclean" and got[2] is True, str(got))
+        put('<testsuite name="x" tests="0"/>')
+        got = m._choice_merge_classify(0, "", False, str(tmp), ["aCase"], tq)
+        check("S15 零案例結果檔 → 沒跑乾淨、計斷路器、不丟例外", got[0] == "unclean" and got[2] is True, str(got))
+        put(ok)
+        m._SECEV_FACTS_MAX = 1
+        got = m._choice_merge_classify(0, "", False, str(tmp), ["Inner.aCase", "bCase"], tq)
+        check("S15 超過案例數上限 → 沒跑乾淨、不丟例外", got[0] == "unclean" and got[2] is True, str(got))
+    finally:
+        m._SECEV_FACTS_MAX = saved
+        _ck_cleanup(tmp)
+
+
+def t_choice_kill_merge_budget():
+    """[選擇點變異加速 S19] 剩下的總時限小於守的測試支數 × 10 秒 × 1.5、或這次要跑的壞法少於 2 個(含 --only 一行)→ 不合併、不先量齊基準、照現在用到才量;
+    時限夠 → 合併。判準來源:計劃預期值表 S19(64 支 900 秒不合併、1800 秒合併;這裡縮成 3 支:要 45 秒,--max-seconds 40 不合併、60 合併)。
+    翻紅釘:不看時限 → 40 秒那案先量齊而紅;壞法數不看 → --only 那案出現合併基準而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    one = "alphaCase,bravoCase,charlieCase"
+    try:
+        cases = (("--max-seconds 40", ("--max-seconds", "40"), False), ("--only 一行", ("--only", _ck_loc(1)), False),
+                 ("--max-seconds 60", ("--max-seconds", "60"), True))
+        jobs = []
+        for i, (_label, args, _merged) in enumerate(cases):
+            root, fake = _ckm_repo(2, {})
+            roots += [root, fake]
+            jobs.append((root, fake, args, tmp / f"{i}.log", "3", {}))
+        rs = _ckm_run_many(jobs)
+        for (label, _args, merged), job, r in zip(cases, jobs, rs):
+            calls = _ckm_calls(job[3])
+            if merged:
+                check(f"S19 {label} → 合併(先量齊三支基準與合併基準)", calls[:4] == [(t, "base") for t in _CKM_TESTS] + [(one, "base")], f"{calls}\n{r.stderr[-300:]}")
+            else:
+                check(f"S19 {label} → 不合併、基準用到才量(第一支基準後緊接第一個壞法)", calls[:2] == [("alphaCase", "base"), ("alphaCase", "1")]
+                      and all("," not in n for n, _s in calls), f"{calls}\n{r.stderr[-300:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_kill_merge_baseline_red():
+    """[選擇點變異加速 S20] 守 a、b、c,c 單支基準不綠 → 合併指令只含 a、b;快篩通過時 a、b 交 survived、c 交 abort,判存活;b、c 都不綠 → 不合併。
+    判準來源:計劃預期值表 S20。翻紅釘:基準紅的也放進合併 → 合併指令含 c 而紅;快篩通過把 c 也記 survived → aborted 那條紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    try:
+        log = tmp / "a.log"
+        root, fake = _ckm_repo(2, {"charlieCase": {"base_red": True}})
+        roots += [root, fake]
+        r = _ck_run(root, fake, runlog=log)
+        calls = _ckm_calls(log)
+        ph = _ckm_phase(calls)
+        check("S20 c 基準不綠 → 合併基準與快篩只含 a、b", ("alphaCase,bravoCase", "base") in calls and ph == {"1": ["alphaCase,bravoCase"], "2": ["alphaCase,bravoCase"]},
+              f"{calls}\n{r.stderr[-300:]}")
+        evs = _ck_by_file(_ck_gov(root, kind="choice-kill"))
+        e1 = evs.get(_ck_fp(1, 2), {})
+        check("S20 快篩通過:判存活、c 記基準不綠沒跑(aborted)、judged merged", e1.get("verdict") == "survived" and e1.get("aborted") == ["charlieCase"]
+              and e1.get("judged") == "merged", str(e1))
+        log = tmp / "b.log"
+        root, fake = _ckm_repo(2, {"bravoCase": {"base_red": True}, "charlieCase": {"base_red": True}})
+        roots += [root, fake]
+        r = _ck_run(root, fake, runlog=log)
+        calls = _ckm_calls(log)
+        check("S20 b、c 都不綠(綠的不到 2 支)→ 不合併(不跑合併基準:alpha 的基準只跑 1 次)", calls and all("," not in n for n, _s in calls)
+              and calls.count(("alphaCase", "base")) == 1, f"{calls}\n{r.stderr[-300:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_kill_merge_rollback_lines():
+    """[選擇點變異加速 S21] 帳上某行最新一筆是合併判的存活 → choice-points 在那一行印「存活(合併快篩判)」;--only 指到已放行的行 → choice-kill 印一行
+    說不會重跑、要先撤放行,而且不跑那一行。判準來源:計劃預期值表 S21。翻紅釘:choice-points 不看 judged → 第一條紅;--only 碰放行不印 → 第二條紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    root = fake = None
+    try:
+        root, fake = _ckm_repo(2, {})
+        _ck_run(root, fake)
+        r = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "choice-points", "--diff", "main..HEAD"], cwd=root,
+                           capture_output=True, text=True, env=_ck_env(fake), stdin=subprocess.DEVNULL, timeout=120)
+        lines = [ln for ln in r.stdout.splitlines() if _CHOICE_MAIN in ln]
+        check("S21 choice-points:兩行都印「存活(合併快篩判)」", len(lines) == 2 and all("存活(合併快篩判)" in ln for ln in lines), r.stdout[-600:] + r.stderr[-300:])
+        subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "帳"], cwd=root, capture_output=True)
+        w = subprocess.run([sys.executable, GRAPHCTL, "lint-waive", f"choice:{_ck_loc(1)}", "--note", "不適用:型別不合換了編不過不是需求", "--repo", str(root)],
+                           cwd=root, capture_output=True, text=True, env=_ck_env(fake), stdin=subprocess.DEVNULL)
+        subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "放行"], cwd=root, capture_output=True)
+        log = tmp / "run.log"
+        r = _ck_run(root, fake, "--only", _ck_loc(1), runlog=log)
+        check("S21 --only 指到已放行的行 → 印「已放行……先撤放行」、不跑 Gradle", w.returncode == 0 and "已放行" in r.stdout and "先撤放行" in r.stdout
+              and not _ckm_calls(log), f"waive rc={w.returncode} {w.stderr[-200:]}\n{r.stdout[-400:]}{r.stderr[-300:]}")
+    finally:
+        _ck_cleanup(root, fake, tmp)
+
+
+def t_choice_kill_merge_budget_reestimate():
+    """[代碼審 code-選擇點變異加速 r1 正確性 #1、資源 #3] 開跑那道「時限夠量齊」用固定單價估,單支基準實際比單價貴時會把時限吃光、一個壞法都不判。
+    修法(Blinky、Stryker 用不帶壞法那一輪實測的耗時估逾時):量完一支就用實測平均重估剩下的,不夠就不量、這個平台組不合併,已量的留給逐支;
+    被剩下時限截斷而逾時的那支基準不寫進 baselines。判準:同一情境合併模式交出的列跟 --no-merge 相同(至少不是零)、沒有 abort。
+    情境照正確性席 budget.py 縮小:固定單價放寬成 1 秒讓合併開著,每支單支基準實際 6 秒,總時限 11 秒。
+    翻紅釘:拿掉重估 → 量到第二支時被截斷、記 abort 或零進度而紅;截斷的基準照寫 → 第二支記 abort 而紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    saved = m._CHOICE_MERGE_UNIT_SECS
+    got = {}
+    try:
+        m._CHOICE_MERGE_UNIT_SECS = 1.0
+        for label, merged in (("merge", True), ("single", False)):
+            root, fake = _ckm_repo(2, {"__base_sleep__": 6})
+            roots += [root, fake]
+            log, rows = tmp / f"{label}.log", []
+
+            def fn(mm, rows=rows, merged=merged, root=root):
+                dl = _ckm_time.monotonic() + 11
+                return mm.cmd_guard_kill(mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2]), source="choice-kill",
+                                         stop_group_on=mm._CHOICE_STOP_ON, on_row=rows.append, should_stop=lambda: _ckm_time.monotonic() >= dl,
+                                         merge=mm._KillMerge(dl, 2) if merged else None)
+            _ckm_inproc(root, fake, fn, log=log)
+            got[label] = ([(r["group"], r["test"], r["verdict"]) for r in rows], _ckm_calls(log))
+    finally:
+        m._CHOICE_MERGE_UNIT_SECS = saved
+        _ck_cleanup(*roots, tmp)
+    (a, ca), (b, cb) = got["merge"], got["single"]
+    check("r1 正確性 #1 時限不夠量齊:合併模式交出的列跟 --no-merge 相同、不是零", a and a == b, f"merge={a} {ca}\nsingle={b} {cb}")
+    check("r1 正確性 #1 被截斷的基準不記 abort、不跑合併", all(v != "abort" for _g, _t, v in a) and all("," not in n for n, _s in ca), f"{a} {ca}")
+    # 重估過得了、但某一支單獨特別慢被剩下時限截斷:那支不寫進基準,逐支照完整上限重量(合併的時限另給 6 秒、停止旗標不設時限,看得到逐支的結果)
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    root, fake = _ckm_repo(2, {"__base_sleep_by__": {"bravoCase": 8}})
+    try:
+        m._CHOICE_MERGE_UNIT_SECS = 1.0
+        log, rows = tmp / "run.log", []
+        _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
+            mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2]), source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON,
+            on_row=rows.append, should_stop=lambda: False, merge=mm._KillMerge(_ckm_time.monotonic() + 6, 2)), log=log)
+        vs = [(r["group"], r["test"], r["verdict"]) for r in rows]
+        check("r1 正確性 #1 bravo 基準被剩下時限截斷 → 不記成基準非綠:六列都 survived、bravo 的基準照完整上限重量一次", len(vs) == 6
+              and all(v == "survived" for _g, _t, v in vs) and _ckm_calls(log).count(("bravoCase", "base")) == 2, f"{vs} {_ckm_calls(log)}")
+    finally:
+        m._CHOICE_MERGE_UNIT_SECS = saved
+        _ck_cleanup(root, fake, tmp)
+
+
+def t_choice_kill_merge_budget_edge():
+    """[代碼審 code-選擇點變異加速 r2 邊界 #1] 量基準中途重估的卡線:剩下時限剛好等於「還沒量的支數 × 已量平均 × 1.5」照量(超過才收手),少一點就收手。
+    直接呼叫 _kill_merge_singles,單支耗時固定 2 秒(換掉 _kill_run)、剩下時限固定,不睡。三支:量完第一支剩兩支 → 門檻 2 × 2 × 1.5 = 6。
+    翻紅釘:< 改 <= → 剩 6.0 那案收手而紅;拿掉重估 → 剩 5.99 那案量齊而紅。"""
+    import types
+    m = _load_lumos_inproc()
+    orig = m._kill_run
+    uniq = ["aCase", "bCase", "cCase"]
+    cmd_of = {x: f"run {x}" for x in uniq}
+    try:
+        m._kill_run = lambda cmd, run_dir, cap, **_kw: (0, "", 2.0, False)
+        for rem, ok in ((6.0, True), (5.99, False)):
+            mg = m._KillMerge(0, 2)
+            mg.remaining = lambda rem=rem: rem
+            c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
+                                      mstate={"unsure": False})
+            got = m._kill_merge_singles(mg, c, uniq, cmd_of)
+            check(f"r2 邊界 #1 已量 2 秒、剩兩支、剩 {rem} 秒(門檻 6)→ {'量齊' if ok else '收手'}", got is ok and (len(c.baselines) == 3) == ok,
+                  f"{got} {sorted(c.baselines)}")
+        # r3 邊界 #2、正確性 #1:耗時不等(1 秒、3 秒、1 秒)才分得出「平均」跟總和、最後一筆、最大值。剩 3.0:量完第一支門檻 1×2×1.5=3 照量;
+        # 量完第二支平均 2、門檻 2×1×1.5=3 照量 → 三支量齊。改成總和(門檻 6)或最後一筆、最大值(門檻 4.5)→ 第二支後就收手而紅。剩 2.99 → 第一支後收手。
+        took = {"run aCase": 1.0, "run bCase": 3.0, "run cCase": 1.0}
+        m._kill_run = lambda cmd, run_dir, cap, **_kw: (0, "", took[cmd], False)
+        for rem, n in ((3.0, 3), (2.99, 1)):
+            mg = m._KillMerge(0, 2)
+            mg.remaining = lambda rem=rem: rem
+            c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
+                                      mstate={"unsure": False})
+            got = m._kill_merge_singles(mg, c, uniq, cmd_of)
+            check(f"r3 邊界 #2 耗時 1、3、1 秒、剩 {rem} 秒 → 量了 {n} 支(重估用平均)", len(c.baselines) == n and got is (n == 3),
+                  f"{got} {sorted(c.baselines)}")
+        # r4 通才 #1、邊界 #1:1、3、1 秒那組分不出平均跟最小值、第一支。改用 1、5、1 秒、剩 3.0:量完第一支門檻 1×2×1.5=3 照量;
+        # 量完第二支平均 3、門檻 3×1×1.5=4.5 > 3 → 收手、量了 2 支。改成最小值或第一支(門檻 1×1×1.5=1.5)→ 照量第三支、量了 3 支而紅。
+        took = {"run aCase": 1.0, "run bCase": 5.0, "run cCase": 1.0}
+        mg = m._KillMerge(0, 2)
+        mg.remaining = lambda: 3.0
+        c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
+                                  mstate={"unsure": False})
+        got = m._kill_merge_singles(mg, c, uniq, cmd_of)
+        check("r4 通才 #1 耗時 1、5、1 秒、剩 3.0 秒 → 量了 2 支就收手(平均 3,不是最小值或第一支的 1)", got is False and len(c.baselines) == 2,
+              f"{got} {sorted(c.baselines)}")
+        # r4 邊界 #3:剩下時限已用完(負數)時,單支基準收到的上限要是保底 1 秒,不是負數。
+        caps = []
+        m._kill_run = lambda cmd, run_dir, cap, **_kw: (caps.append(cap), (0, "", 0.1, False))[1]
+        mg = m._KillMerge(0, 2)
+        mg.remaining = lambda: -5.0
+        c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
+                                  mstate={"unsure": False})
+        m._kill_merge_singles(mg, c, uniq, cmd_of)
+        check("r4 邊界 #3 剩下時限 -5 秒 → 第一支單支基準收到的上限是保底 1 秒", bool(caps) and caps[0] == 1.0, str(caps))
+    finally:
+        m._kill_run = orig
+
+
+def t_choice_kill_merge_signal_race():
+    """[代碼審 code-選擇點變異加速 r1 正確性 #2、資源 #1、通才 #4] 第一個訊號落在「看停止旗標」之後、合併程序登記進 _KILL_RUN_LIVE 之前:回呼收不到它,
+    合併呼叫會跑完整段。修法:登記之後再看一次 interrupted,是就當場收掉(用 pthread_sigmask 包 Popen 不可靠,Python 文件與 bpo-1975)。
+    做法照正確性席 race.py:在 _choice_merge_clear 裡觸發 on_signal。判準:合併基準與快篩兩處都當場收掉(假 Gradle 睡 60 秒,這次呼叫很快結束、沒有 end)。
+    翻紅釘:登記後不再看 → 等到 60 秒逾時而紅。"""
+    m = _load_lumos_inproc()
+    one = "alphaCase,bravoCase,charlieCase"
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    try:
+        for label, beh, nth, state in (("合併基準", {"__merge__": {"base": "hang"}}, 1, "base"), ("合併快篩", {"__merge__": {"1": "hang"}}, 2, "1")):
+            root, fake = _ckm_repo(2, beh)
+            roots += [root, fake]
+            log = tmp / f"{nth}.log"
+            mg = m._KillMerge(_ckm_time.monotonic() + 600, 2)
+            orig, n = m._choice_merge_clear, [0]
+
+            def clear(rdir, n=n, mg=mg, nth=nth, orig=orig):
+                n[0] += 1
+                if n[0] == nth:
+                    mg.on_signal()   # 真實處理器做的事;這時合併程序還沒登記
+                return orig(rdir)
+            m._choice_merge_clear = clear
+            t0 = _ckm_time.time()
+            try:
+                _rc, _o, err = _ckm_inproc(root, fake, lambda mm, mg=mg, root=root: mm.cmd_guard_kill(
+                    mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2]), source="choice-kill",
+                    stop_group_on=mm._CHOICE_STOP_ON, on_row=lambda _r: None, should_stop=lambda: mg.interrupted, merge=mg), log=log, floor="60")
+            finally:
+                m._choice_merge_clear = orig
+            secs = _ckm_time.time() - t0
+            rows = _ck_log(log)
+            # 當場收掉時假 Gradle 常常連 start 都來不及寫;判準是這次呼叫沒等那 60 秒、合併那次沒有跑完(沒有 end)
+            check(f"r1 正確性 #2 {label}:訊號在看旗標之後、登記之前 → 登記後當場收掉(不等 60 秒、沒有 end)", secs < 30
+                  and [one, state, "end"] not in rows, f"{secs:.1f}s {rows}\n{err[-300:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_kill_merge_screen_cap():
+    """[代碼審 code-選擇點變異加速 r1 資源 #2、邊界 #3] 快篩逾時上限 = min(max(合併基準耗時 × 5, 下限), max(剩下的總時限, 1))。判準:基準 10、下限 20、剩 1000 → 50;
+    剩 30 → 30;剩負數 → 1;基準 2 → 20(下限)。端到端:合併基準耗時大於下限時,一個耗時介於下限與基準 × 5 之間的快篩要通過(judged merged)。
+    翻紅釘:上限只用下限或乘數改 1 → 那次快篩逾時、交逐支(judged single)而紅;不取剩下時限 → 30 那案紅。"""
+    m = _load_lumos_inproc()
+    check("r1 資源 #2 基準 10、下限 20、剩 1000 → 50", m._choice_merge_screen_cap(10.0, 20.0, 1000.0) == 50.0)
+    check("r1 資源 #2 剩 30 → 30(不超過剩下的總時限)", m._choice_merge_screen_cap(10.0, 20.0, 30.0) == 30.0)
+    check("r1 資源 #2 剩負數 → 1", m._choice_merge_screen_cap(10.0, 20.0, -5.0) == 1.0)
+    check("r1 資源 #2 基準 2、下限 20 → 20", m._choice_merge_screen_cap(2.0, 20.0, 1000.0) == 20.0)
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    root = fake = None
+    try:
+        log = tmp / "run.log"
+        root, fake = _ckm_repo(2, {"__base_sleep__": 1, "__msleep__": {"base": 1.5, "1": 4}})
+        r = _ck_run(root, fake, runlog=log, floor="1")
+        ph = _ckm_phase(_ckm_calls(log))
+        e1 = _ck_by_file(_ck_gov(root, kind="choice-kill")).get(_ck_fp(1, 2), {})
+        check("r1 邊界 #3 合併基準約 1.5 秒(大於下限 1)、快篩 4 秒(介於下限與基準 × 5)→ 快篩通過、judged merged", ph.get("1") == ["alphaCase,bravoCase,charlieCase"]
+              and e1.get("judged") == "merged", f"{ph} {e1}\n{r.stderr[-300:]}")
+    finally:
+        _ck_cleanup(root, fake, tmp)
+
+
+def t_choice_kill_merge_cap_wiring():
+    """[代碼審 code-選擇點變異加速 r2 通才 #1、r3 通才 #1、邊界 #1、r4 邊界 #2、整合 #1] 合併基準與合併快篩兩個呼叫端都要把剩下的總時限傳進逾時上限。
+    只測上限的純函式時,呼叫端改回不帶剩下時限的寫法照綠;靠真實睡眠觀察程序被收掉的端到端案例在負載下隨機紅(r3 重現:並行四份三份紅)。
+    做法(業界 spy 斷言傳入的逾時參數,不等真實時間):攔下 _kill_run、照樣呼叫真的,記下帶合併標記那幾次收到的逾時值。
+    情境一:下限 300、總時限 60 秒、假 Gradle 不睡、三支都過 → 一次合併基準加兩個壞法的快篩,三次收到的逾時都 ≤ 60(下限 300 不得穿過剩下時限);
+    `--json` 輸出的存活列不帶 judged(判法只在收尾算一份;on_row 與 result_out 照欄位白名單另組列,碰不到,只有 --json 會把結果列整列吐出)。
+    情境二:量完三支單支基準後剩下時限變成 -5 秒 → 合併基準收到的上限是保底 1 秒,不是負數。
+    翻紅釘:合併基準呼叫端改成不帶剩下時限(例 1e9)→ 情境一第一次超過 60 而紅;快篩呼叫端改回 max(基準 × 5, 下限) → 後兩次 300 而紅;
+    合併基準拿掉 max(…, 1) → 情境二收到 -5 而紅;合併交出的結果列加帶 judged → 情境一 --json 那條紅。"""
+    import json
+    m = _load_lumos_inproc()
+    orig = m._kill_run
+    seen, singles = [], [0]
+
+    def spy(cmd, cwd, timeout, *a, **kw):
+        if kw.get("merge") is not None:
+            seen.append(timeout)
+        else:
+            singles[0] += 1
+        return orig(cmd, cwd, timeout, *a, **kw)
+
+    def run(mg, as_json=False):
+        tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+        root = fake = None
+        try:
+            root, fake = _ckm_repo(2, {})
+            m._kill_run = spy
+            return _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
+                mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", as_json=as_json, recipes_override=_ckm_recipes([1, 2]), source="choice-kill",
+                stop_group_on=mm._CHOICE_STOP_ON, on_row=lambda _r: None, should_stop=lambda: False, merge=mg), log=tmp / "run.log", floor="300")
+        finally:
+            m._kill_run = orig
+            _ck_cleanup(root, fake, tmp)
+    _rc, out, _err = run(m._KillMerge(_ckm_time.monotonic() + 60, 2), as_json=True)
+    try:
+        rows = json.loads(out.strip().splitlines()[-1])["results"]
+    except (ValueError, IndexError, KeyError):
+        rows = []
+    check("r3 合併基準與兩個快篩各呼叫一次(帶合併標記的呼叫有三次)", len(seen) == 3, str(seen))
+    check("r3 邊界 #1 合併基準收到的逾時 ≤ 剩下總時限 60(下限 300 不得穿過)", bool(seen) and 1.0 <= seen[0] <= 60.0, str(seen))
+    check("r2 通才 #1 兩個快篩收到的逾時都 ≤ 剩下總時限 60", len(seen) == 3 and all(1.0 <= t <= 60.0 for t in seen[1:]), str(seen))
+    check("r4 整合 #1 合併開著時 --json 輸出的存活列不帶 judged(判法只在收尾算一份)",
+          any(r.get("verdict") == "survived" for r in rows) and not any("judged" in r for r in rows), str(rows)[:400])
+    seen.clear()
+    singles[0] = 0
+    mg = m._KillMerge(_ckm_time.monotonic() + 600, 2)
+    mg.remaining = lambda: 60.0 if singles[0] < 3 else -5.0
+    run(mg)
+    check("r4 邊界 #2 量完單支基準後剩下時限 -5 秒 → 合併基準收到的上限是保底 1 秒", bool(seen) and seen[0] == 1.0, str(seen))
+
+
+def t_choice_kill_merge_edges():
+    """[代碼審 code-選擇點變異加速 r1 邊界 #1 #4 #5] 卡線:每檔都不超過單檔上限、合計超過合計上限 → 沒跑乾淨;單檔剛好等於上限不算超過;rc 127 不算被系統收掉、
+    rc 128 算;剩下時限剛好等於「支數 × 單價 × 1.5」照合併;量基準中途總時限到(不是訊號)→ 下一支基準不跑、不交列。上限常數縮小來測同一個比較式(省寫 64 MiB)。
+    翻紅釘:拿掉合計條件 → 合計那案通過而紅;> 改 >= → 剛好等於那案紅;128 改 129 或 127 也算 → 那兩案紅;< 改 <= → 剛好等於門檻那案紅;基準之間不看停止旗標 → 第三支跑了而紅。"""
+    import types
+    m = _load_lumos_inproc()
+    tq = m._secev_tq()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    saved = (m._CHOICE_MERGE_FILE_MAX, m._CHOICE_MERGE_TOTAL_MAX)
+    names = ["aCase", "bCase", "cCase"]
+
+    def put(size):
+        for p in tmp.glob("*.xml"):
+            p.unlink()
+        for n in names:
+            head = f'<testsuite name="x" tests="1"><testcase classname="x.T" name="{n}"/><system-out>'
+            tail = "</system-out></testsuite>"
+            (tmp / f"TEST-{n}.xml").write_text(head + "x" * (size - len(head) - len(tail)) + tail, encoding="utf-8")
+    try:
+        m._CHOICE_MERGE_FILE_MAX, m._CHOICE_MERGE_TOTAL_MAX = 1000, 2500
+        put(900)
+        got = m._choice_merge_classify(0, "", False, str(tmp), names, tq)
+        check("r1 邊界 #1 三檔各 900(不超單檔 1000)、合計 2700(超過 2500)→ 沒跑乾淨、計斷路器", got[0] == "unclean" and got[2] is True, str(got))
+        m._CHOICE_MERGE_TOTAL_MAX = 3000
+        put(1000)
+        got = m._choice_merge_classify(0, "", False, str(tmp), names, tq)
+        check("r1 邊界 #4 單檔剛好等於上限、合計剛好等於上限 → 不算超過(通過)", got[0] == "pass", str(got))
+        for rc, want in ((127, ("unclean", "rc 不是 0", False)), (128, ("unclean", "被系統收掉", True))):
+            got = m._choice_merge_classify(rc, "", False, str(tmp), names, tq)
+            check(f"r1 邊界 #4 rc {rc} → {want[1]}", got == want, str(got))
+    finally:
+        m._CHOICE_MERGE_FILE_MAX, m._CHOICE_MERGE_TOTAL_MAX = saved
+        _ck_cleanup(tmp)
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    try:
+        base = dict(plat="app", run_cmd="./gradlew :app:testDebugUnitTest --tests '*{method}'", flaky=False, node_dirty=False, coll_cache={},
+                    pentry={"root": str(tmp), "profile": {"name_filter": "ident"}, "profile_name": "kotlin-junit"}, run_dir=str(tmp), wt=str(tmp))
+        for rem, ok in ((45.0, True), (44.99, False)):
+            mg = m._KillMerge(0, 3)
+            mg.remaining = lambda rem=rem: rem
+            got = m._kill_merge_ready(mg, types.SimpleNamespace(**base), names)
+            check(f"r1 邊界 #4 三支、剩 {rem} 秒(門檻 45)→ {'合併' if ok else '不合併'}", (got is not None) == ok, str(got))
+    finally:
+        _ck_cleanup(tmp)
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    root, fake = _ckm_repo(2, {"__base_sleep__": 2}, tests=_CKM_TESTS + ("deltaCase",))
+    try:
+        log, rows = tmp / "run.log", []
+
+        def fn(mm):
+            stop_at = _ckm_time.monotonic() + 3
+            return mm.cmd_guard_kill(mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2], tests=_CKM_TESTS + ("deltaCase",)),
+                                     source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON, on_row=rows.append,
+                                     should_stop=lambda: _ckm_time.monotonic() >= stop_at, merge=mm._KillMerge(_ckm_time.monotonic() + 600, 2))
+        _ckm_inproc(root, fake, fn, log=log)
+        calls = _ckm_calls(log)
+        check("r1 邊界 #5 量基準中途總時限到 → 量完那支就停:第三支(charlieCase)基準沒跑、沒有壞法呼叫、不交列",
+              ("bravoCase", "base") in calls and ("charlieCase", "base") not in calls and not _ckm_phase(calls) and rows == [], f"{calls} {rows}")
+    finally:
+        _ck_cleanup(root, fake, tmp)
+
+
+def t_choice_kill_merge_no_lane_chunk():
+    """[代碼審 code-選擇點變異加速 r1 通才 #2] 某個壞法的配方沒有任何一支在合併道裡(那幾支單支基準全紅)→ 不套壞法、不開快篩,直接交逐支流程;
+    judged 不記 merged(這個壞法不進快篩判存活的集合)。判準來源:通才席重現(原本白跑一次快篩、還把它記成合併判)。
+    翻紅釘:不先看合併道 → 壞法 2 多一次合併呼叫、進了存活集合而紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    root, fake = _ckm_repo(2, {"charlieCase": {"base_red": True}})
+    try:
+        log, rows = tmp / "run.log", []
+        mg = m._KillMerge(_ckm_time.monotonic() + 600, 2)
+        recs = _ckm_recipes([1]) + _ckm_recipes([2], tests=("charlieCase",))
+        _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
+            mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=recs, source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON,
+            on_row=rows.append, should_stop=lambda: False, merge=mg), log=log)
+        calls = _ckm_calls(log)
+        g2 = [r["verdict"] for r in rows if r.get("group") == "g2"]
+        check("r1 通才 #2 壞法 2 只配 charlieCase(基準紅、不在合併道)→ 沒有合併呼叫、照逐支交 abort", ("alphaCase,bravoCase", "2") not in calls
+              and g2 == ["abort"], f"{calls} {rows}")
+        check("r1 通才 #2 壞法 2 不進快篩判存活的集合(judged 不會是 merged);壞法 1 照進", "g2" not in mg.survived.get("kotlin-junit", set())
+              and "g1" in mg.survived.get("kotlin-junit", set()), str(mg.survived))
+    finally:
+        _ck_cleanup(root, fake, tmp)
 
 
 # ── 選擇點表第二批(Projects/選擇點表第二批常見誤用寫法_計劃)──

@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-10
-updated: 2026-11-14
+updated: 2026-11-24
 self_audit: gpt-5.6-sol/2026-10-07
 about_code_stamp: batch-2026-08-23/2026-08-23/2faf3eec082c
 responsibility: guard kill 殺傷力驗證:合約配方(kill-add/kill-rm)、隔離工作樹裡套宣告式壞法跑綁定測試的八態判定、殺傷力帳本與背書讀者;也是人裁(situation-rule)與改動選擇點(choice-kill)臨時配方的唯一判法(它們只用選用參數接上)。不負責:挑哪些行產生壞法(規格閘的選擇點那段)、治理帳的判定紀錄
@@ -52,6 +52,16 @@ summary: |-
   PITFALL:兩個平台各有一支同名測試守同一個壞法時,配方身分(_kill_recipe_id 不含平台)撞號,choice-kill 收列時一支永遠收不到、存活被記成缺結果、殺掉被記到另一個平台 [出處:代碼審 code-改動選擇點 r1 b22] [根因:_ChoiceKillRun 只用配方身分對回列] [修法:對回時用 (配方身分, 平台);列上本來就帶平台] [test:t_choice_kill_same_name_two_platforms]
   PITFALL:guard kill 原地數 old 與配方判讀用 str.count(不算重疊出現),old 在檔裡重疊出現兩次時被當成恰好一次、replace 第一處改到的可能是別處 [出處:代碼審 code-改動選擇點 r1 b11 同族] [根因:Python str.count 只算不重疊 https://docs.python.org/3/library/stdtypes.html#str.count] [修法:兩處改走 _count_overlapping(重疊也算;說明字面照舊「命中 N 次」「原文出現 N 次」)] [test:t_choice_unique_overlapping]
   WHY:cmd_guard_kill 的新選用參數(stop_group_on、on_row、should_stop、source)另有一支直接守「不傳時同組兩條都跑、沒有略過列;傳 stop_group_on 時略過列不算進 rc 與全部 killed 的配方數」 [出處:代碼審 code-改動選擇點 r1 k4;[[Projects/改動選擇點都要有需求守住_計劃]] 範圍 2] [因:rc 優先序與 --json 純度兩條合約原本只靠 choice-kill 的端到端測試間接守] [test:t_choice_guard_kill_new_params]
+  WHY:cmd_guard_kill 多一個選用參數 merge(_KillMerge,跟 _KillHooks 同形)給 choice-kill 的合併快篩:能合併的平台組(_kill_merge_ready:run_cmd 是帶模組的 Gradle 單元測試任務、恰好一個 {method} 接在 --tests 後、名稱檢查都過、不 flaky、筆記沒未提交、剩下時限夠量齊、結果資料夾在工作樹裡、指令不超長)開跑先在乾淨樹上量齊單支基準、再跑一次合併基準;每個壞法先把單支基準綠的測試合成一次 Gradle 呼叫,結果檔逐檔交 _secev_junit_facts,乾淨而且沒有失敗才整批記存活,其餘配方原樣交回逐支迴圈本體(_kill_merge_iter 是產生器,本體一字不改);同一平台組連續 5 次逾時、讀不出、沒有結果檔或被系統收掉就停用(斷路器);不傳時行為與輸出不變 [出處:[[Projects/選擇點變異加速_計劃]];Gradle 文件多個 --tests 都生效 https://docs.gradle.org/current/userguide/java_testing.html] [因:存活的壞法要跑完全部測試,每次 Gradle 呼叫的固定成本是大頭;合併只判存活,判錯的方向是多擋不是放行] [不選:合併也判殺掉(兩輪設計審卡在歸因);另抽一支共用的殺傷力函式(本篇既有否決)] [test:t_choice_kill_merge_all_survive]
+  WHY:合併快篩照計劃做法 3 的步驟分成套壞法 _kill_merge_apply、讀結果檔 _choice_merge_facts、斷路器 _kill_merge_breaker、交存活列 _kill_merge_emit,_kill_merge_screen 只留順序 [出處:2026-11-23 代碼審派審前 lint-new] [因:新增告警閘擋複雜度超過 10 的函式,這個 repo 正式程式的先例是拆函式、不放行,只有一次性量測腳本放行過] [不選:lint-waive 放行] [test:t_choice_kill_merge_breaker]
+  WHY:訊號處理 _situation_rule_signals 的狀態物件多一個選用回呼 on_first:第一個訊號(SIGINT、SIGTERM、SIGHUP 一樣)記下之後呼叫一次,回呼出錯不擋;choice-kill 設成 _KillMerge.on_signal,當場收掉 _KILL_RUN_LIVE 裡帶合併標記的程序群組(_kill_run 的 merge 給 _KillMerge 時在 Popen 物件上設 _lumos_merge、先標再登記,登記後再看一次 interrupted),合併快篩那個壞法不交列、合併基準那次不合併,接著停;單支基準與逐支配方照現在等那一支跑完;套完壞法、開快篩之前再看一次停止旗標;不設回呼的呼叫端(人裁 situation-rule、guard kill)行為不變 [出處:[[Projects/選擇點變異加速_計劃]] 做法 4;第三輪設計審資源席的兩個空窗] [因:合併呼叫一次可能 2.5–5 分鐘,對話工具逾時與 timeout 先送 SIGTERM、隔幾秒送 SIGKILL,不當場收會拖過寬限期] [不選:另開一張程序登記表;第一個訊號就收所有測試程序(逐支流程照現在只等一支)] [test:t_choice_kill_merge_interrupt]
+  PITFALL:合併快篩開跑量齊單支基準時,單支實際比「支數 × 10 秒 × 1.5」那道門的單價貴,會把總時限吃光、一個壞法都不判(--no-merge 同情境至少判 1 個) [出處:代碼審 code-選擇點變異加速 r1 正確性 #1、資源 #3、r2 邊界 #1、r4 通才 #1、邊界 #1 #3] [根因:門檻只用固定單價估、被截斷而逾時的那支照寫進基準又丟停止] [修法:量完一支就用實測平均重估剩下的(業界 Stryker、Blinky 用不帶壞法那一輪實測的耗時估),不夠就不合併、退回逐支、已量的留著,截斷的那支不寫進基準(_kill_merge_singles)] [test:t_choice_kill_merge_budget_reestimate] [test:t_choice_kill_merge_budget_edge]
+  PITFALL:第一個訊號落在看完停止旗標之後、合併程序登記之前,回呼收不到、合併呼叫跑完整段 [出處:代碼審 code-選擇點變異加速 r1 正確性 #2、資源 #1、通才 #4] [根因:收程序只靠回呼看登記表] [修法:_kill_run 登記合併程序之後再看一次 interrupted、是就當場收(pthread_sigmask 包 Popen 不可靠,bpo-1975)] [test:t_choice_kill_merge_signal_race]
+  PITFALL:快篩逾時上限不受剩下總時限約束,一次快篩可能超出 --max-seconds 好幾分鐘;只測上限的純函式時,呼叫端改回舊算式測試照綠 [出處:代碼審 code-選擇點變異加速 r1 資源 #2、r2 通才 #1、r3 通才 #1、邊界 #1] [根因:上限只看合併基準耗時與下限] [修法:快篩上限加 min(…, max(剩下總時限, 1))(_choice_merge_screen_cap),合併基準呼叫端同族(r3 邊界 #1);測試攔下 _kill_run 斷言兩處收到的逾時值,不用真實睡眠的端到端案例(負載下隨機紅,r3 通才 #1)] [test:t_choice_kill_merge_cap_wiring]
+  PITFALL:壞法的配方一支都不在合併道(那幾支單支基準全紅)時照開一次快篩,還把它記成合併判 [出處:代碼審 code-選擇點變異加速 r1 通才 #2] [根因:開快篩前沒看配方跟合併道有沒有交集] [修法:_kill_merge_in_lane 先看,沒有交集就不套壞法、直接交逐支] [test:t_choice_kill_merge_no_lane_chunk]
+  PITFALL:判法(judged)在交出的列與收尾各記一份,交出列上那份沒有讀者、兩份可能不一致 [出處:代碼審 code-選擇點變異加速 r1 整合 #4、通才 #1、架構對齊 #2、r4 整合 #1] [根因:建構後才設的合併旗標讓兩處各算一次] [修法:判法只在 _ChoiceKillRun 收尾算一份,結果列不帶 judged(on_row 與 result_out 照欄位白名單另組列,只有 --json 會整列吐出,測試看 --json)] [test:t_choice_kill_merge_cap_wiring] [test:t_choice_kill_merge_ledger_counts]
+  PITFALL:比對兩次各自卡總時限的 choice-kill 測試(合併對 --no-merge),把睡眠與時限同比例縮小會在機器忙時隨機紅,兩邊跑到的壞法數誰多誰少都會發生(合併要先量基準、多一段開銷) [出處:代碼審 code-選擇點變異加速 r2 修正關卡,減半版並行三份兩份紅] [根因:固定開銷不隨比例縮小,絕對餘裕不夠] [修法:這類測試保留原本的絕對時限;要縮短耗時改用直接呼叫函式、換掉執行與剩餘時限的卡線測試] [test:t_choice_kill_merge_budget_reestimate]
+  PITFALL:測試總檔新加的小工具函式跟既有的同名時,後定義的會靜靜蓋掉前面那個,兩處都改用新版本、本機子集照綠,只有全套的重複定義檢查會紅 [出處:2026-11-24 選擇點加速 PR CI 紅] [根因:功能分支推送前只跑文件子集,重複定義檢查只在全套跑] [修法:新工具函式先 grep 測試總檔有沒有同名] [test:t_test_file_no_duplicate_defs]
 related:
   - "[[Projects/guard殺傷力驗證_計劃]]"
   - "[[Systems/check-t-sentinel]]"
