@@ -17,6 +17,8 @@ file: `scripts/lumos`(`_kill_merge_iter` 的 `try/except _KillHalt`,即 diff 第
 - 但「中斷記 `merge_off`」是計劃〈做法〉3 列出的原因,卻沒有任何測試或驗收條款綁它。
 - 這個漏洞不在 S10 的條款裡,所以不升 major。
 
+severity: minor
+
 blocking: 否(守的是計劃〈做法〉3 列的原因,不是驗收條款;給不出會做出錯行為的具體輸入)
 
 ## Finding 2:「基準量不齊」的時限提示串接沒有測試守
@@ -32,6 +34,8 @@ file: `scripts/lumos`(`_kill_merge_base`,diff 第 788–791 行),搭配 `_kill_m
 - 我追過這條路徑的算式,沒找到會算錯的輸入:
   - `c.merge_need` 在 `_kill_merge_singles` 每次迴圈先設好,收手時一定有值,且在 `_kill_merge_base` 開頭先清成 None。
   - X 一律 ≥ 已花秒數 + 約需秒數,所以照提示重跑不會再被同一道門擋下。
+
+severity: minor
 
 blocking: 否(只是覆蓋面可以更完整,提示字串錯了也只多印錯誤文字,不影響判定)
 

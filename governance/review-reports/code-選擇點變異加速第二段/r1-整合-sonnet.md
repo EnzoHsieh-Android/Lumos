@@ -36,6 +36,8 @@ severity: minor
 
 **1. S10 條款字面與「對不到名字」那案的實際輸出不符**
 
+severity: minor
+
 引句：「各印一行 `⚠ <平台>:這次不合併(<原因>)`,`merge_off` 應 分別記 `指令過長`、`名稱檢查沒過`、`合併道不足 2 支`、`合併基準:對不到名字`」
 
 - 前三案實際輸出跟條款一致。
@@ -47,6 +49,9 @@ severity: minor
 - blocking: 否，措辭與精度層級，做法與測試一致。
 
 **2. 手冊還寫「這次跑 2 個以上壞法時」才合併**
+
+severity: minor
+
 - file: `skills/lumos-project-notes/commands/06-代碼審與推送.md:18`
 - 該行寫著「run_cmd 是帶模組的 Gradle 單元測試任務(…)而且這次跑 2 個以上壞法時,預設先把單支基準綠的測試合成一次呼叫…時限不夠量齊就不合併」。
 - 現在一個壞法也合併，不合併時會印原因，手冊都沒提。
@@ -54,12 +59,18 @@ severity: minor
 - blocking: 否，說明過期，不會讓人做錯操作。
 
 **3. 另外兩處「排序第一支」或「原樣交回」過期**
+
+severity: minor
+
 - file: `docs/lumos-toolchain-knowledge/Projects/改動選擇點都要有需求守住_計劃.md:203`，S8 條款寫「帶排序第一支殺掉它的測試」。
 - file: `docs/lumos-toolchain-knowledge/Systems/guard-kill.md:55`，舊 WHY 寫「其餘配方原樣交回逐支迴圈本體」，現在有失敗時會先紅重排。
 - 兩處都不在〈落點〉清單裡，判定語意沒變，只是說法過期。
 - blocking: 否。
 
 **4. 偏離 ②③ 沒回寫到計劃**
+
+severity: minor
+
 - 引句：「每個不合併的平台組印一行到標準錯誤,照既有格式」
 - 〈做法〉3 的原因清單含 `中斷`，印字句沒寫例外。程式與 guard-kill 筆記都寫「中斷不印」。
 - 引句：「讀沒有這兩欄的舊帳 應 當 none 與 0」
@@ -68,6 +79,9 @@ severity: minor
 - blocking: 否。
 
 **5. S7 的 `t0` 接線沒有測試守**
+
+severity: minor
+
 - file: `scripts/lumos:79071` 附近，`_ChoiceKillRun` 建 `_KillMerge` 時傳 `t0=self.t0`。
 - 我在 `/tmp` 的複本拿掉 `t0=self.t0` 後跑 `-k t_choice_kill_merge_budget_hint`，仍 5 passed。S7 測試自己建 `_KillMerge(..., t0=now-40)`，真正的接線沒被驗。
 - 實際影響很小：不傳時 `t0` 用建構當下的時間，只少算建構前那幾秒。
@@ -76,6 +90,9 @@ severity: minor
 - blocking: 否，講不出會讓行為出錯的具體改壞，降為 minor。
 
 **6. S2 預期值表寫 a、b、c、d，測試實際只有 a、b、c**
+
+severity: minor
+
 - 引句：「三案都照 a、b、c、d 原順序,跟 `--no-merge` 相同」
 - 測試 `t_choice_kill_merge_failed_first` 的 S2 段用的是 `_CKM_TESTS` 三支，只有 S1 段用四支 `_CKM_T4`。
 - blocking: 否。
