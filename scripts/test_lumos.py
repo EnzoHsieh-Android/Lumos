@@ -147780,7 +147780,8 @@ def t_choice_kill_merge_off_reasons():
     補案(r1 i5、b1):指令形狀不支援、平台不穩或筆記未提交、讀結果檔的模組不在、結果資料夾不在工作樹各一案;只守 1 支(去重後)而時限也不夠 → 記合併道不足 2 支、
     不印時限提示(照提示帶大時限也不會合併)。
     翻紅釘:合併基準的原因照 _CHOICE_MERGE_BASE_WHY 換字或帶數字 → 對不到名字那案紅;啟用的平台也算進 merge_off → 兩平台那案紅;時限門不在最後 → 對照那案記時限不夠而紅;
-    不足 2 支的判斷在時限門之後 → 只守 1 支那案記時限不夠而紅。"""
+    不足 2 支的判斷在時限門之後 → 只守 1 支那案記時限不夠而紅。
+    r2 e1:量基準途中總時限用完(沒收到訊號)→ 記「時限到」(不是「中斷」)、不印;翻紅釘:不看 mg.interrupted 一律記中斷 → 那案紅。"""
     import contextlib
     import io
     import types
@@ -147845,6 +147846,30 @@ def t_choice_kill_merge_off_reasons():
         finally:
             m._choice_gate_event = saved
         check("S10 兩平台:run 的 merge_off 只有 {lib: 合併基準:逾時}(啟用的不算)", got and got[0].get("merge_off") == {"lib": "合併基準:逾時"}, str(got)[:300])
+        # 代碼審 r2 e1:量基準途中總時限用完(不是訊號)→ 記「時限到」、不印;run 的 interrupted 是假(照 t_choice_kill_merge_edges 的卡線:單支 2 秒、3 秒停)
+        root, fake = _ckm_repo(2, {"__base_sleep__": 2}, tests=_CKM_TESTS + ("deltaCase",))
+        roots += [root, fake]
+        mg = m._KillMerge(_ckm_time.monotonic() + 600)
+
+        def fn(mm, mg=mg, root=root):
+            stop_at = _ckm_time.monotonic() + 3
+            return mm.cmd_guard_kill(mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2], tests=_CKM_TESTS + ("deltaCase",)),
+                                     source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON, on_row=lambda _r: None,
+                                     should_stop=lambda: _ckm_time.monotonic() >= stop_at, merge=mg)
+        _rc, _o, err = _ckm_inproc(root, fake, fn, log=tmp / "deadline.log")
+        check("r2 e1 量基準途中總時限到 → mg.plats {kotlin-junit: (False, 時限到)}、沒收到訊號、不印「這次不合併」",
+              mg.plats == {"kotlin-junit": (False, "時限到")} and mg.interrupted is False and "這次不合併" not in err, f"{mg.plats} {mg.interrupted}\n{err[-300:]}")
+        kr = types.SimpleNamespace(merge=mg, judged={}, plan_of={}, stats={"killed": 0, "survived": 0, "no_result": 0}, run_id="r", blobs=[],
+                                   interrupted=False, tests_sha="s", t0=_ckm_time.monotonic(), head="d" * 40, wrote_fail=0)
+        got = []
+        m._choice_gate_event = lambda rr, kind, note, what, **kw: got.append(kw.get("extra")) or True
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                m._choice_kill_report(kr, {"changed": 0, "lines": [], "ast_grep": "", "unverified": []}, Path(root), "d" * 40, {}, [], 0, 0, 30, 60)
+        finally:
+            m._choice_gate_event = saved
+        check("r2 e1 run 的 merge_off {kotlin-junit: 時限到}、interrupted 假", got and got[0].get("merge_off") == {"kotlin-junit": "時限到"}
+              and got[0].get("interrupted") is False, str(got)[:300])
     finally:
         _ck_cleanup(*roots, tmp)
 
