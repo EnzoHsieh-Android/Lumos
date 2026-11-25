@@ -18467,6 +18467,9 @@ _GOV_FIELD_TYPES = {
     "judged": (str,),
     **dict.fromkeys(("merged", "single", "base_secs"), (int,)),
     "merge_tripped": (bool,),
+    # 選擇點變異加速第二段(Projects/選擇點變異加速第二段_計劃 做法 1、3、4):每個壞法那筆的快篩結果與逐支次數、run 那筆的沒跑乾淨原因與不合併原因
+    **dict.fromkeys(("merge_kind", "merge_unclean", "merge_off"), (dict,)),
+    "single_runs": (int,),
 }
 
 
@@ -18556,7 +18559,10 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
          # gov --stats 的選擇點段(_render_gov_choice)要的欄位:每個壞法、run、blocked 各自的數;選擇點放行(lint-new waived 帶 scope choice-kill)的理由標籤與形狀
          **({"ck": dict({k: d.get(k) for k in ("file", "fp", "killing_test", "changed", "mutant_lines", "secs", "reasons", "site",
                                                 "ran", "base_secs", "merged", "single", "merge_tripped")},
-                        **({"judged": d.get("judged") or "single"} if d.get("kind") == "choice-kill" else {}))}   # 缺 judged 的舊帳讀成 single
+                        **({"judged": d.get("judged") or "single"} if d.get("kind") == "choice-kill" else {}),   # 缺 judged 的舊帳讀成 single
+                        # 第二段計劃:缺 merge_kind 讀成空字典(每個平台都當 none)、缺 single_runs 讀成 0;run 那筆缺 merge_unclean、merge_off 讀成空字典
+                        **({"merge_kind": d.get("merge_kind") or {}, "single_runs": d.get("single_runs") or 0} if d.get("kind") == "choice-kill" else {}),
+                        **({"merge_unclean": d.get("merge_unclean") or {}, "merge_off": d.get("merge_off") or {}} if d.get("kind") == "run" else {}))}
             if d.get("gate") == "choice-kill" else {}),
          **({"ck_waive": {k: d.get(k) for k in ("label", "row", "decl", "file", "fp")}}
             if (d.get("kind"), d.get("scope")) == ("waived", "choice-kill") else {}),
@@ -28332,7 +28338,7 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
     stop_group_on:一組停止鍵(killed=沒有弱證據的 killed、compile_error=壞法編不過、timed_out_weak=逾時);配方的 group 欄同一組
     出現其中之一,同組其餘配方記 skipped(略過)、不跑;skipped 不算進這支的 rc。
     on_row:每條配方跑完就交出那一列(recipe_id、group、invariant、test、platform、verdict、weak、weak_why、detail、fail_excerpt、
-    compile_error);weak 在那條配方結束時就蓋好(整套一起跑、平台標 flaky、筆記有未提交改動、這條的修改時間沒錯開,四個來源在那時都已知)。
+    compile_error、ran_solo——壞法階段真的逐支跑了這一支,choice-kill 拿來數 single_runs);weak 在那條配方結束時就蓋好(整套一起跑、平台標 flaky、筆記有未提交改動、這條的修改時間沒錯開,四個來源在那時都已知)。
     should_stop:每條配方之間呼叫,回真就停(後面的配方沒有列)。
     merge:choice-kill 的合併快篩(_KillMerge;Projects/選擇點變異加速_計劃):給了就每個平台組先判能不能合併,能就開跑量齊單支基準與合併基準、
     每個壞法先跑一次合併呼叫,乾淨而且沒有失敗才整批記存活,其餘照下面原封不動的逐支流程(_kill_merge_iter);不給(None)時行為與輸出不變。"""
@@ -28553,6 +28559,8 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                 else:
                     verdict = "survived"
                 res = {**r, "platform": plat, "verdict": verdict}
+                if hk.on:   # choice-kill 數每個壞法逐支呼叫了幾次(single_runs;Projects/選擇點變異加速第二段_計劃 做法 1);不傳選用參數時列不變
+                    res["_ran_solo"] = True
                 hk.note(res, m_rc, m_to, m_tail)
                 if not mt_ok:
                     # 修改時間沒能跟上一次錯開:可能吃到舊的編譯結果——弱證據(收尾重算 weak 時算進去,迴圈裡直接設會被蓋掉)
@@ -28608,7 +28616,7 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
             _kill_log_rows(fh, results, ts, rel, commit, src_tag)
     verdicts = [r["verdict"] for r in results if r["verdict"] != "skipped"]   # 略過的列不算進 rc(只有傳了 stop_group_on 才會有)
     if as_json:
-        print(json.dumps({"results": [{k: v for k, v in r.items() if k not in ("_logged", "_rid", "_mtime_unsure", "_weak_why", "_compile_err")}
+        print(json.dumps({"results": [{k: v for k, v in r.items() if k not in ("_logged", "_rid", "_mtime_unsure", "_weak_why", "_compile_err", "_ran_solo")}
                                       for r in results]}, ensure_ascii=False))
     else:
         # 七態(舊 timed_out 鍵已於 2026-07-29 移除:那是六態時代的殘留死鍵,
@@ -28697,7 +28705,7 @@ class _KillHooks:
                 self.on_row({"recipe_id": str(res.get("_rid", "")), "group": res.get("group"), "invariant": res.get("invariant"),
                              "test": res.get("test"), "platform": res.get("platform"), "verdict": res["verdict"], "weak": bool(why),
                              "weak_why": why, "detail": _kill_detail_str(res), "compile_error": comp,
-                             "fail_excerpt": str(res.get("fail_excerpt") or "")})
+                             "fail_excerpt": str(res.get("fail_excerpt") or ""), "ran_solo": bool(res.get("_ran_solo"))})
 
     def between(self, r=None, plat=None):
         """配方之間(平台迴圈開頭不帶 r):交出上一條的列;should_stop 回真丟 _KillHalt;r 的 group 已有決定性結果 → 記略過列、回 True。"""
@@ -28721,6 +28729,9 @@ class _KillHooks:
 #    https://docs.gradle.org/current/userguide/java_testing.html),只用來確認「全部存活」:乾淨而且沒有任何失敗才整批記存活,其餘一律交回
 #    cmd_guard_kill 原封不動的逐支流程判;合併永遠不判殺掉、編不過、掛住。加速重點在存活的壞法(被殺的跑到第一支就停,存活的要跑完全部;
 #    Zhang 等 ISSTA 2013 https://personal.utdallas.edu/~lxz144130/publications/issta2013a.pdf)。──
+_CHOICE_MERGE_HALT_SIGNAL = "中斷"       # 量基準途中收到訊號停下時 _KillMerge.plats 記的原因(代碼審 code-選擇點變異加速第二段 r3 a1)
+_CHOICE_MERGE_HALT_DEADLINE = "時限到"   # 量基準途中總時限用完(沒收到訊號)停下時記的原因(r2 e1、r3 a1)
+_CHOICE_MERGE_TRIPPED = "斷路器"         # 斷路器跳開時 _KillMerge.plats 記的原因(run 的 merge_off 濾掉它,另有 merge_tripped;代碼審 code-選擇點變異加速第二段 r2 a2、g1)
 _CHOICE_MERGE_BREAKER = 5                 # 同一平台組連續幾次「沒跑乾淨」(只數逾時、讀不出或超限、沒有結果資料夾、被系統收掉)就停用合併
 _CHOICE_MERGE_UNIT_SECS = 10.0            # 單支基準的保守單價(秒;實驗專案一次約 5 到 6 秒取近兩倍)
 _CHOICE_MERGE_BUDGET_K = 1.5              # 剩下的總時限 ≥ 支數 × 單價 × 這個倍數才量齊(給合併基準與至少一個壞法留餘裕)
@@ -28848,10 +28859,12 @@ def _choice_merge_facts(rdir, tq):
     return facts, None
 
 
-def _choice_merge_classify(rc, tail, timed_out, rdir, names, tq):
+def _choice_merge_classify(rc, tail, timed_out, rdir, names, tq, failed=None):
     """一次合併呼叫(快篩或合併基準)的結果 → (類, 原因, 計不計斷路器)(〈用詞〉快篩結果四類)。類:pass(只有這類乾淨)、fail(有失敗)、
     compile(編不過)、unclean(沒跑乾淨)。結果檔先看大小再逐檔交 _secev_junit_facts(拒收、剖析錯誤、過深、超過案例數上限都算沒跑乾淨,不丟例外)。
-    斷路器只數逾時、讀不出或超過大小上限、沒有結果資料夾而不是編不過、被系統收掉。"""
+    斷路器只數逾時、讀不出或超過大小上限、沒有結果資料夾而不是編不過、被系統收掉。
+    failed(選用的清單):有失敗時把〈用詞〉合併失敗名單照 names 原排序接進去(Projects/選擇點變異加速第二段_計劃 做法 1;從寬:任一筆 failure 或
+    error 案例的完整名等於 m 或以「. 加 m」結尾就列,不要求恰好一筆;只拿來排逐支順序、不判任何事)。回傳形狀不變。"""
     if timed_out:
         return "unclean", "逾時", True
     if (rc is not None and (rc < 0 or rc >= 128)) or _CHOICE_MERGE_SYSKILL_RE.search(tail or ""):
@@ -28863,7 +28876,10 @@ def _choice_merge_classify(rc, tail, timed_out, rdir, names, tq):
         return "unclean", "找不到 JUnit 結果檔", True
     if why:
         return "unclean", why, True
-    if any(st in ("failure", "error") for st, _a in facts.values()):
+    bad = [_choice_merge_fullname(c) for c, (st, _a) in facts.items() if st in ("failure", "error")]
+    if bad:
+        if failed is not None:
+            failed.extend(m for m in names if _choice_merge_hits(bad, m) > 0)
         return "fail", "有失敗", False
     fulls = [_choice_merge_fullname(c) for c in facts]
     miss = [m for m in names if _choice_merge_hits(fulls, m) != 1]
@@ -28876,13 +28892,19 @@ def _choice_merge_classify(rc, tail, timed_out, rdir, names, tq):
 
 class _KillMerge:
     """cmd_guard_kill 的選用參數 merge(跟 _KillHooks 同形;Projects/選擇點變異加速_計劃 做法 5)。choice-kill 建它、傳進去;不傳時 cmd_guard_kill 行為不變。
-    帶進去:deadline(剩下總時限的期限,絕對的 monotonic 時間)、n_mutants(這次要跑的壞法數;少於 2 不合併)、breaker(斷路器門檻)。
-    帶出來:plats({平台: (有沒有啟用, 沒啟用的原因)})、survived({平台: 快篩判全部存活的 group 集合})、tripped(斷路器跳開過)、base_secs(量基準花的秒數)。
+    帶進去:deadline(剩下總時限的期限,絕對的 monotonic 時間)、breaker(斷路器門檻)、t0(這次呼叫開始的 monotonic 時間,時限不夠的提示算已花秒數;
+    不給就用建構當下)。不收壞法數:一個壞法也合併(Projects/選擇點變異加速第二段_計劃 做法 2;代碼審 code-選擇點變異加速第二段 r1 g3 拿掉死參數)。
+    帶出來:plats({平台: (有沒有啟用, 沒啟用的原因)};原因是 _kill_merge_off 那幾種固定字串或「斷路器」,run 事件的 merge_off 由它算出,
+    不另存一份——r1 a1)、survived({平台: 快篩判全部存活的 group 集合})、tripped(斷路器跳開過)、base_secs(量基準花的秒數);
+    第二段計劃加:unclean({平台: {沒跑乾淨的原因: 次數}})與
+    last_unclean({平台: 最後一次的原因})(做法 4,只數計斷路器的那幾種)、kinds({(平台, group): pass|fail|compile|unclean},這個壞法在這個平台組的快篩結果)。
     interrupted:第一個訊號來過(on_signal 設);cmd_guard_kill 看到就丟掉正在跑的合併結果、停。"""
 
-    def __init__(self, deadline, n_mutants, breaker=_CHOICE_MERGE_BREAKER):
-        self.deadline, self.n_mutants, self.breaker = deadline, n_mutants, breaker
+    def __init__(self, deadline, breaker=_CHOICE_MERGE_BREAKER, t0=None):
+        self.deadline, self.breaker = deadline, breaker
+        self.t0 = time.monotonic() if t0 is None else t0
         self.plats, self.survived, self.streak = {}, {}, {}
+        self.unclean, self.last_unclean, self.kinds = {}, {}, {}
         self.tripped, self.base_secs, self.interrupted = False, 0.0, False
 
     def remaining(self):
@@ -28897,26 +28919,50 @@ class _KillMerge:
                 _kill_proc_group(proc)
 
 
+def _kill_merge_off(mg, plat, why, need=None, quiet=False):
+    """這個平台組這次不合併(Projects/選擇點變異加速第二段_計劃 做法 3):原因記進 mg.plats[平台] = (False, 原因)(一處,run 的 merge_off 由它算;
+    代碼審 r1 a1);印一行到標準錯誤,quiet 由呼叫端決定(合併基準不乾淨的那行 _kill_merge_base 照既有字樣印過、中斷與時限到接著就停,這幾處傳 quiet;r1 a2)。
+    need=(支數, 約需秒數) 給了就同一行接要帶多大的 --max-seconds:剩 = max(剩下的總時限, 0) 取整數;X = (從 t0 到現在已花的秒數 + 約需 + 60) 無條件進位到百。"""
+    import math
+    mg.plats[plat] = (False, why)
+    if quiet:
+        return
+    hint = ""
+    if need is not None:
+        n, est = need
+        x = math.ceil((time.monotonic() - mg.t0 + est + 60) / 100) * 100
+        hint = (f";合併要先量齊 {n} 支基準,約需 {math.ceil(est)} 秒,剩 {int(max(mg.remaining(), 0))} 秒;"
+                f"要合併請帶 --max-seconds {x}")
+    print(f"⚠ {_kill_esc(plat)}:這次不合併({why}),照逐支跑{hint}", file=sys.stderr)
+
+
 def _kill_merge_ready(mg, c, methods):
-    """這個平台組這次能不能合併(〈做法〉1;任一不成立 → None,照現在逐支、基準用到才量,不印字)→ 合併形狀(_choice_merge_shape 加 rdir、tq) 或 None。
+    """這個平台組這次能不能合併(〈做法〉1;任一不成立 → None,照現在逐支、基準用到才量)→ 合併形狀(_choice_merge_shape 加 rdir、tq) 或 None。
+    不成立時交 _kill_merge_off 記原因並印一行(Projects/選擇點變異加速第二段_計劃 做法 3;前一份計劃的「不印字」已被取代)。
+    時限門排最後:其他幾道只算字串與路徑,時限門擋下時其他條件都已成立,照提示帶大時限就會合併。
     c 是 cmd_guard_kill 給的現場(SimpleNamespace);methods 是這組每條配方的測試名。"""
-    if mg.n_mutants < 2 or c.flaky or c.node_dirty:
-        return None
+    if c.flaky or c.node_dirty:
+        return _kill_merge_off(mg, c.plat, "平台不穩或筆記未提交")
     shape = _choice_merge_shape(c.run_cmd)
     if shape is None:
-        return None
+        return _kill_merge_off(mg, c.plat, "指令形狀不支援")
     for m in methods:
         if not _test_name_ok(m) or _name_collision_reason(m, c.pentry, c.pentry["root"], c.coll_cache):
-            return None
+            return _kill_merge_off(mg, c.plat, "名稱檢查沒過")
     uniq = sorted(set(methods))
-    if mg.remaining() < len(uniq) * _CHOICE_MERGE_UNIT_SECS * _CHOICE_MERGE_BUDGET_K:
-        return None
     tq = _secev_tq()
+    if tq is None:
+        return _kill_merge_off(mg, c.plat, "讀結果檔的模組不在")
     rdir = _choice_merge_results_dir(c.run_dir, c.wt, shape)
-    if tq is None or rdir is None:
-        return None
+    if rdir is None:
+        return _kill_merge_off(mg, c.plat, "結果資料夾不在工作樹")
     if _choice_merge_too_long(_choice_merge_cmd(c.run_cmd, shape, uniq, c.pentry["profile"].get("name_filter", "ident"))):
-        return None
+        return _kill_merge_off(mg, c.plat, "指令過長")
+    if len(uniq) < 2:   # 守的不同名字不到 2 支:合併沒有可省的,先於時限門判(不然提示調大時限、照做仍不合併;代碼審 r1 b1)
+        return _kill_merge_off(mg, c.plat, "合併道不足 2 支")
+    need = len(uniq) * _CHOICE_MERGE_UNIT_SECS * _CHOICE_MERGE_BUDGET_K
+    if mg.remaining() < need:
+        return _kill_merge_off(mg, c.plat, "時限不夠", need=(len(uniq), need))
     return dict(shape, rdir=rdir, tq=tq)
 
 
@@ -28947,11 +28993,14 @@ def _kill_merge_base(mg, c, methods, nf, sh):
     t0 = time.monotonic()
     try:
         cmd_of = {m: _run_cmd_expand(c.run_cmd, m, name_filter=nf) for m in methods}
+        c.merge_need = None
         if not _kill_merge_singles(mg, c, list(dict.fromkeys(methods)), cmd_of):
-            return None
+            _kill_merge_halt_check(mg, c)
+            return _kill_merge_off(mg, c.plat, "基準量不齊", need=c.merge_need)
         lane = [m for m in dict.fromkeys(methods) if not c.baselines[cmd_of[m]][3] and c.baselines[cmd_of[m]][0] == 0]
         if len(lane) < 2:
-            return None
+            _kill_merge_halt_check(mg, c)
+            return _kill_merge_off(mg, c.plat, "合併道不足 2 支")
         c.hk.between()
         mcmd = _choice_merge_cmd(c.run_cmd, sh, lane, nf)
         cap = _choice_merge_base_cap(sum(c.baselines[cmd_of[m]][2] for m in lane), c.floor, max(mg.remaining(), 1.0))
@@ -28963,10 +29012,19 @@ def _kill_merge_base(mg, c, methods, nf, sh):
         kind, why, _cnt = _choice_merge_classify(rc, tail, to, sh["rdir"], lane, sh["tq"])
         if kind != "pass":
             print(f"⚠ {_kill_esc(c.plat)}:{_CHOICE_MERGE_BASE_WHY.get(why, why)},這個平台組這次不合併、照逐支跑", file=sys.stderr)
-            return None
+            # 記帳的原因不經 _CHOICE_MERGE_BASE_WHY 換字(那張表只管印字);「N 支對不到……」帶數字,一律記成「對不到名字」(第二段計劃 做法 3)
+            return _kill_merge_off(mg, c.plat, "合併基準:" + ("對不到名字" if why.endswith("對不到結果檔裡的名字") else why), quiet=True)
         return lane, mcmd, el
     finally:
         mg.base_secs += time.monotonic() - t0
+
+
+def _kill_merge_halt_check(mg, c):
+    """_kill_merge_base 走「基準量不齊」「合併道不足 2 支」那兩個 return 之前先看停止旗標:收到訊號或總時限到 → 丟 _KillHalt,由 _kill_merge_iter
+    的 except 記中斷或時限到(不印「照逐支跑」:接著就停)。不看的話,最後一支單支基準跑著時停下會記錯原因、印照逐支跑(代碼審 code-選擇點變異加速第二段 r3 b1)。"""
+    stop = getattr(c.hk, "should_stop", None)
+    if mg.interrupted or (stop is not None and stop()):
+        raise _KillHalt()
 
 
 def _kill_merge_singles(mg, c, uniq, cmd_of):
@@ -28974,14 +29032,18 @@ def _kill_merge_singles(mg, c, uniq, cmd_of):
     ★量完一支就用實測平均重估剩下的要多久★(支數 × 平均 × 1.5),比剩下的總時限多 → 不量了、回 False(這個平台組不合併,退回逐支、用到才量),
     已量的留在 baselines 給逐支用;被剩下時限截斷而逾時的那支不寫進 baselines(逐支照完整上限重量,不會被記成基準非綠)。開跑那道
     「支數 × 10 秒 × 1.5」只是單價估的門,實際比單價貴時靠這裡收手(代碼審 code-選擇點變異加速 r1 正確性 #1、資源 #3;
-    業界 Stryker、Blinky 用不帶壞法那一輪實測的耗時估逾時)。"""
+    業界 Stryker、Blinky 用不帶壞法那一輪實測的耗時估逾時)。
+    收手時把 (全部支數, 全部支數照已量實測平均估的秒數) 放在 c.merge_need(還沒有實測時用單價估),給時限提示用(第二段計劃 做法 3):
+    帶大時限重跑時是新的一次呼叫,基準要從頭全部量(代碼審 r1 g3)。"""
     measured, full = [], max(600.0, c.floor)
     for i, m in enumerate(uniq):
         if cmd_of[m] in c.baselines:
             continue
         c.hk.between()
         left = sum(1 for x in uniq[i:] if cmd_of[x] not in c.baselines)
-        if measured and mg.remaining() < sum(measured) / len(measured) * left * _CHOICE_MERGE_BUDGET_K:
+        avg = sum(measured) / len(measured) if measured else _CHOICE_MERGE_UNIT_SECS
+        c.merge_need = (len(uniq), avg * len(uniq) * _CHOICE_MERGE_BUDGET_K)
+        if measured and mg.remaining() < avg * left * _CHOICE_MERGE_BUDGET_K:
             return False
         cap = min(full, max(mg.remaining(), 1.0))
         b_rc, b_tail, b_el, b_to = _kill_run(cmd_of[m], c.run_dir, cap)
@@ -29030,15 +29092,20 @@ def _kill_merge_apply(c, r0, lane, nf):
     return target, None
 
 
-def _kill_merge_breaker(mg, plat, kind, counts):
-    """快篩結果交斷路器(〈用詞〉快篩結果四類):pass 歸零;計數的那幾類加一,到門檻就這次呼叫這個平台停用合併;其餘不計不歸零。"""
+def _kill_merge_breaker(mg, plat, kind, counts, why=""):
+    """快篩結果交斷路器(〈用詞〉快篩結果四類):pass 歸零;計數的那幾類加一,到門檻就這次呼叫這個平台停用合併;其餘不計不歸零。
+    計數的那幾類同時把 classify 的原因字串(不帶數字,鍵數有上限)累計進 mg.unclean、記成 mg.last_unclean,跳開那行印最後一次的原因
+    (Projects/選擇點變異加速第二段_計劃 做法 4;unclean 是累計、斷路器看連續,兩者不同步是預期的)。"""
     if kind == "pass":
         mg.streak[plat] = 0
     elif counts:
+        per = mg.unclean.setdefault(plat, {})
+        per[why] = per.get(why, 0) + 1
+        mg.last_unclean[plat] = why
         mg.streak[plat] = mg.streak.get(plat, 0) + 1
         if mg.streak[plat] >= mg.breaker:
-            mg.plats[plat], mg.tripped = (False, "斷路器"), True
-            print(f"⚠ {_kill_esc(plat)}:合併連續 {mg.breaker} 次沒跑乾淨,這次剩下的改逐支", file=sys.stderr)
+            mg.plats[plat], mg.tripped = (False, _CHOICE_MERGE_TRIPPED), True
+            print(f"⚠ {_kill_esc(plat)}:合併連續 {mg.breaker} 次沒跑乾淨(最後一次:{why}),這次剩下的改逐支", file=sys.stderr)
 
 
 def _kill_merge_emit(c, chunk, restored, tail, nf):
@@ -29063,8 +29130,11 @@ def _kill_merge_emit(c, chunk, restored, tail, nf):
 
 def _kill_merge_screen(mg, c, chunk, lane, mcmd, m_el, nf):
     """一個壞法的合併快篩(〈做法〉3)→ "pass"(已交出這個壞法在這個平台組的列)、"single"(交逐支流程)、"break"(還原失敗,這組作廢)。
-    套壞法交 _kill_merge_apply;開快篩前看停止旗標;被第一個訊號收掉 → 丟掉、停。"""
+    套壞法交 _kill_merge_apply;開快篩前看停止旗標;被第一個訊號收掉 → 丟掉、停。
+    c.merge_failed:這個壞法的合併失敗名單(一開頭清空;有失敗時由 classify 填,_kill_merge_iter 拿來排逐支順序);mg.kinds 記這個壞法在這個平台組的快篩結果
+    (Projects/選擇點變異加速第二段_計劃 做法 1)。"""
     r0 = chunk[0]
+    c.merge_failed = []
     target, why = _kill_merge_apply(c, r0, lane, nf)
     if why:
         return why
@@ -29079,8 +29149,9 @@ def _kill_merge_screen(mg, c, chunk, lane, mcmd, m_el, nf):
         return "break"
     if mg.interrupted:   # 快篩被第一個訊號收掉:這個壞法不交任何列(不記帳)、停
         raise _KillHalt()
-    kind, _why, counts = _choice_merge_classify(rc, tail, to, c.sh["rdir"], lane, c.sh["tq"])
-    _kill_merge_breaker(mg, c.plat, kind, counts)
+    kind, why, counts = _choice_merge_classify(rc, tail, to, c.sh["rdir"], lane, c.sh["tq"], failed=c.merge_failed)
+    mg.kinds[(c.plat, r0.get("group"))] = kind
+    _kill_merge_breaker(mg, c.plat, kind, counts, why)
     if kind != "pass":
         return "single"
     _kill_merge_emit(c, chunk, restored, tail, nf)
@@ -29097,13 +29168,19 @@ def _kill_merge_in_lane(c, chunk, lane):
 def _kill_merge_iter(mg, c):
     """cmd_guard_kill 一個平台組的配方產生器(merge 有給時取代 plist):不能合併 → 原樣交出每條配方(基準照現在用到才量);能合併 → 先量齊基準
     (_kill_merge_base),再以壞法為單位:已決定性殺掉的 group 照交(逐支那段記略過列)、斷路器跳開後照交、快篩通過的整批列已交出不再交、其餘照交。
-    交出去的配方由 cmd_guard_kill 原本的逐支迴圈本體一字不改地跑。"""
+    交出去的配方由 cmd_guard_kill 原本的逐支迴圈本體一字不改地跑。
+    快篩有失敗時照〈用詞〉先紅順序交(_kill_merge_failed_first;Projects/選擇點變異加速第二段_計劃 做法 1):逐支迴圈只依交出的順序跑,
+    下游(on_row 以配方身分對回、finish 計數、tests_sha)不依賴順序。量基準途中停下(_KillHalt)→ mg.plats 記這個平台組不合併再往外丟:
+    收到訊號(mg.interrupted)記「中斷」,否則是總時限到、記「時限到」;兩者都不印(接著就停;代碼審 code-選擇點變異加速第二段 r2 e1)。"""
     nf = c.pentry["profile"].get("name_filter", "ident")
     methods = [_kill_method_name(r.get("test", ""), c.pdata) for r in c.plist]
     sh = _kill_merge_ready(mg, c, methods)
-    got = _kill_merge_base(mg, c, methods, nf, sh) if sh is not None else None
-    if got is None:
-        mg.plats[c.plat] = (False, "條件不合" if sh is None else "基準")
+    try:
+        got = _kill_merge_base(mg, c, methods, nf, sh) if sh is not None else None
+    except _KillHalt:
+        _kill_merge_off(mg, c.plat, _CHOICE_MERGE_HALT_SIGNAL if mg.interrupted else _CHOICE_MERGE_HALT_DEADLINE, quiet=True)
+        raise
+    if got is None:   # 不合併的細分原因已由 _kill_merge_ready、_kill_merge_base 記進 mg.plats(代碼審 r1 a1)
         yield from c.plist
         return
     lane, mcmd, m_el = got
@@ -29118,7 +29195,17 @@ def _kill_merge_iter(mg, c):
         if how == "break":
             return
         if how == "single":
-            yield from chunk
+            yield from _kill_merge_failed_first(c, chunk)
+
+
+def _kill_merge_failed_first(c, chunk):
+    """〈用詞〉先紅順序:這個壞法的配方照原本守的測試排序,測試名在合併失敗名單(c.merge_failed)裡的排前面、其餘接在後面,兩邊各自維持原排序;
+    名單空(結果不是有失敗、或一支都對不到)→ 原順序。只改順序、不判任何事(Projects/選擇點變異加速第二段_計劃 做法 1)。"""
+    hit = set(getattr(c, "merge_failed", None) or ())
+    if not hit:
+        return list(chunk)
+    key = [_kill_method_name(r.get("test", ""), c.pdata) in hit for r in chunk]
+    return [r for r, k in zip(chunk, key) if k] + [r for r, k in zip(chunk, key) if not k]
 
 
 def _guard_kill_cfg(env):
@@ -78678,9 +78765,12 @@ def _choice_kill_judge(order, rows):
     return "survived", None, "", "", aborted
 
 
-def _choice_event_extra(ident, verdict, killing, clauses, plans, tests_sha, reason, via, attempt, run_id, aborted=None, judged=None):
+def _choice_event_extra(ident, verdict, killing, clauses, plans, tests_sha, reason, via, attempt, run_id, aborted=None, judged=None,
+                        merge_kind=None, single_runs=None):
     """choice-kill 每個壞法那筆治理帳的欄位(〈範圍〉2 記;situation-rule --point 成功後那筆共用)。只存雜湊與短欄位。
-    judged(merged 或 single;Projects/選擇點變異加速_計劃 〈用詞〉判法)只有 choice-kill 那筆帶,人裁那筆不帶(讀時當 single)。"""
+    judged(merged 或 single;Projects/選擇點變異加速_計劃 〈用詞〉判法)只有 choice-kill 那筆帶,人裁那筆不帶(讀時當 single)。
+    merge_kind({平台: pass|fail|compile|unclean|none})與 single_runs(壞法階段逐支呼叫次數,開頭量基準不算)同樣只有 choice-kill 那筆帶
+    (Projects/選擇點變異加速第二段_計劃 做法 1;讀帳缺欄當 none 與 0)。"""
     import secrets
     ex = {"file": ident["file"], "fp": ident["fp"], "row": ident["row"], "new_sha": ident["new_sha"], "verdict": verdict,
           "killing_test": killing or "", "clauses": list(clauses or []), "plans": list(plans or []), "tests_sha": tests_sha,
@@ -78690,6 +78780,10 @@ def _choice_event_extra(ident, verdict, killing, clauses, plans, tests_sha, reas
         ex["aborted"] = list(aborted)
     if judged is not None:
         ex["judged"] = judged
+    if merge_kind is not None:
+        ex["merge_kind"] = dict(merge_kind)
+    if single_runs is not None:
+        ex["single_runs"] = int(single_runs)
     return ex
 
 
@@ -78944,13 +79038,16 @@ class _ChoiceKillRun:
         plats = p.get("plats") or ()
         judged = "merged" if self.merge is not None and plats and all(loc in self.merge.survived.get(q, ()) for q in plats) else "single"
         self.judged[judged] += 1
+        # 每個有配方的平台組這個壞法的快篩結果(沒跑快篩記 none;Projects/選擇點變異加速第二段_計劃 做法 1)
+        kinds = self.merge.kinds if self.merge is not None else {}
+        merge_kind = {q: kinds.get((q, loc)) or "none" for q in sorted(plats)}
         key = (x["file"], x["fp"])
         self.attempts[key] = self.attempts.get(key, 0) + 1
         k = p["tests"].get(kt) if kt else None
         reason = (why + ((":" + " ".join(excerpt.split())) if excerpt else "")) if verdict == "no_result" else ""
         extra = _choice_event_extra(x["mutant"]["identity"], verdict, _choice_test_key(k["plat"], k["name"]) if k else "", k["clauses"] if k else [],
                                     [q[:-3] for q in self.guard["live"]], self.tests_sha, reason, "run", self.attempts[key], self.run_id,
-                                    aborted=[n for _p, n in aborted], judged=judged)
+                                    aborted=[n for _p, n in aborted], judged=judged, merge_kind=merge_kind, single_runs=p.get("single_runs", 0))
         self.wrote_fail += 0 if _choice_record(self.rr, self.head, extra) else 1
         shown = {"killed": f"殺掉 by {k['name']}({'、'.join(k['clauses'])})" if k else "殺掉",
                  "survived": "存活:沒有測試守著這個選擇", "no_result": f"跑不出結果:{_kill_esc(reason)[:160]}"}[verdict]
@@ -78967,6 +79064,8 @@ class _ChoiceKillRun:
         loc, tk = hit
         p = self.plan_of[loc]
         p["rows"][tk] = row
+        if row.get("ran_solo"):   # 壞法階段真的逐支跑了這一支(合併判存活交的列、略過、基準不綠不算;欄位名不用 single,免得跟判法 single 撞,代碼審 r1 a3)
+            p["single_runs"] = p.get("single_runs", 0) + 1
         decisive = row.get("compile_error") or row["verdict"] == "timed_out_weak" or (row["verdict"] == "killed" and not row.get("weak"))
         if decisive or len(p["rows"]) >= len(p["order"]):
             self.finish(loc)
@@ -78986,14 +79085,16 @@ class _ChoiceKillRun:
         rel = self.env.find(self.node[:-3]) or self.node
         # 對回時帶平台:配方身分(_kill_recipe_id)不含平台,兩個平台同名的測試會撞號、其中一支永遠收不到列(代碼審 code-改動選擇點 r1 b22)
         self.rid_map = {(_kill_recipe_id(str(rel), r), r["platform"]): (r["group"], (r["platform"], r["test"])) for r in self.recipes}
-        # 合併快篩(Projects/選擇點變異加速_計劃):沒帶 --no-merge、沒設 LUMOS_SKIP_CHOICE_MERGE=1 時建選用物件;要跑幾個壞法由 cmd_guard_kill 判(少於 2 不合併)
+        # 合併快篩(Projects/選擇點變異加速_計劃):沒帶 --no-merge、沒設 LUMOS_SKIP_CHOICE_MERGE=1 時建選用物件;一個壞法也合併(第二段計劃 做法 2),
+        # t0 給時限不夠的提示算已花的秒數
         if self.merge_on:
-            self.merge = _KillMerge(self.t0 + self.max_seconds, len({r["group"] for r in self.recipes}))
+            self.merge = _KillMerge(self.t0 + self.max_seconds, t0=self.t0)
         with _situation_rule_signals(hint="收到中斷:正在跑的那條配方跑完就停(合併呼叫當場收掉);再按一次 Ctrl-C(或再送一次終止訊號)強制結束",
-                                     force_msg="強制結束(第二個終止訊號):測試的程序群組已收掉;沒判完的壞法沒記帳") as st:
+                                     force_msg="強制結束(第二個終止訊號):測試的程序群組已收掉;沒判完的壞法沒記帳",
+                                     # 第一個訊號當場收掉合併快篩與合併基準(〈做法〉4);建 st 時就交進去(處理器裝上之前就在 st 上),
+                                     # 不留「處理器已裝、回呼還沒設」的空窗——那段收到訊號會漏設 mg.interrupted、記成時限到(代碼審 code-選擇點變異加速第二段 r3 c1)
+                                     on_first=self.merge.on_signal if self.merge is not None else None) as st:
             st.defer = True
-            if self.merge is not None:
-                st.on_first = self.merge.on_signal   # 第一個訊號當場收掉合併快篩與合併基準(〈做法〉4)
             for loc in [q for q, p in self.plan_of.items() if len(p["rows"]) >= len(p["order"])]:
                 self.finish(loc)
             if self.recipes:
@@ -79020,6 +79121,9 @@ def _choice_kill_report(kr, res, rr, at_sha, carried, nu, left, done, max_mutant
     mg, jd = getattr(kr, "merge", None), getattr(kr, "judged", None) or {}
     rx.update(merged=int(jd.get("merged", 0)), single=int(jd.get("single", 0)), merge_tripped=bool(mg is not None and mg.tripped),
               base_secs=math.ceil(mg.base_secs) if mg is not None and mg.base_secs > 0 else 0)
+    # 沒跑乾淨的原因分平台計數、這次不合併的平台組與原因(Projects/選擇點變異加速第二段_計劃 做法 3、4;沒有就空字典,使用者自己關掉合併也是空的)
+    rx.update(merge_unclean={q: dict(v) for q, v in (getattr(mg, "unclean", None) or {}).items()},
+              merge_off={q: why for q, (on, why) in (getattr(mg, "plats", None) or {}).items() if not on and why != _CHOICE_MERGE_TRIPPED})
     st = kr.stats
     note = f"choice-kill 跑了 {rx['ran']} 個壞法(殺掉 {st['killed']}、存活 {st['survived']}、跑不出結果 {st['no_result']})"
     if not _choice_gate_event(rr, "run", note, "這次呼叫的 run 那筆", list_key="tests", hard=False, head_sha=kr.head, nodes=[], extra=rx):
