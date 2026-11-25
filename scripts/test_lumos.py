@@ -146806,6 +146806,33 @@ def t_choice_kill_merge_interrupt():
             _ck_cleanup(str(Path(kept).parent))
     finally:
         _ck_cleanup(root, fake, tmp)
+    # 代碼審 r3 c1:_ChoiceKillRun 建訊號處理時就把 _KillMerge.on_signal 交進去(_situation_rule_signals 的 on_first 參數,處理器裝上之前就在 st 上),
+    # 不留「處理器已裝、on_first 還沒設」的空窗;翻紅釘:拿掉這個參數、只靠事後設 → 紅
+    import contextlib
+    import io
+    import types
+    seen = []
+    real = m._situation_rule_signals
+    m._situation_rule_signals = lambda *a, **kw: (seen.append(kw.get("on_first")), real(*a, **kw))[1]
+    loc = f"{_CHOICE_MAIN}:5"
+    tests = [{"plat": "app", "name": "aCase", "ref": "app:aCase", "clauses": ["Projects/選擇_計劃#S1"], "plans": ["Projects/選擇_計劃.md"],
+              "keys": [("Projects/選擇_計劃.md", 1)]}]
+    kr = m._ChoiceKillRun(types.SimpleNamespace(find=lambda _n: "Projects/選擇_計劃.md"), Path("/nonexistent"), "d" * 40,
+                          {"tests": tests, "live": ["Projects/選擇_計劃.md"]}, {}, "s" * 16, 60)
+    kr.out = io.StringIO()
+    ident = {"file": _CHOICE_MAIN, "fp": "f" * 16, "row": "C-7", "old": "o", "new": "n", "new_sha": "a" * 16}
+    kr.plan_of[loc] = {"x": {"file": _CHOICE_MAIN, "line": 5, "fp": "f" * 16, "mutant": {"row": "C-7", "identity": ident}}, "order": [("app", "aCase")],
+                       "tests": {("app", "aCase"): tests[0]}, "rows": {}, "done": False, "plats": {"app"}}
+    kr.recipes = [{"invariant": f"{loc}|aCase", "test": "aCase", "platform": "app", "file": _CHOICE_MAIN, "old": "o", "new": "n", "group": loc}]
+    saved = (m.cmd_guard_kill, m._choice_record)
+    m.cmd_guard_kill, m._choice_record = (lambda env, node, **_kw: 0), (lambda _rr, _h, extra: True)
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            kr.run()
+    finally:
+        m.cmd_guard_kill, m._choice_record = saved
+        m._situation_rule_signals = real
+    check("代碼審 r3 c1 建訊號處理時就交 on_first=_KillMerge.on_signal(不留空窗)", kr.merge is not None and seen == [kr.merge.on_signal], f"{seen} {kr.merge}")
 
 
 def t_choice_kill_merge_multi_platform():
@@ -147781,7 +147808,9 @@ def t_choice_kill_merge_off_reasons():
     不印時限提示(照提示帶大時限也不會合併)。
     翻紅釘:合併基準的原因照 _CHOICE_MERGE_BASE_WHY 換字或帶數字 → 對不到名字那案紅;啟用的平台也算進 merge_off → 兩平台那案紅;時限門不在最後 → 對照那案記時限不夠而紅;
     不足 2 支的判斷在時限門之後 → 只守 1 支那案記時限不夠而紅。
-    r2 e1:量基準途中總時限用完(沒收到訊號)→ 記「時限到」(不是「中斷」)、不印;翻紅釘:不看 mg.interrupted 一律記中斷 → 那案紅。"""
+    r2 e1:量基準途中總時限用完(沒收到訊號)→ 記「時限到」(不是「中斷」)、不印;翻紅釘:不看 mg.interrupted 一律記中斷 → 那案紅。
+    r3 n1:run 事件的 interrupted 與 merge_off 從真的 cmd_choice_kill 讀(行程內跑、總時限 4 秒);翻紅釘:interrupted 改成總時限到也算 → 紅;一律記中斷 → 紅。
+    r3 b1:量最後一支單支基準時停下(總時限到或收到訊號),合併道不足 2 支那個 return 前要先看停止旗標;翻紅釘:不看 → 記合併道不足 2 支、印「照逐支跑」而紅。"""
     import contextlib
     import io
     import types
@@ -147859,17 +147888,41 @@ def t_choice_kill_merge_off_reasons():
         _rc, _o, err = _ckm_inproc(root, fake, fn, log=tmp / "deadline.log")
         check("r2 e1 量基準途中總時限到 → mg.plats {kotlin-junit: (False, 時限到)}、沒收到訊號、不印「這次不合併」",
               mg.plats == {"kotlin-junit": (False, "時限到")} and mg.interrupted is False and "這次不合併" not in err, f"{mg.plats} {mg.interrupted}\n{err[-300:]}")
-        kr = types.SimpleNamespace(merge=mg, judged={}, plan_of={}, stats={"killed": 0, "survived": 0, "no_result": 0}, run_id="r", blobs=[],
-                                   interrupted=False, tests_sha="s", t0=_ckm_time.monotonic(), head="d" * 40, wrote_fail=0)
-        got = []
-        m._choice_gate_event = lambda rr, kind, note, what, **kw: got.append(kw.get("extra")) or True
+        # 代碼審 r3 n1:run 事件要從真的 choice-kill 讀(原本手建 kr 餵 _choice_kill_report,interrupted 恆假)。行程內跑 cmd_choice_kill:
+        # 單價縮成 0.1 秒讓時限門過、總時限 4 秒;守 alpha(快)與 bravo(單支基準睡 8 秒)→ bravo 被剩下時限截斷時總時限已用完 → 記時限到、整次停
+        root, fake = _ckm_repo(1, {"__base_sleep_by__": {"bravoCase": 8}}, tests=("alphaCase", "bravoCase"))
+        roots += [root, fake]
+        saved_unit = m._CHOICE_MERGE_UNIT_SECS
+        m._CHOICE_MERGE_UNIT_SECS = 0.1
         try:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                m._choice_kill_report(kr, {"changed": 0, "lines": [], "ast_grep": "", "unverified": []}, Path(root), "d" * 40, {}, [], 0, 0, 30, 60)
+            _rc, _o, err = _ckm_inproc(root, fake, lambda mm, root=root: mm.cmd_choice_kill(mm.Env(Path(root) / _KSP_V), diff="main..HEAD", max_seconds=4.0),
+                                       log=tmp / "real-deadline.log")
         finally:
-            m._choice_gate_event = saved
-        check("r2 e1 run 的 merge_off {kotlin-junit: 時限到}、interrupted 假", got and got[0].get("merge_off") == {"kotlin-junit": "時限到"}
-              and got[0].get("interrupted") is False, str(got)[:300])
+            m._CHOICE_MERGE_UNIT_SECS = saved_unit
+        runs = _ck_gov(root, kind="run")
+        check("r3 n1 真的 choice-kill 量基準途中總時限用完 → run 的 interrupted 假、merge_off {kotlin-junit: 時限到}、不印「這次不合併」",
+              len(runs) == 1 and runs[0].get("interrupted") is False and runs[0].get("merge_off") == {"kotlin-junit": "時限到"} and "這次不合併" not in err,
+              f"{runs}\n{err[-400:]}")
+        # 代碼審 r3 b1:_kill_merge_base 的「合併道不足 2 支」「基準量不齊」兩個 return 前先看停止旗標。守 a、b、c,b、c 單支基準紅、c 睡 3 秒;
+        # 停止旗標在量 c 的時候變真 → 不記合併道不足 2 支、不印「照逐支跑」,收到訊號記中斷、總時限到記時限到
+        import threading
+        for label, want in (("總時限到", "時限到"), ("收到訊號", "中斷")):
+            root, fake = _ckm_repo(1, {"bravoCase": {"base_red": True}, "charlieCase": {"base_red": True}, "__base_sleep_by__": {"charlieCase": 3}})
+            roots += [root, fake]
+            mg = m._KillMerge(_ckm_time.monotonic() + 600)
+
+            def fn(mm, mg=mg, root=root, want=want):
+                stop_at = _ckm_time.monotonic() + 1.5
+                if want == "中斷":   # should_stop 恆假:只靠 mg.interrupted 這一半判(總時限那案只靠 should_stop 那一半,兩半各有一案守)
+                    threading.Timer(1.5, mg.on_signal).start()
+                    stop = lambda: False   # noqa: E731
+                else:
+                    stop = lambda: _ckm_time.monotonic() >= stop_at   # noqa: E731
+                return mm.cmd_guard_kill(mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1]), source="choice-kill",
+                                         stop_group_on=mm._CHOICE_STOP_ON, on_row=lambda _r: None, should_stop=stop, merge=mg)
+            _rc, _o, err = _ckm_inproc(root, fake, fn, log=tmp / f"b1-{want}.log")
+            check(f"r3 b1 量最後一支單支基準時{label} → mg.plats {{kotlin-junit: (False, {want})}}、不印「這次不合併」",
+                  mg.plats == {"kotlin-junit": (False, want)} and "這次不合併" not in err, f"{mg.plats}\n{err[-300:]}")
     finally:
         _ck_cleanup(*roots, tmp)
 
