@@ -147248,54 +147248,58 @@ def t_choice_kill_merge_budget_reestimate():
 
 
 def t_choice_kill_merge_budget_edge():
-    """[代碼審 code-選擇點變異加速 r2 邊界 #1] 量基準中途重估的卡線:剩下時限剛好等於「還沒量的支數 × 已量平均 × 1.5」照量(超過才收手),少一點就收手。
-    直接呼叫 _kill_merge_singles,單支耗時固定 2 秒(換掉 _kill_run)、剩下時限固定,不睡。三支:量完第一支剩兩支 → 門檻 2 × 2 × 1.5 = 6。
-    翻紅釘:< 改 <= → 剩 6.0 那案收手而紅;拿掉重估 → 剩 5.99 那案量齊而紅。"""
+    """[選擇點變異加速第三段 S1;原 代碼審 code-選擇點變異加速 r2–r4 卡線] 量基準中途重估:這次呼叫量到的第一支(含冷編譯)不拿來估,
+    已量少於 2 支不判收手;2 支以上用第一支以外的平均 × 還沒量的支數 × 1.5 比剩下時限(超過才收手,剛好等於照量)。
+    直接呼叫 _kill_merge_singles,單支呼叫換成假的回傳值(耗時照給定、不看上限)、剩下時限固定,不睡。
+    判準來源:第三段計劃預期值表 S1 三案,加原卡線各案照新口徑重算。翻紅釘:第一支也拿來估 → 30、2、2、2 那案量完第一支就收手而紅;
+    平均含第一支 → 提示那案變成 (30+40)/2×4×1.5=210、不是 240 而紅;只量一支時不看「照第一支再量一支」→ 剩 44.99 那案紅;
+    < 改 <= → 剛好等於那案紅;不看截斷 → 截斷那案寫進基準而紅。實作時補的「只量一支照它的速度再量一支都不夠就收手」來由:
+    t_choice_kill_merge_budget_reestimate(每支 6 秒、總時限 11 秒)在只拿掉第一支時,第二支被截斷、一個壞法都判不到。"""
     import types
     m = _load_lumos_inproc()
     orig = m._kill_run
-    uniq = ["aCase", "bCase", "cCase"]
-    cmd_of = {x: f"run {x}" for x in uniq}
+
+    def ctx():
+        return types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
+                                     mstate={"unsure": False})
     try:
-        m._kill_run = lambda cmd, run_dir, cap, **_kw: (0, "", 2.0, False)
-        for rem, ok in ((6.0, True), (5.99, False)):
+        uniq4 = ["aCase", "bCase", "cCase", "dCase"]
+        cmd4 = {x: f"run {x}" for x in uniq4}
+        for label, took, rem, n in (("30、2、2、2 秒、剩 50 → 量齊 4 支(第一支不拿來估)", (30.0, 2.0, 2.0, 2.0), 50.0, 4),
+                                    ("30、40、40、40 秒、剩 50 → 量完第二支收手(40×2×1.5=120>50)", (30.0, 40.0, 40.0, 40.0), 50.0, 2),
+                                    ("30、2、2、2 秒、剩 44.99 → 量完第一支就收手(照第一支再量一支要 45)", (30.0, 2.0, 2.0, 2.0), 44.99, 1),
+                                    ("3、2、2、2 秒、剩 6.0(2×2×1.5=6 剛好)→ 照量、量齊", (3.0, 2.0, 2.0, 2.0), 6.0, 4),
+                                    ("3、2、2、2 秒、剩 5.99 → 量完第二支收手", (3.0, 2.0, 2.0, 2.0), 5.99, 2),
+                                    ("1.5、1、5、1 秒、剩 3.0:第三支前平均 1(1×2×1.5=3 照量)、第四支前平均 3(3×1×1.5=4.5>3)→ 量 3 支收手",
+                                     (1.5, 1.0, 5.0, 1.0), 3.0, 3)):
+            it = iter(took)
+            m._kill_run = lambda cmd, run_dir, cap, **_kw: (0, "", next(it), False)
             mg = m._KillMerge(0)
             mg.remaining = lambda rem=rem: rem
-            c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
-                                      mstate={"unsure": False})
-            got = m._kill_merge_singles(mg, c, uniq, cmd_of)
-            check(f"r2 邊界 #1 已量 2 秒、剩兩支、剩 {rem} 秒(門檻 6)→ {'量齊' if ok else '收手'}", got is ok and (len(c.baselines) == 3) == ok,
-                  f"{got} {sorted(c.baselines)}")
-        # r3 邊界 #2、正確性 #1:耗時不等(1 秒、3 秒、1 秒)才分得出「平均」跟總和、最後一筆、最大值。剩 3.0:量完第一支門檻 1×2×1.5=3 照量;
-        # 量完第二支平均 2、門檻 2×1×1.5=3 照量 → 三支量齊。改成總和(門檻 6)或最後一筆、最大值(門檻 4.5)→ 第二支後就收手而紅。剩 2.99 → 第一支後收手。
-        took = {"run aCase": 1.0, "run bCase": 3.0, "run cCase": 1.0}
-        m._kill_run = lambda cmd, run_dir, cap, **_kw: (0, "", took[cmd], False)
-        for rem, n in ((3.0, 3), (2.99, 1)):
-            mg = m._KillMerge(0)
-            mg.remaining = lambda rem=rem: rem
-            c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
-                                      mstate={"unsure": False})
-            got = m._kill_merge_singles(mg, c, uniq, cmd_of)
-            check(f"r3 邊界 #2 耗時 1、3、1 秒、剩 {rem} 秒 → 量了 {n} 支(重估用平均)", len(c.baselines) == n and got is (n == 3),
-                  f"{got} {sorted(c.baselines)}")
-        # r4 通才 #1、邊界 #1:1、3、1 秒那組分不出平均跟最小值、第一支。改用 1、5、1 秒、剩 3.0:量完第一支門檻 1×2×1.5=3 照量;
-        # 量完第二支平均 3、門檻 3×1×1.5=4.5 > 3 → 收手、量了 2 支。改成最小值或第一支(門檻 1×1×1.5=1.5)→ 照量第三支、量了 3 支而紅。
-        took = {"run aCase": 1.0, "run bCase": 5.0, "run cCase": 1.0}
+            c = ctx()
+            got = m._kill_merge_singles(mg, c, uniq4, cmd4)
+            check(f"S1 {label}", len(c.baselines) == n and got is (n == 4), f"{got} {sorted(c.baselines)}")
+        # 第一支被剩下時限截斷而逾時:回不合併、基準一支都不寫
+        m._kill_run = lambda cmd, run_dir, cap, **_kw: (None, "", cap, True)
         mg = m._KillMerge(0)
-        mg.remaining = lambda: 3.0
-        c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
-                                  mstate={"unsure": False})
-        got = m._kill_merge_singles(mg, c, uniq, cmd_of)
-        check("r4 通才 #1 耗時 1、5、1 秒、剩 3.0 秒 → 量了 2 支就收手(平均 3,不是最小值或第一支的 1)", got is False and len(c.baselines) == 2,
-              f"{got} {sorted(c.baselines)}")
-        # r4 邊界 #3:剩下時限已用完(負數)時,單支基準收到的上限要是保底 1 秒,不是負數。
+        mg.remaining = lambda: 20.0
+        c = ctx()
+        got = m._kill_merge_singles(mg, c, uniq4, cmd4)
+        check("S1 第一支被剩下時限截斷而逾時 → 回不合併、基準 0 支", got is False and c.baselines == {}, f"{got} {sorted(c.baselines)}")
+        # 時限提示:少於 2 支用單價,2 支以上用第一支以外的平均 × 全部支數 × 1.5
+        it = iter((30.0, 40.0, 40.0, 40.0))
+        m._kill_run = lambda cmd, run_dir, cap, **_kw: (0, "", next(it), False)
+        mg = m._KillMerge(0)
+        mg.remaining = lambda: 50.0
+        c = ctx()
+        m._kill_merge_singles(mg, c, uniq4, cmd4)
+        check("S1 收手時的時限提示照第一支以外的平均估全部 4 支(40×4×1.5=240)", c.merge_need == (4, 240.0), str(getattr(c, "merge_need", None)))
+        # 原 r4 邊界 #3:剩下時限已用完(負數)時,單支基準收到的上限要是保底 1 秒,不是負數。
         caps = []
         m._kill_run = lambda cmd, run_dir, cap, **_kw: (caps.append(cap), (0, "", 0.1, False))[1]
         mg = m._KillMerge(0)
         mg.remaining = lambda: -5.0
-        c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
-                                  mstate={"unsure": False})
-        m._kill_merge_singles(mg, c, uniq, cmd_of)
+        m._kill_merge_singles(mg, ctx(), uniq4, cmd4)
         check("r4 邊界 #3 剩下時限 -5 秒 → 第一支單支基準收到的上限是保底 1 秒", bool(caps) and caps[0] == 1.0, str(caps))
     finally:
         m._kill_run = orig
@@ -147615,6 +147619,110 @@ def t_choice_kill_merge_unclean_reasons():
         _ck_cleanup(*roots, tmp)
 
 
+def _ckm_gov_ck(m, root):
+    """在 root 跑 gov --stats,攔下交給 _render_gov_choice 的列 → [列…](choice-kill 帳的 ck 投影在每列的 "ck")。"""
+    import contextlib
+    import io
+    seen = []
+    saved = m._render_gov_choice
+    m._render_gov_choice = lambda rows: seen.extend(rows)
+    o_cwd = _os_mod.getcwd()
+    try:
+        _os_mod.chdir(root)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            m.cmd_gov(m.Env(Path(root) / _KSP_V), stats=True)
+    finally:
+        _os_mod.chdir(o_cwd)
+        m._render_gov_choice = saved
+    return [rw for rw in seen if rw.get("gate") == "choice-kill"]
+
+
+def t_choice_kill_merge_unclean_code():
+    """[選擇點變異加速第三段 S4] 快篩結果檔是零個案例的 JUnit 檔 → 沒跑乾淨的原因是「結果檔讀不出來(zero_cases)」,run 的 merge_unclean 用這個鍵,
+    那個壞法那筆帳帶 merge_why {kotlin: 結果檔讀不出來(zero_cases)};快篩通過的壞法那筆不帶 merge_why;讀沒有 merge_why、merge_trips、merge_reopen
+    的舊帳 → gov 的 ck 讀成空字典。判準來源:第三段計劃預期值表 S4。翻紅釘:原因不帶代碼 → 原因那兩條紅;沒記 merge_why → 帳那條紅;
+    乾淨的也記 → 對照那條紅;gov 少欄 → 舊帳那條紅。"""
+    import json as _j
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    cfg = {"platforms": {"kotlin": {"profile": "kotlin-junit", "root": ".", "run_cmd": _CKM_CMD}}, "default_platform": "kotlin"}
+    why = "結果檔讀不出來(zero_cases)"
+    try:
+        root, fake = _ckm_repo(2, {"__merge__": {"1": "zero"}, "alphaCase": {"kill": [1]}}, config=cfg)
+        roots += [root, fake]
+        r = _ckm_run_many([(root, fake, (), tmp / "0.log", "2", {})])[0]
+        runs = _ck_gov(root, kind="run")
+        check("S4 run 的 merge_unclean 用帶代碼的鍵", runs and runs[-1].get("merge_unclean") == {"kotlin": {why: 1}}, f"{runs}\n{r.stderr[-400:]}")
+        evs = _ck_by_file(_ck_gov(root, kind="choice-kill"))
+        e1, e2 = evs.get(_ck_fp(1, 2), {}), evs.get(_ck_fp(2, 2), {})
+        check("S4 壞法 1 那筆帶 merge_why {kotlin: 結果檔讀不出來(zero_cases)}", e1.get("merge_why") == {"kotlin": why}, str(e1)[:500])
+        check("S4 ★對照★ 壞法 2 快篩通過 → 那筆不帶 merge_why", "merge_why" not in e2 and e2.get("merge_kind") == {"kotlin": "pass"}, str(e2)[:500])
+        # 舊帳:拿掉新欄後 gov 讀成空字典
+        p = Path(root) / "docs" / ".governance-log.jsonl"
+        old = dict(e1, token="0" * 16, fp="9" * 16)
+        old.pop("merge_why", None)
+        old_run = dict(runs[-1], token="1" * 16, run_id="oldrun")
+        for k in ("merge_trips", "merge_reopen"):
+            old_run.pop(k, None)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(_j.dumps(old, ensure_ascii=False) + "\n" + _j.dumps(old_run, ensure_ascii=False) + "\n")
+        m = _load_lumos_inproc()
+        rows = _ckm_gov_ck(m, root)
+        ck = {(rw.get("ck") or {}).get("fp"): rw.get("ck") or {} for rw in rows if rw.get("kind") == "choice-kill"}
+        check("S4 gov 讀帳:新帳 ck 帶 merge_why", ck.get(_ck_fp(1, 2), {}).get("merge_why") == {"kotlin": why}, str(ck)[:400])
+        check("S4 gov 讀帳:缺 merge_why 的舊帳讀成空字典", ck.get("9" * 16, {}).get("merge_why") == {}, str(ck.get("9" * 16)))
+        rck = [rw.get("ck") or {} for rw in rows if rw.get("kind") == "run"]
+        check("S4 gov 讀帳:缺 merge_trips、merge_reopen 的舊 run 帳讀成空字典", rck and rck[-1].get("merge_trips") == {} and rck[-1].get("merge_reopen") == {},
+              str(rck[-1:]))
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_kill_merge_half_open():
+    """[選擇點變異加速第三段 S2、S3] 斷路器半開:跳開後每 10 個能跑快篩的壞法改走逐支,第 11 個跑一次試探快篩;試探有失敗 → 恢復(標準錯誤印恢復那行)、
+    之後照常快篩;試探逾時 → 不恢復、不再印跳開那行、merge_unclean 照加、再 10 個才試;試探編不過或 rc 不是 0 → 不恢復;恢復後又 5 次逾時 → 再跳開,
+    merge_trips 2、merge_reopen 1;時限不夠而不合併 → 一次快篩都不跑。每個壞法都由 alphaCase 單支殺掉(逐支一次就停)。
+    判準來源:第三段計劃預期值表 S2 四案、S3。翻紅釘:不試探 → 第一案 16 以後沒有合併而紅;間隔差一 → 跑合併的編號錯而紅;編不過也恢復 → 第三案紅;
+    停用中照舊數 streak → 第二案再印跳開那行而紅;恢復不歸零 streak → 第五案第 17 個就跳開而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    one = "alphaCase,bravoCase,charlieCase"
+    cfg = {"platforms": {"kotlin": {"profile": "kotlin-junit", "root": ".", "run_cmd": _CKM_CMD}}, "default_platform": "kotlin"}
+    hang = lambda *ks: {str(k): "hang" for k in ks}
+    try:
+        cases = (("試探有失敗 → 恢復", 18, hang(1, 2, 3, 4, 5), {}, (), [1, 2, 3, 4, 5, 16, 17, 18], 1, 1, {"逾時": 5}, {"kotlin": 1}, {"kotlin": 1}),
+                 ("試探逾時 → 維持停用、再 10 個才試", 27, hang(1, 2, 3, 4, 5, 16), {}, (), [1, 2, 3, 4, 5, 16, 27], 1, 1, {"逾時": 6},
+                  {"kotlin": 1}, {"kotlin": 1}),
+                 ("試探編不過 → 不恢復", 16, dict(hang(1, 2, 3, 4, 5), **{"16": "compile"}), {}, (), [1, 2, 3, 4, 5, 16], 1, 0, {"逾時": 5},
+                  {"kotlin": 1}, {}),
+                 ("試探 rc 不是 0 → 不恢復", 16, dict(hang(1, 2, 3, 4, 5), **{"16": "rc1"}), {"__mfail__": {"16": []}}, (), [1, 2, 3, 4, 5, 16], 1, 0,
+                  {"逾時": 5}, {"kotlin": 1}, {}),
+                 ("恢復後又 5 次逾時 → 再跳開", 26, hang(1, 2, 3, 4, 5, 17, 18, 19, 20, 21), {}, (), [1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 21], 2, 1,
+                  {"逾時": 10}, {"kotlin": 2}, {"kotlin": 1}),
+                 ("S3 時限不夠而不合併 → 一次快篩都不跑", 16, {}, {}, ("--max-seconds", "44"), [], 0, 0, None, {}, {}))
+        jobs = []
+        for i, (_l, n, mm, extra, args, *_rest) in enumerate(cases):
+            root, fake = _ckm_repo(n, dict(extra, __merge__=mm, alphaCase={"kill": list(range(1, n + 1))}), config=cfg)
+            roots += [root, fake]
+            jobs.append((root, fake, ("--max-mutants", "40") + tuple(args), tmp / f"{i}.log", "2", {}))
+        rs = _ckm_run_many(jobs)
+        for (label, n, _mm, _x, _a, merged, n_trip, n_reopen, unclean, trips, reopen), job, r in zip(cases, jobs, rs):
+            ph = _ckm_phase(_ckm_calls(job[3]))
+            had = [i for i in range(1, n + 1) if (ph.get(str(i)) or [""])[0] == one]
+            runs = _ck_gov(job[0], kind="run")
+            last = runs[-1] if runs else {}
+            check(f"{label}:跑合併的壞法是 {merged}", had == merged, f"{had}\n{r.stderr[-500:]}")
+            check(f"{label}:跳開那行印 {n_trip} 次、恢復那行印 {n_reopen} 次(都在標準錯誤)",
+                  r.stderr.count("合併連續 5 次沒跑乾淨") == n_trip and r.stderr.count("試探快篩跑乾淨了,恢復合併") == n_reopen
+                  and "恢復合併" not in r.stdout, r.stderr[-500:])
+            check(f"{label}:run 的 merge_trips {trips}、merge_reopen {reopen}、merge_tripped {bool(trips)}",
+                  last.get("merge_trips", {}) == trips and last.get("merge_reopen", {}) == reopen and last.get("merge_tripped") is bool(trips), str(last)[-400:])
+            if unclean is not None:
+                check(f"{label}:merge_unclean {{kotlin: {unclean}}}", last.get("merge_unclean") == {"kotlin": unclean}, str(last.get("merge_unclean")))
+            check(f"{label}:每個壞法都判殺掉", (last.get("counts") or {}).get("killed") == n, str(last.get("counts")))
+    finally:
+        _ck_cleanup(*roots, tmp)
+
 def _ckm_ready_ctx(tmp, **kw):
     import types
     return types.SimpleNamespace(**dict(dict(plat="app", run_cmd=_CKM_CMD, flaky=False, node_dirty=False, coll_cache={},
@@ -147626,7 +147734,7 @@ def t_choice_kill_merge_budget_hint():
     """[選擇點變異加速第二段 S7] 守 169 支、--max-seconds 1800、走到時限門前已花 40 秒 → 不合併、merge_off {平台: 時限不夠}、標準錯誤那行含
     「--max-seconds 2700」((40 + 2535 + 60) 進位到百);3000 → 合併、merge_off 沒有這個平台、不印;剩下 -5 秒 → 「剩 0 秒」。
     直接呼叫 _kill_merge_ready(剩下時限換成固定值、t0 設成 40 秒前)。不合併的原因只記在 mg.plats(代碼審 code-選擇點變異加速第二段 r1 a1)。
-    另兩案(r1 c2、i5):基準量不齊(單支實測 2 秒、三支、剩 5.99 秒,量完第一支就收手)的提示照全部 3 支、實測平均估 → 約需 9 秒、
+    另兩案(r1 c2、i5;第三段 S7 改口徑):基準量不齊(單支實測 2 秒、四支、剩 5.99 秒,第一支不拿來估、量完第二支收手)的提示照全部 4 支、第一支以外的平均估 → 約需 12 秒、
     已花 33 秒時 --max-seconds 200(照還沒量的 2 支估是 6 秒、100);_ChoiceKillRun 建 _KillMerge 時傳的是它自己的 t0。判準來源:計劃預期值表 S7。
     翻紅釘:不加已花的秒數 → X 變 2600 而紅;不進位 → 2635 而紅;剩下不取 max(…, 0) → 「剩 -5 秒」而紅;基準量不齊不帶提示或照還沒量的支數 → 那案紅;
     建 _KillMerge 不傳 t0 → t0 那案紅。"""
@@ -147662,13 +147770,13 @@ def t_choice_kill_merge_budget_hint():
             c = _ckm_ready_ctx(tmp, baselines={}, floor=20.0, hk=types.SimpleNamespace(between=lambda: None), mstate={"unsure": set(), "r": 0})
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
-                got = m._kill_merge_base(mg, c, ["aCase", "bCase", "cCase"], "ident", {})
+                got = m._kill_merge_base(mg, c, ["aCase", "bCase", "cCase", "dCase"], "ident", {})
             e = err.getvalue()
         finally:
             m._kill_run = orig
         check("r1 c2 基準量不齊 → 不合併、mg.plats {app: (False, 基準量不齊)}", got is None and mg.plats == {"app": (False, "基準量不齊")}, f"{got} {mg.plats}")
-        check("r1 c2、g3 基準量不齊的提示:全部 3 支、約需 9 秒、剩 5 秒、--max-seconds 200", e.count("\n") == 1
-              and "這次不合併(基準量不齊),照逐支跑;合併要先量齊 3 支基準,約需 9 秒,剩 5 秒;要合併請帶 --max-seconds 200" in e, e)
+        check("第三段 S7 基準量不齊的提示:守 4 支、量完第二支收手、全部 4 支約需 12 秒、剩 5 秒、--max-seconds 200", e.count("\n") == 1
+              and "這次不合併(基準量不齊),照逐支跑;合併要先量齊 4 支基準,約需 12 秒,剩 5 秒;要合併請帶 --max-seconds 200" in e, e)
         # r1 i5:_ChoiceKillRun 建 _KillMerge 時傳自己的 t0(期限 = t0 + 總時限)
         seen = []
         loc = f"{_CHOICE_MAIN}:5"
