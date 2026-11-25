@@ -146465,7 +146465,7 @@ def t_choice_kill_merge_cmd():
           and not m._choice_merge_too_long(m._choice_merge_cmd(cmd, sh, long_names[:5], "ident")), str(len(big)))
     tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
     try:
-        mg = m._KillMerge(_ckm_time.monotonic() + 1800, 3)
+        mg = m._KillMerge(_ckm_time.monotonic() + 1800)
         base = dict(plat="app", run_cmd=cmd, pentry={"root": str(tmp), "profile": {"name_filter": "ident"}, "profile_name": "kotlin-junit"},
                     coll_cache={}, run_dir=str(tmp), wt=str(tmp), flaky=False, node_dirty=False)
         ok = m._kill_merge_ready(mg, types.SimpleNamespace(**base), ["aCase", "bCase"])
@@ -146474,7 +146474,7 @@ def t_choice_kill_merge_cmd():
         for label, kw, methods in (("有一支名稱檢查沒過", {}, ["aCase", "b,Case"]), ("平台標 flaky", {"flaky": True}, ["aCase", "bCase"]),
                                    ("計劃筆記有未提交改動", {"node_dirty": True}, ["aCase", "bCase"]),
                                    ("組出的指令超過長度上限", {}, long_names)):
-            got = m._kill_merge_ready(m._KillMerge(_ckm_time.monotonic() + 10 ** 6, 3), types.SimpleNamespace(**dict(base, **kw)), methods)
+            got = m._kill_merge_ready(m._KillMerge(_ckm_time.monotonic() + 10 ** 6), types.SimpleNamespace(**dict(base, **kw)), methods)
             check(f"S1 {label} → 那個平台組不合併", got is None, str(got))
     finally:
         _ck_cleanup(tmp)
@@ -146606,7 +146606,7 @@ def t_choice_kill_merge_weak_skips():
         log = tmp / "b.log"
         root, fake = _ckm_repo(2, {})
         rows = []
-        mg = m._KillMerge(_ckm_time.monotonic() + 600, 2)
+        mg = m._KillMerge(_ckm_time.monotonic() + 600)
         rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
             mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes(["===", 2]), source="choice-kill",
             stop_group_on=mm._CHOICE_STOP_ON, on_row=rows.append, should_stop=lambda: False, merge=mg), log=log)
@@ -146768,6 +146768,8 @@ def t_choice_kill_merge_interrupt():
         runs = _ck_gov(root, kind="run")
         check("S9 合併基準中送 SIGHUP → 當場收掉、不合併(沒有壞法呼叫)、run interrupted、rc 2", secs < 30 and not [x for x in rows if x[1] != "base"]
               and rc == 2 and len(runs) == 1 and runs[0].get("interrupted") is True, f"{secs:.1f}s rc={rc} {rows} {runs}\n{err[-300:]}")
+        check("代碼審 code-選擇點變異加速第二段 r1 c1 合併基準被中斷 → run 的 merge_off {kotlin-junit: 中斷}、不印「這次不合併」",
+              runs and runs[0].get("merge_off") == {"kotlin-junit": "中斷"} and "這次不合併(中斷)" not in err, f"{runs}\n{err[-300:]}")
         root, rc, secs, rows, err = go({"bravoCase": {"kill": [1]}, "__mfail__": {"1": ["alphaCase", "bravoCase"]}, "__mark__": {"names": "alphaCase", "state": "1", "sleep": 2}}, _sig.SIGINT)
         calls = [tuple(x[:3]) for x in rows]
         check("S9 逐支流程中送 SIGINT → 那一支跑完(有 end)才停、下一支沒跑、run interrupted", ("alphaCase", "1", "end") in calls
@@ -146791,7 +146793,7 @@ def t_choice_kill_merge_interrupt():
         try:
             rc, out, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
                 mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2]), source="choice-kill", keep_worktree=True,
-                stop_group_on=mm._CHOICE_STOP_ON, on_row=rows.append, should_stop=lambda: flag[0], merge=m._KillMerge(_ckm_time.monotonic() + 600, 2)), log=log)
+                stop_group_on=mm._CHOICE_STOP_ON, on_row=rows.append, should_stop=lambda: flag[0], merge=m._KillMerge(_ckm_time.monotonic() + 600)), log=log)
         finally:
             m._kill_after_write = orig
         calls = _ckm_calls(log)
@@ -146863,7 +146865,7 @@ def t_choice_kill_merge_multi_platform():
         recs = _ckm_recipes([1, 2], tests=("alphaCase", "bravoCase"), plat="app") + _ckm_recipes([1, 2], tests=("kiloCase", "limaCase"), plat="lib")
         rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
             mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=recs, source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON,
-            on_row=rows.append, should_stop=lambda: False, merge=mm._KillMerge(_ckm_time.monotonic() + 600, 2)), log=log)
+            on_row=rows.append, should_stop=lambda: False, merge=mm._KillMerge(_ckm_time.monotonic() + 600)), log=log)
         calls = _ckm_calls(log)
         lib1 = [r["verdict"] for r in rows if r.get("platform") == "lib" and r.get("group") == "g1"]
         check("S10 A 已決定性殺掉壞法 1 → B 不跑快篩、交略過列", lib1 == ["skipped", "skipped"] and ("kiloCase,limaCase", "1") not in calls
@@ -147192,7 +147194,7 @@ def t_choice_kill_merge_budget_reestimate():
                 dl = _ckm_time.monotonic() + 11
                 return mm.cmd_guard_kill(mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2]), source="choice-kill",
                                          stop_group_on=mm._CHOICE_STOP_ON, on_row=rows.append, should_stop=lambda: _ckm_time.monotonic() >= dl,
-                                         merge=mm._KillMerge(dl, 2) if merged else None)
+                                         merge=mm._KillMerge(dl) if merged else None)
             _ckm_inproc(root, fake, fn, log=log)
             got[label] = ([(r["group"], r["test"], r["verdict"]) for r in rows], _ckm_calls(log))
     finally:
@@ -147209,7 +147211,7 @@ def t_choice_kill_merge_budget_reestimate():
         log, rows = tmp / "run.log", []
         _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
             mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2]), source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON,
-            on_row=rows.append, should_stop=lambda: False, merge=mm._KillMerge(_ckm_time.monotonic() + 6, 2)), log=log)
+            on_row=rows.append, should_stop=lambda: False, merge=mm._KillMerge(_ckm_time.monotonic() + 6)), log=log)
         vs = [(r["group"], r["test"], r["verdict"]) for r in rows]
         check("r1 正確性 #1 bravo 基準被剩下時限截斷 → 不記成基準非綠:六列都 survived、bravo 的基準照完整上限重量一次", len(vs) == 6
               and all(v == "survived" for _g, _t, v in vs) and _ckm_calls(log).count(("bravoCase", "base")) == 2, f"{vs} {_ckm_calls(log)}")
@@ -147230,7 +147232,7 @@ def t_choice_kill_merge_budget_edge():
     try:
         m._kill_run = lambda cmd, run_dir, cap, **_kw: (0, "", 2.0, False)
         for rem, ok in ((6.0, True), (5.99, False)):
-            mg = m._KillMerge(0, 2)
+            mg = m._KillMerge(0)
             mg.remaining = lambda rem=rem: rem
             c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
                                       mstate={"unsure": False})
@@ -147242,7 +147244,7 @@ def t_choice_kill_merge_budget_edge():
         took = {"run aCase": 1.0, "run bCase": 3.0, "run cCase": 1.0}
         m._kill_run = lambda cmd, run_dir, cap, **_kw: (0, "", took[cmd], False)
         for rem, n in ((3.0, 3), (2.99, 1)):
-            mg = m._KillMerge(0, 2)
+            mg = m._KillMerge(0)
             mg.remaining = lambda rem=rem: rem
             c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
                                       mstate={"unsure": False})
@@ -147252,7 +147254,7 @@ def t_choice_kill_merge_budget_edge():
         # r4 通才 #1、邊界 #1:1、3、1 秒那組分不出平均跟最小值、第一支。改用 1、5、1 秒、剩 3.0:量完第一支門檻 1×2×1.5=3 照量;
         # 量完第二支平均 3、門檻 3×1×1.5=4.5 > 3 → 收手、量了 2 支。改成最小值或第一支(門檻 1×1×1.5=1.5)→ 照量第三支、量了 3 支而紅。
         took = {"run aCase": 1.0, "run bCase": 5.0, "run cCase": 1.0}
-        mg = m._KillMerge(0, 2)
+        mg = m._KillMerge(0)
         mg.remaining = lambda: 3.0
         c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
                                   mstate={"unsure": False})
@@ -147262,7 +147264,7 @@ def t_choice_kill_merge_budget_edge():
         # r4 邊界 #3:剩下時限已用完(負數)時,單支基準收到的上限要是保底 1 秒,不是負數。
         caps = []
         m._kill_run = lambda cmd, run_dir, cap, **_kw: (caps.append(cap), (0, "", 0.1, False))[1]
-        mg = m._KillMerge(0, 2)
+        mg = m._KillMerge(0)
         mg.remaining = lambda: -5.0
         c = types.SimpleNamespace(baselines={}, floor=20.0, run_dir="/nonexistent", hk=types.SimpleNamespace(between=lambda: None),
                                   mstate={"unsure": False})
@@ -147286,7 +147288,7 @@ def t_choice_kill_merge_signal_race():
             root, fake = _ckm_repo(2, beh)
             roots += [root, fake]
             log = tmp / f"{nth}.log"
-            mg = m._KillMerge(_ckm_time.monotonic() + 600, 2)
+            mg = m._KillMerge(_ckm_time.monotonic() + 600)
             orig, n = m._choice_merge_clear, [0]
 
             def clear(rdir, n=n, mg=mg, nth=nth, orig=orig):
@@ -147367,7 +147369,7 @@ def t_choice_kill_merge_cap_wiring():
         finally:
             m._kill_run = orig
             _ck_cleanup(root, fake, tmp)
-    _rc, out, _err = run(m._KillMerge(_ckm_time.monotonic() + 60, 2), as_json=True)
+    _rc, out, _err = run(m._KillMerge(_ckm_time.monotonic() + 60), as_json=True)
     try:
         rows = json.loads(out.strip().splitlines()[-1])["results"]
     except (ValueError, IndexError, KeyError):
@@ -147379,7 +147381,7 @@ def t_choice_kill_merge_cap_wiring():
           any(r.get("verdict") == "survived" for r in rows) and not any("judged" in r for r in rows), str(rows)[:400])
     seen.clear()
     singles[0] = 0
-    mg = m._KillMerge(_ckm_time.monotonic() + 600, 2)
+    mg = m._KillMerge(_ckm_time.monotonic() + 600)
     mg.remaining = lambda: 60.0 if singles[0] < 3 else -5.0
     run(mg)
     check("r4 邊界 #2 量完單支基準後剩下時限 -5 秒 → 合併基準收到的上限是保底 1 秒", bool(seen) and seen[0] == 1.0, str(seen))
@@ -147423,7 +147425,7 @@ def t_choice_kill_merge_edges():
         base = dict(plat="app", run_cmd="./gradlew :app:testDebugUnitTest --tests '*{method}'", flaky=False, node_dirty=False, coll_cache={},
                     pentry={"root": str(tmp), "profile": {"name_filter": "ident"}, "profile_name": "kotlin-junit"}, run_dir=str(tmp), wt=str(tmp))
         for rem, ok in ((45.0, True), (44.99, False)):
-            mg = m._KillMerge(0, 3)
+            mg = m._KillMerge(0)
             mg.remaining = lambda rem=rem: rem
             got = m._kill_merge_ready(mg, types.SimpleNamespace(**base), names)
             check(f"r1 邊界 #4 三支、剩 {rem} 秒(門檻 45)→ {'合併' if ok else '不合併'}", (got is not None) == ok, str(got))
@@ -147438,7 +147440,7 @@ def t_choice_kill_merge_edges():
             stop_at = _ckm_time.monotonic() + 3
             return mm.cmd_guard_kill(mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=_ckm_recipes([1, 2], tests=_CKM_TESTS + ("deltaCase",)),
                                      source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON, on_row=rows.append,
-                                     should_stop=lambda: _ckm_time.monotonic() >= stop_at, merge=mm._KillMerge(_ckm_time.monotonic() + 600, 2))
+                                     should_stop=lambda: _ckm_time.monotonic() >= stop_at, merge=mm._KillMerge(_ckm_time.monotonic() + 600))
         _ckm_inproc(root, fake, fn, log=log)
         calls = _ckm_calls(log)
         check("r1 邊界 #5 量基準中途總時限到 → 量完那支就停:第三支(charlieCase)基準沒跑、沒有壞法呼叫、不交列",
@@ -147456,7 +147458,7 @@ def t_choice_kill_merge_no_lane_chunk():
     root, fake = _ckm_repo(2, {"charlieCase": {"base_red": True}})
     try:
         log, rows = tmp / "run.log", []
-        mg = m._KillMerge(_ckm_time.monotonic() + 600, 2)
+        mg = m._KillMerge(_ckm_time.monotonic() + 600)
         recs = _ckm_recipes([1]) + _ckm_recipes([2], tests=("charlieCase",))
         _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
             mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=recs, source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON,
@@ -147579,6 +147581,9 @@ def t_choice_kill_merge_unclean_reasons():
             runs = _ck_gov(job[0], kind="run")
             check(f"S4 {label}:run 的 merge_unclean 是 {w}", runs and runs[-1].get("merge_unclean") == w, f"{runs}\n{r.stderr[-400:]}")
         check("S4 跳開那行印出最後一次的原因", "合併連續 5 次沒跑乾淨(最後一次:結果檔超過大小上限)" in rs[0].stderr, rs[0].stderr[-400:])
+        runs0 = _ck_gov(jobs[0][0], kind="run")
+        check("代碼審 code-選擇點變異加速第二段 r1 a1 斷路器跳開不算進 run 的 merge_off(另有 merge_tripped)", runs0 and runs0[-1].get("merge_off") == {}
+              and runs0[-1].get("merge_tripped") is True, str(runs0)[-300:])
     finally:
         _ck_cleanup(*roots, tmp)
 
@@ -147593,10 +147598,14 @@ def _ckm_ready_ctx(tmp, **kw):
 def t_choice_kill_merge_budget_hint():
     """[選擇點變異加速第二段 S7] 守 169 支、--max-seconds 1800、走到時限門前已花 40 秒 → 不合併、merge_off {平台: 時限不夠}、標準錯誤那行含
     「--max-seconds 2700」((40 + 2535 + 60) 進位到百);3000 → 合併、merge_off 沒有這個平台、不印;剩下 -5 秒 → 「剩 0 秒」。
-    直接呼叫 _kill_merge_ready(剩下時限換成固定值、t0 設成 40 秒前)。判準來源:計劃預期值表 S7。
-    翻紅釘:不加已花的秒數 → X 變 2600 而紅;不進位 → 2635 而紅;剩下不取 max(…, 0) → 「剩 -5 秒」而紅;時限門不最後判 → 不影響這裡(見 S10)。"""
+    直接呼叫 _kill_merge_ready(剩下時限換成固定值、t0 設成 40 秒前)。不合併的原因只記在 mg.plats(代碼審 code-選擇點變異加速第二段 r1 a1)。
+    另兩案(r1 c2、i5):基準量不齊(單支實測 2 秒、三支、剩 5.99 秒,量完第一支就收手)的提示照全部 3 支、實測平均估 → 約需 9 秒、
+    已花 33 秒時 --max-seconds 200(照還沒量的 2 支估是 6 秒、100);_ChoiceKillRun 建 _KillMerge 時傳的是它自己的 t0。判準來源:計劃預期值表 S7。
+    翻紅釘:不加已花的秒數 → X 變 2600 而紅;不進位 → 2635 而紅;剩下不取 max(…, 0) → 「剩 -5 秒」而紅;基準量不齊不帶提示或照還沒量的支數 → 那案紅;
+    建 _KillMerge 不傳 t0 → t0 那案紅。"""
     import contextlib
     import io
+    import types
     m = _load_lumos_inproc()
     tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
     names = [f"case{i:03d}" for i in range(169)]
@@ -147604,18 +147613,56 @@ def t_choice_kill_merge_budget_hint():
         for label, rem, merged, frag in (("1800 秒、已花 40", 1760.0, False, "--max-seconds 2700"), ("3000 秒", 2960.0, True, None),
                                          ("剩下 -5 秒", -5.0, False, "剩 0 秒")):
             now = _ckm_time.monotonic()
-            mg = m._KillMerge(now + rem, 2, t0=now - 40)
+            mg = m._KillMerge(now + rem, t0=now - 40)
             mg.remaining = lambda rem=rem: rem
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 got = m._kill_merge_ready(mg, _ckm_ready_ctx(tmp), names)
             e = err.getvalue()
             if merged:
-                check(f"S7 {label} → 合併、merge_off 沒有這個平台、不印", got is not None and mg.off == {} and e == "", f"{got} {mg.off} {e!r}")
+                check(f"S7 {label} → 合併、沒有記不合併、不印", got is not None and mg.plats == {} and e == "", f"{got} {mg.plats} {e!r}")
             else:
-                check(f"S7 {label} → 不合併、merge_off {{app: 時限不夠}}", got is None and mg.off == {"app": "時限不夠"}, f"{got} {mg.off}")
+                check(f"S7 {label} → 不合併、mg.plats {{app: (False, 時限不夠)}}", got is None and mg.plats == {"app": (False, "時限不夠")}, f"{got} {mg.plats}")
                 check(f"S7 {label} → 標準錯誤一行「⚠ app:這次不合併(時限不夠),照逐支跑」接提示、含「{frag}」",
                       e.count("\n") == 1 and e.startswith("⚠ app:這次不合併(時限不夠),照逐支跑;合併要先量齊 169 支基準,約需 2535 秒,") and frag in e, e)
+        # r1 c2、g3:基準量不齊的提示(直接呼叫 _kill_merge_base,換掉 _kill_run、單支固定 2 秒)
+        orig = m._kill_run
+        try:
+            m._kill_run = lambda cmd, run_dir, cap, **_kw: (0, "", 2.0, False)
+            now = _ckm_time.monotonic()
+            mg = m._KillMerge(now + 5.99, t0=now - 33)
+            mg.remaining = lambda: 5.99
+            c = _ckm_ready_ctx(tmp, baselines={}, floor=20.0, hk=types.SimpleNamespace(between=lambda: None), mstate={"unsure": set(), "r": 0})
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                got = m._kill_merge_base(mg, c, ["aCase", "bCase", "cCase"], "ident", {})
+            e = err.getvalue()
+        finally:
+            m._kill_run = orig
+        check("r1 c2 基準量不齊 → 不合併、mg.plats {app: (False, 基準量不齊)}", got is None and mg.plats == {"app": (False, "基準量不齊")}, f"{got} {mg.plats}")
+        check("r1 c2、g3 基準量不齊的提示:全部 3 支、約需 9 秒、剩 5 秒、--max-seconds 200", e.count("\n") == 1
+              and "這次不合併(基準量不齊),照逐支跑;合併要先量齊 3 支基準,約需 9 秒,剩 5 秒;要合併請帶 --max-seconds 200" in e, e)
+        # r1 i5:_ChoiceKillRun 建 _KillMerge 時傳自己的 t0(期限 = t0 + 總時限)
+        seen = []
+        loc = f"{_CHOICE_MAIN}:5"
+        tests = [{"plat": "app", "name": "aCase", "ref": "app:aCase", "clauses": ["Projects/選擇_計劃#S1"], "plans": ["Projects/選擇_計劃.md"],
+                  "keys": [("Projects/選擇_計劃.md", 1)]}]
+        kr = m._ChoiceKillRun(types.SimpleNamespace(find=lambda _n: "Projects/選擇_計劃.md"), Path("/nonexistent"), "d" * 40,
+                              {"tests": tests, "live": ["Projects/選擇_計劃.md"]}, {}, "s" * 16, 60, t0=12345.0)
+        kr.out = io.StringIO()
+        ident = {"file": _CHOICE_MAIN, "fp": "f" * 16, "row": "C-7", "old": "o", "new": "n", "new_sha": "a" * 16}
+        kr.plan_of[loc] = {"x": {"file": _CHOICE_MAIN, "line": 5, "fp": "f" * 16, "mutant": {"row": "C-7", "identity": ident}}, "order": [("app", "aCase")],
+                           "tests": {("app", "aCase"): tests[0]}, "rows": {}, "done": False, "plats": {"app"}}
+        kr.recipes = [{"invariant": f"{loc}|aCase", "test": "aCase", "platform": "app", "file": _CHOICE_MAIN, "old": "o", "new": "n", "group": loc}]
+        saved = (m.cmd_guard_kill, m._choice_record)
+        m.cmd_guard_kill = lambda env, node, merge=None, **_kw: seen.append((merge.t0, merge.deadline)) or 0
+        m._choice_record = lambda _rr, _h, extra: True
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                kr.run()
+        finally:
+            m.cmd_guard_kill, m._choice_record = saved
+        check("r1 i5 _ChoiceKillRun 建 _KillMerge:t0 是它自己的 t0、期限是 t0 + 總時限", seen == [(12345.0, 12405.0)], str(seen))
     finally:
         _ck_cleanup(tmp)
 
@@ -147687,7 +147734,7 @@ def t_choice_kill_merge_event_fields():
             merge.kinds[("app", loc)] = "fail"
             for rr in recipes_override:
                 on_row({"recipe_id": m._kill_recipe_id("Projects/選擇_計劃.md", rr), "platform": rr["platform"], "group": rr["group"], "verdict": "survived",
-                        "weak": False, "weak_why": [], "detail": "", "compile_error": False, "fail_excerpt": "", "single": rr["platform"] == "app"})
+                        "weak": False, "weak_why": [], "detail": "", "compile_error": False, "fail_excerpt": "", "ran_solo": rr["platform"] == "app"})
             return 0
         saved = (m.cmd_guard_kill, m._choice_record)
         m.cmd_guard_kill, m._choice_record = fake_gk, (lambda _rr, _h, extra: got.append(extra) or True)
@@ -147729,23 +147776,42 @@ def t_choice_kill_merge_off_reasons():
     """[選擇點變異加速第二段 S10] 一個平台組因指令過長、名稱檢查沒過、合併道不足 2 支、合併基準有支對不到名字而不合併 → 各印一行、merge_off 分別記
     指令過長、名稱檢查沒過、合併道不足 2 支、合併基準:對不到名字;兩平台組一個合併、一個合併基準逾時 → merge_off 只有後者、值是「合併基準:逾時」。
     另:時限門排最後(時限不夠、名稱也沒過 → 記名稱檢查沒過)。判準來源:計劃預期值表 S10。
-    翻紅釘:合併基準的原因照 _CHOICE_MERGE_BASE_WHY 換字或帶數字 → 對不到名字那案紅;啟用的平台也寫進 off → 兩平台那案紅;時限門不在最後 → 對照那案記時限不夠而紅。"""
+    原因只記在 mg.plats(啟用的是 (True, ""),不合併的是 (False, 原因));run 的 merge_off 由它算出(代碼審 code-選擇點變異加速第二段 r1 a1)。
+    補案(r1 i5、b1):指令形狀不支援、平台不穩或筆記未提交、讀結果檔的模組不在、結果資料夾不在工作樹各一案;只守 1 支(去重後)而時限也不夠 → 記合併道不足 2 支、
+    不印時限提示(照提示帶大時限也不會合併)。
+    翻紅釘:合併基準的原因照 _CHOICE_MERGE_BASE_WHY 換字或帶數字 → 對不到名字那案紅;啟用的平台也算進 merge_off → 兩平台那案紅;時限門不在最後 → 對照那案記時限不夠而紅;
+    不足 2 支的判斷在時限門之後 → 只守 1 支那案記時限不夠而紅。"""
     import contextlib
     import io
+    import types
     m = _load_lumos_inproc()
     tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
     roots = []
     long_names = [f"n{i:05d}" + "x" * 30 for i in range(1100)]
     try:
-        for label, methods, rem, why in (("指令過長", long_names, 10 ** 6, "指令過長"), ("名稱檢查沒過", ["aCase", "b,Case"], 10 ** 6, "名稱檢查沒過"),
-                                         ("名稱沒過而且時限也不夠(時限門最後判)", ["aCase", "b,Case"], 1.0, "名稱檢查沒過")):
-            mg = m._KillMerge(_ckm_time.monotonic() + 10 ** 6, 2)
+        two = ["aCase", "bCase"]
+        saved_tq = m._secev_tq
+        for label, methods, rem, why, kw, no_tq in (("指令過長", long_names, 10 ** 6, "指令過長", {}, False),
+                                                    ("名稱檢查沒過", ["aCase", "b,Case"], 10 ** 6, "名稱檢查沒過", {}, False),
+                                                    ("名稱沒過而且時限也不夠(時限門最後判)", ["aCase", "b,Case"], 1.0, "名稱檢查沒過", {}, False),
+                                                    ("指令形狀不支援(非 Gradle)", two, 10 ** 6, "指令形狀不支援", {"run_cmd": "{python} tests/run.py {method}"}, False),
+                                                    ("平台標 flaky", two, 10 ** 6, "平台不穩或筆記未提交", {"flaky": True}, False),
+                                                    ("計劃筆記有未提交改動", two, 10 ** 6, "平台不穩或筆記未提交", {"node_dirty": True}, False),
+                                                    ("讀結果檔的模組不在", two, 10 ** 6, "讀結果檔的模組不在", {}, True),
+                                                    ("結果資料夾不在工作樹(-p 絕對路徑)", two, 10 ** 6, "結果資料夾不在工作樹",
+                                                     {"run_cmd": f"gradlew -p {tmp.parent / 'elsewhere-ckm'} :app:testDebugUnitTest --tests '*{{method}}'"}, False),
+                                                    ("只守 1 支(去重)而時限也不夠", ["aCase", "aCase"], 1.0, "合併道不足 2 支", {}, False)):
+            mg = m._KillMerge(_ckm_time.monotonic() + 10 ** 6)
             mg.remaining = lambda rem=rem: rem
             err = io.StringIO()
-            with contextlib.redirect_stderr(err):
-                got = m._kill_merge_ready(mg, _ckm_ready_ctx(tmp), methods)
-            check(f"S10 {label} → 不合併、merge_off {{app: {why}}}、印一行", got is None and mg.off == {"app": why}
-                  and err.getvalue() == f"⚠ app:這次不合併({why}),照逐支跑\n", f"{got} {mg.off} {err.getvalue()!r}")
+            m._secev_tq = (lambda: None) if no_tq else saved_tq
+            try:
+                with contextlib.redirect_stderr(err):
+                    got = m._kill_merge_ready(mg, _ckm_ready_ctx(tmp, **kw), methods)
+            finally:
+                m._secev_tq = saved_tq
+            check(f"S10 {label} → 不合併、mg.plats {{app: (False, {why})}}、印一行", got is None and mg.plats == {"app": (False, why)}
+                  and err.getvalue() == f"⚠ app:這次不合併({why}),照逐支跑\n", f"{got} {mg.plats} {err.getvalue()!r}")
         jobs = []
         for i, beh in enumerate(({"bravoCase": {"base_red": True}, "charlieCase": {"base_red": True}}, {"__merge__": {"base": "misname"}})):
             root, fake = _ckm_repo(2, beh)
@@ -147761,13 +147827,24 @@ def t_choice_kill_merge_off_reasons():
                              "lib": {"profile": "kotlin-junit", "root": ".", "run_cmd": _CKM_CMD}}, "default_platform": "app"}
         root, fake = _ckm_repo(2, {"__merge_by__": {"kiloCase,limaCase": {"base": "hang"}}}, tests=("alphaCase", "bravoCase", "kiloCase", "limaCase"), config=cfg)
         roots += [root, fake]
-        mg = m._KillMerge(_ckm_time.monotonic() + 600, 2)
+        mg = m._KillMerge(_ckm_time.monotonic() + 600)
         recs = _ckm_recipes([1], tests=("alphaCase", "bravoCase"), plat="app") + _ckm_recipes([1], tests=("kiloCase", "limaCase"), plat="lib")
         _rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(
             mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=recs, source="choice-kill", stop_group_on=mm._CHOICE_STOP_ON,
             on_row=lambda _r: None, should_stop=lambda: False, merge=mg), log=tmp / "two.log")
-        check("S10 兩平台:app 合併、lib 合併基準逾時 → merge_off 只有 {lib: 合併基準:逾時}", mg.off == {"lib": "合併基準:逾時"}
-              and mg.plats.get("app", (False,))[0] is True, f"{mg.off} {mg.plats}\n{err[-300:]}")
+        check("S10 兩平台:app 合併、lib 合併基準逾時 → mg.plats {app: 啟用, lib: (False, 合併基準:逾時)}",
+              mg.plats == {"app": (True, ""), "lib": (False, "合併基準:逾時")}, f"{mg.plats}\n{err[-300:]}")
+        kr = types.SimpleNamespace(merge=mg, judged={}, plan_of={}, stats={"killed": 0, "survived": 0, "no_result": 0}, run_id="r", blobs=[],
+                                   interrupted=False, tests_sha="s", t0=_ckm_time.monotonic(), head="d" * 40, wrote_fail=0)
+        got = []
+        saved = m._choice_gate_event
+        m._choice_gate_event = lambda rr, kind, note, what, **kw: got.append(kw.get("extra")) or True
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                m._choice_kill_report(kr, {"changed": 0, "lines": [], "ast_grep": "", "unverified": []}, Path(root), "d" * 40, {}, [], 0, 0, 30, 60)
+        finally:
+            m._choice_gate_event = saved
+        check("S10 兩平台:run 的 merge_off 只有 {lib: 合併基準:逾時}(啟用的不算)", got and got[0].get("merge_off") == {"lib": "合併基準:逾時"}, str(got)[:300])
     finally:
         _ck_cleanup(*roots, tmp)
 
