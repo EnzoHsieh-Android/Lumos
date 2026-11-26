@@ -79796,7 +79796,14 @@ _CHOICE_COV_SRC_SKIP = frozenset(CODE_SKIP_DIRS | {".gradle"})   # 共用跳過�
 _CHOICE_COV_SRC_MAX = 20000          # 掃主程式套件最多看幾支 .kt、.java(超過就停,已收的照用並印一行提醒)
 _CHOICE_COV_SRC_ENTRIES = 200000     # 走訪最多看幾個檔(含非原始碼),超過一樣停
 _CHOICE_COV_SRC_HEAD = 8192          # 每支只讀開頭這麼多位元組找 package
-_CHOICE_COV_PKG_RE = re.compile(r"^[ \t\ufeff]*package[ \t]+([\w.`]+)", re.M)
+_CHOICE_COV_PKG_RE = re.compile(r"^[ \t\ufeff]*package[ \t\r\n]+([\w.`]+)", re.M)
+
+
+def _choice_cov_pkg_of(text):
+    """一段原始碼的 package 宣告 → 斜線分隔的套件(去掉反引號;檔首 BOM、package 與名字之間換行都認,Kotlin 文法 packageHeader);沒有宣告是 ""。
+    掃主程式套件與壞法行的套件共用這一支,兩邊對同一支檔讀出的值一定相同(套件正規式修補代碼審 r1 架構對齊)。"""
+    m = _CHOICE_COV_PKG_RE.search(text)
+    return m.group(1).replace("`", "").replace(".", "/") if m else ""
 
 
 def _choice_cov_test_srcset(parent, name):
@@ -79830,8 +79837,7 @@ def _choice_cov_src_pkgs(root):
                     head = fh.read(_CHOICE_COV_SRC_HEAD).decode("utf-8", "replace")
             except OSError:
                 continue
-            m = _CHOICE_COV_PKG_RE.search(head)
-            out.add(m.group(1).replace("`", "").replace(".", "/") if m else "")
+            out.add(_choice_cov_pkg_of(head))
     return out
 
 
@@ -79989,10 +79995,9 @@ def _choice_cov_req(rr, x, i):
         if diff:
             start = text.count("\n", 0, at) + 1
             first, last = start + diff[0], start + diff[-1]
-    m = re.search(r"(?m)^\s*package\s+([\w.]+)", text)
     lines = text.split("\n")
     line = lines[x["line"] - 1] if 0 < x["line"] <= len(lines) else ""
-    return {"i": i, "file": x["file"], "pkg": m.group(1).replace(".", "/") if m else "", "src": x["file"].rsplit("/", 1)[-1],
+    return {"i": i, "file": x["file"], "pkg": _choice_cov_pkg_of(text), "src": x["file"].rsplit("/", 1)[-1],
             "first": first, "last": last, "exc": _choice_cov_exception(x.get("decl"), line)}
 
 
