@@ -147647,6 +147647,39 @@ def _ckm_gov_ck(m, root):
     return [rw for rw in seen if rw.get("gate") == "choice-kill"]
 
 
+def t_choice_merge_stray_empty_suite():
+    """[選擇點存活回指 第一段放行後實測 2026-11-26] Gradle 會把背景執行緒在測試類別跑完之後印的輸出(例:Robolectric 的 CloseGuard 警告)歸到一個
+    沒有案例的空殼結果檔(tests="0"、時間戳 1970):合併呼叫裡同時有別的結果檔讀到案例時,這種空殼檔不算沒跑乾淨(每支目標測試照樣要在結果裡恰好對到一筆);
+    只有空殼檔 → 照舊「結果檔讀不出來(zero_cases)」;空殼檔宣告 errors 或 failures 不是 0、或裡面有 error、failure 元素 → 照舊拒收。
+    判準來源:實驗專案合併基準的現場(TEST-...SettlementRepositoryTest.xml 只有 system-err)。翻紅釘:空殼檔照舊拒收 → 第一案紅;
+    只有空殼也放行 → 第二案紅;帶錯誤的空殼也略過 → 後兩案紅。"""
+    m = _load_lumos_inproc()
+    tq = m._secev_tq()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    ok = '<testsuite name="p.A" tests="1" failures="0" errors="0"><testcase classname="p.A" name="aCase"/></testsuite>'
+    ghost = ('<?xml version="1.0" encoding="UTF-8"?><testsuite name="p.B" tests="0" skipped="0" failures="0" errors="0" timestamp="1970-01-01T00:00:00Z" time="0.0">'
+             '<properties/><system-out><![CDATA[]]></system-out><system-err><![CDATA[System.logW: CloseGuard]]></system-err></testsuite>')
+
+    def put(files):
+        for x in tmp.glob("*.xml"):
+            x.unlink()
+        for name, body in files.items():
+            (tmp / name).write_text(body, encoding="utf-8")
+        return m._choice_merge_facts(str(tmp), tq)
+    try:
+        facts, why = put({"TEST-p.A.xml": ok, "TEST-p.B.xml": ghost})
+        check("實測 正常結果檔 + 空殼檔 → 讀到 aCase、不算沒跑乾淨", why is None and [m._choice_merge_fullname(c) for c in facts] == ["p.A.aCase"], f"{facts} {why}")
+        check("實測 正常 + 空殼 → 合併判讀照常 pass", m._choice_merge_classify(0, "", False, str(tmp), ["aCase"], tq)[0] == "pass")
+        _f, why = put({"TEST-p.B.xml": ghost})
+        check("實測 只有空殼檔 → 照舊 zero_cases", why == "結果檔讀不出來(zero_cases)", str(why))
+        _f, why = put({"TEST-p.A.xml": ok, "TEST-p.B.xml": ghost.replace('errors="0"', 'errors="1"')})
+        check("實測 空殼檔宣告 errors=1 → 照舊拒收", why == "結果檔讀不出來(zero_cases)", str(why))
+        _f, why = put({"TEST-p.A.xml": ok, "TEST-p.B.xml": ghost.replace("<properties/>", '<properties/><error message="init" type="X"/>')})
+        check("實測 空殼檔裡有 error 元素 → 照舊拒收", why == "結果檔讀不出來(zero_cases)", str(why))
+    finally:
+        _ck_cleanup(tmp)
+
+
 def t_choice_kill_merge_unclean_code():
     """[選擇點變異加速第三段 S4] 快篩結果檔是零個案例的 JUnit 檔 → 沒跑乾淨的原因是「結果檔讀不出來(zero_cases)」,run 的 merge_unclean 用這個鍵,
     那個壞法那筆帳帶 merge_why {kotlin: 結果檔讀不出來(zero_cases)};快篩通過的壞法那筆不帶 merge_why;讀沒有 merge_why、merge_trips、merge_reopen
@@ -149456,11 +149489,1083 @@ def t_choice_survivor_why():
         cl = cp.stdout.splitlines()
         cat = {ln.split()[0]: i for i, ln in enumerate(cl) if ln.startswith("  " + _CHOICE_MAIN)}
         j2, j1 = cat.get(_ck_loc(2)), cat.get(_ck_loc(1))
-        check("choice-points 帳上存活那一行的下一行印為什麼欄", j2 is not None and cl[j2].endswith("存活") and j2 + 1 < len(cl) and cl[j2 + 1] == why,
+        check("choice-points 帳上存活那一行的下一行印為什麼欄", j2 is not None and cl[j2].endswith("存活  未分類") and j2 + 1 < len(cl) and cl[j2 + 1] == why,
               cp.stdout[-800:] + cp.stderr[-300:])
         check("choice-points 殺掉那一行底下不印", j1 is not None and (j1 + 1 >= len(cl) or "為什麼行為不同" not in cl[j1 + 1]), cp.stdout[-800:])
     finally:
         _ck_cleanup(root, fake)
+
+
+
+# ── 選擇點存活回指條款第一段(Projects/選擇點存活回指條款_計劃 範圍 1–4、6、7):逐測試覆蓋、依覆蓋選測試、reach 事件 ──
+# 判準來源:計劃〈預期值表〉S1–S8、S10(reach 那半)、S11、S21、S23 各列(輸入照抄、預期照抄,檔名與條款號換成臨時 repo 的)。
+# 假 Gradle(_CKC_GRADLE)= 合併快篩的 _CKM_GRADLE 加兩段:帶 lumos-cov 初始化腳本的單支呼叫依 beh.json 的 __cov__ 在 AGP 固定位置寫 JaCoCo exec
+# (工作階段編號寫測試名;x/Vm 類別有沒有探針為真由 zero 決定;noexec 不寫;red 掛覆蓋紅;mark 寫標記檔後睡著等訊號);
+# 分析任務 lumosCovAnalyze 讀清單裡的 exec、依工作階段編號的測試名查 pass(那支測試經過哪幾個 k<i>)輸出 JSON,nolines 列沒有指令紀錄的行。
+_CKC_JX = r'''
+import struct as _jx_struct
+
+
+def _jx_utf(s):
+    e = s.encode("utf-8")
+    return _jx_struct.pack(">H", len(e)) + e
+
+
+def _jx_vint(v):
+    out = b""
+    while v & ~0x7F:
+        out += bytes([0x80 | (v & 0x7F)])
+        v >>= 7
+    return out + bytes([v])
+
+
+def _jx_bools(a):
+    out, buf, n = _jx_vint(len(a)), 0, 0
+    for x in a:
+        if x:
+            buf |= 1 << n
+        n += 1
+        if n == 8:
+            out += bytes([buf])
+            buf, n = 0, 0
+    return out + (bytes([buf]) if n else b"")
+
+
+def _jx_write(path, sid, classes):
+    """JaCoCo ExecutionDataWriter 的格式:header 0x01 + magic 0xC0C0 + 版本 0x1007;session 0x10;每個有探針為真的類別一個 0x11 區塊。"""
+    data = b"\x01" + _jx_struct.pack(">HH", 0xC0C0, 0x1007) + b"\x10" + _jx_utf(sid) + _jx_struct.pack(">qq", 0, 0)
+    for i, (nm, pr) in enumerate(classes):
+        if any(pr):
+            data += b"\x11" + _jx_struct.pack(">q", i + 1) + _jx_utf(nm) + _jx_bools(pr)
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
+def _jx_sid(path):
+    b = open(path, "rb").read()
+    i = b.find(b"\x10", 5)
+    n = _jx_struct.unpack(">H", b[i + 1:i + 3])[0]
+    return b[i + 3:i + 3 + n].decode("utf-8")
+'''
+_CKC_ANALYZE = r'''
+if any(a.endswith("lumosCovAnalyze") for a in args):
+    cov = beh.get("__cov__") or {}
+    if log:
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write("\tbase\tanalyze\t" + os.getcwd() + "\n")
+    mf = next((a.split("=", 1)[1] for a in args if a.startswith("-PlumosCovManifest=")), "")
+    man = json.load(open(mf, encoding="utf-8"))
+    if cov.get("analyze_fail"):
+        print("FAILURE: analyze")
+        sys.exit(1)
+    hits = {}
+    for ti, path in man["execs"]:
+        sid = _jx_sid(path)
+        if sid in cov.get("drop_hits", []):
+            continue
+        ks = (cov.get("pass") or {}).get(sid, [])
+        hits[str(ti)] = [mm["i"] for mm in man["mutants"] if any(mm["first"] <= k + 4 <= mm["last"] for k in ks)]
+    nol = [mm["i"] for mm in man["mutants"] if mm["first"] - 4 in cov.get("nolines", [])]
+    with open(man["out"], "w", encoding="utf-8") as fh:
+        out = {"hits": hits, "nolines": nol, "noclasses": bool(cov.get("noclasses"))}   # 跟真的分析腳本一樣三個鍵都寫
+        json.dump({k: v for k, v in out.items() if k not in cov.get("omit_keys", [])}, fh)
+    sys.exit(0)
+'''
+_CKC_COV = r'''
+_ci = [args[k + 1] for k, a in enumerate(args) if a == "--init-script" and k + 1 < len(args)]
+if any("lumos-cov" in os.path.basename(p) for p in _ci):
+    cov = beh.get("__cov__") or {}
+    n0 = names[0] if names else ""
+    note("cov\t" + os.getcwd())
+    if os.environ.get("CK_MARK") and cov.get("mark") == n0:
+        open(os.environ["CK_MARK"], "w").close()
+        time.sleep(cov.get("mark_sleep", 60))
+    if n0 in cov.get("red", []):
+        print(n0 + " FAILED")
+        note("end")
+        sys.exit(1)
+    if n0 not in cov.get("noexec", []):
+        ed = os.path.join(os.getcwd(), "app", "build", "outputs", "unit_test_code_coverage", "debugUnitTest")
+        os.makedirs(ed, exist_ok=True)
+        _jx_write(os.path.join(ed, "testDebugUnitTest.exec"), n0, [(cov.get("cls", "x/Vm"), [False, n0 not in cov.get("zero", [])]), ("org/junit/Assert", [True])]
+                  + [("org/robolectric/internal/SandboxTestRunner", [True])]   # 實測:專案用 Robolectric 時每支測試的覆蓋資料都有它(JUnit 載入 runner)
+                  + ([("org/robolectric/android/internal/AndroidTestEnvironment", [True])] if n0 in cov.get("robo", []) else []))
+'''
+_CKC_GRADLE = _CKM_GRADLE.replace("\nnote(\"start\")\n", "\n" + _CKC_JX + _CKC_ANALYZE + "\nnote(\"start\")\n" + _CKC_COV, 1)
+_CKC_T6 = ("alphaCase", "bravoCase", "charlieCase", "deltaCase", "echoCase", "foxtrotCase")
+
+
+def _ckc_kt(cls, names, robo, style="runner"):
+    """測試檔:robo 時照 style 寫 Robolectric 的宣告——runner(@RunWith(RobolectricTestRunner::class))、androidx(@RunWith(AndroidJUnit4::class),
+    檔裡沒有 Robolectric 字樣)、base(繼承別檔的基底類別,檔裡也沒有);plain 的檔(robo 為 False)style 給 runner_text 時故意放一段含 RobolectricTestRunner 的註解。"""
+    if robo and style == "androidx":
+        head = "package x\n\nimport org.junit.Test\nimport org.junit.runner.RunWith\nimport androidx.test.ext.junit.runners.AndroidJUnit4\n\n@RunWith(AndroidJUnit4::class)\n"
+        return head + f"class {cls} {{\n" + "".join(f"    @Test fun {n}() {{}}\n" for n in names) + "}\n"
+    if robo and style == "base":
+        return f"package x\n\nimport org.junit.Test\n\nclass {cls} : BaseUnitTest() {{\n" + "".join(f"    @Test fun {n}() {{}}\n" for n in names) + "}\n"
+    head = "package x\n\nimport org.junit.Test\n" + ("import org.junit.runner.RunWith\nimport org.robolectric.RobolectricTestRunner\n\n"
+                                                    "@RunWith(RobolectricTestRunner::class)\n" if robo else
+                                                    ("\n// 舊版曾用 RobolectricTestRunner,已改成一般 JUnit\n" if style == "runner_text" else "\n"))
+    return head + f"class {cls} {{\n" + "".join(f"    @Test fun {n}() {{}}\n" for n in names) + "}\n"
+
+
+def _ckc_repo(n, beh, tests=("alphaCase", "bravoCase"), robo=(), cov=True, ids=None, unbound=(), inline=False, style="runner", extra=None):
+    """覆蓋用的臨時 repo:每支守的測試一條條款(條款號照 ids)、robo 裡的測試放 VmTest.kt(宣告照 style,見 _ckc_kt)而且假 Gradle 寫的覆蓋資料
+    帶 org/robolectric 類別(覆蓋路徑認 Robolectric 只看覆蓋資料);其餘(含沒綁條款的 unbound)放 MoreTest.kt;平台設定 coverage 照 cov;
+    inline=True 時改到的函式是 inline fun → (root, PATH 目錄)。"""
+    import json as _j
+    if robo:
+        beh = dict(beh, __cov__=dict(beh.get("__cov__") or {}, robo=list(robo)))
+    ids = list(ids or range(1, len(tests) + 1))
+    clauses = "".join(f"- [S{i}] 當使用者給第 {i} 種輸入,系統 應 顯示第 {i} 種結果 [test:{t}]\n" for i, t in zip(ids, tests))
+    v = _KSP_V
+    base = {f"{v}/Projects/選擇_計劃.md": _CK_PLAN.format(status="doing", clauses=clauses),
+            f"{v}/Systems/選擇.md": _KSP_HOME.format(code=_CHOICE_MAIN),
+            "tests/run.py": _CK_RUNNER, "tests/beh.json": _j.dumps(beh),
+            "app/src/test/java/x/VmTest.kt": _ckc_kt("VmTest", [t for t in tests if t in robo], True, style),
+            "app/src/test/java/x/MoreTest.kt": _ckc_kt("MoreTest", [t for t in tests if t not in robo] + list(unbound), False, style),
+            _CHOICE_MAIN: _choice_wrap("        go()\n"),
+            **({"app/src/test/java/x/BaseUnitTest.kt": "package x\n\nimport org.junit.runner.RunWith\nimport org.robolectric.RobolectricTestRunner\n\n"
+                                                      "@RunWith(RobolectricTestRunner::class)\nabstract class BaseUnitTest\n"} if style == "base" else {}),
+            **(extra or {})}
+    src = _choice_wrap(_ck_body(n))
+    if inline:
+        src = src.replace("    fun load()", "    inline fun load()")
+    hits = [_choice_hit(src, "C-7", f"a{i} === b{i}", mv={"A": f"a{i}", "B": f"b{i}"}) for i in range(1, n + 1)]
+    cfg = {"test_profile": "kotlin-junit", "test": {"run_cmd": _CKM_CMD, **({"coverage": True} if cov else {})}}
+    root = _sit_repo(base, {_CHOICE_MAIN: src}, config=cfg)
+    fake = _choice_fake_sg({src: hits})
+    (Path(fake) / "gradlew").write_text(f"#!{sys.executable}\n" + _CKC_GRADLE, encoding="utf-8")
+    (Path(fake) / "gradlew").chmod(0o755)
+    return root, fake
+
+
+def _ckc_cov(log):
+    """假 Gradle 帶覆蓋初始化腳本的那幾次 → [(測試名, 工作目錄)](依序)。"""
+    return [(x[0], x[3] if len(x) > 3 else "") for x in _ck_log(log) if len(x) > 2 and x[2] == "cov"]
+
+
+def _ckc_names(calls):
+    return {n for c in calls for n in c.split(",") if n}
+
+
+def _ckc_reach(root, fp=None):
+    return [e for e in _ck_gov(root, kind="reach") if fp is None or e.get("fp") == fp]
+
+
+def t_choice_cov_reach_clause():
+    """[選擇點存活回指 S1] 開了覆蓋、某行被條款甲綁的測試經過、條款乙綁的沒經過、兩支都可信 → reach clause、reach_clauses 只有甲、壞法只跑甲;
+    兩條都經過 → 兩條都列、照計劃路徑與條款號數字序(S3 在 S10 前)。判準來源:計劃預期值表 S1 兩列。
+    翻紅釘:不選測試 → 「只跑甲」紅;條款號照字串排 → 數字序那條紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        log = tmp / "a.log"
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}}}, ids=[3, 5])
+        roots += [root, fake]
+        r = _ck_run(root, fake, runlog=log)
+        reach = _ckc_reach(root)
+        ev = (_ck_gov(root, kind="choice-kill") or [{}])[-1]
+        ph = _ckm_phase(_ckm_calls(log))
+        check("S1 reach clause、reach_clauses 只有 P#S3、reach_n 1", len(reach) == 1 and reach[0].get("reach") == "clause"
+              and reach[0].get("reach_clauses") == ["Projects/選擇_計劃#S3"] and reach[0].get("reach_n") == 1
+              and isinstance(reach[0].get("cov_sha"), str) and reach[0].get("new_sha") == ev.get("new_sha"), f"{reach}\n{r.stderr[-600:]}")
+        check("S1 壞法只跑條款甲綁的 alphaCase", ph.get("1") and _ckc_names(ph["1"]) == {"alphaCase"}, f"{ph}\n{r.stderr[-400:]}")
+        check("S1 照子集判:survived", ev.get("verdict") == "survived" and ev.get("via") == "run", str(ev))
+        log.unlink(missing_ok=True)
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1], "bravoCase": [1]}}}, ids=[10, 3])
+        roots += [root, fake]
+        r = _ck_run(root, fake, runlog=log)
+        reach = _ckc_reach(root)
+        check("S1 兩條都經過 → 兩條都列、條款號數字序(S3 在 S10 前)",
+              len(reach) == 1 and reach[0].get("reach_clauses") == ["Projects/選擇_計劃#S3", "Projects/選擇_計劃#S10"] and reach[0].get("reach_n") == 2,
+              f"{reach}\n{r.stderr[-400:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_none_skips():
+    """[選擇點存活回指 S2] 每支守的測試都可信而且都沒經過 → reach none、不跑那個壞法、壞法事件 survived、via cov、judged cov、tests_sha 帶 cov: 前綴;
+    這行只被沒綁條款的測試(zuluCase)跑到時照樣 none。判準來源:計劃預期值表 S2 列。
+    翻紅釘:none 也跑 → 「沒跑壞法」紅;tests_sha 不帶前綴 → 前綴那條紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        log = tmp / "a.log"
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"zuluCase": [1]}}}, unbound=("zuluCase",))
+        roots += [root, fake]
+        r = _ck_run(root, fake, runlog=log)
+        reach = _ckc_reach(root)
+        evs = _ck_gov(root, kind="choice-kill")
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        ph = _ckm_phase(_ckm_calls(log))
+        check("S2 reach none、reach_clauses 空", len(reach) == 1 and reach[0].get("reach") == "none" and reach[0].get("reach_clauses") == [],
+              f"{reach}\n{r.stderr[-600:]}")
+        check("S2 guard-kill 沒跑這個壞法(沒有壞法階段的呼叫)", not ph, str(ph))
+        ok = len(evs) == 1 and evs[0].get("verdict") == "survived" and evs[0].get("via") == "cov" and evs[0].get("judged") == "cov"
+        check("S2 壞法事件 survived、via cov、judged cov、cov_sha 等於 reach 的", ok and evs[0].get("cov_sha") == reach[0].get("cov_sha"), str(evs))
+        check("S2 tests_sha 以 cov: 開頭、後面是 run 那筆的守的測試雜湊", ok and evs[0].get("tests_sha") == "cov:" + str(run_ev.get("tests_sha")), f"{evs} {run_ev}")
+        check("S2 run 那筆 cov on、cov_skipped 1、cov_selected 0、cov_full 2、rc 1(有存活)",
+              (run_ev.get("cov"), run_ev.get("cov_skipped"), run_ev.get("cov_selected"), run_ev.get("cov_full")) == ("on", 1, 0, 2)
+              and type(run_ev.get("cov_secs")) is int and r.returncode == 1, f"rc={r.returncode} {run_ev}")
+        check("S2 沒綁條款的 zuluCase 不跑覆蓋基準", "zuluCase" not in [n for n, _w in _ckc_cov(log)], str(_ckc_cov(log)))
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_unknown():
+    """[選擇點存活回指 S3] 一支 Robolectric 守的測試專案類別有紀錄數 0(或覆蓋資料沒產出)、另一支經過 → unknown、跑全部;一支非 Robolectric 測試 0 →
+    當成可信的沒經過(none);壞法行在 inline fun 本體 → unknown 原因覆蓋例外;const val 與屬性初始值也是覆蓋例外;每支開跑前刪掉上一支留下的覆蓋資料檔
+    (bravo 不產出時若沒刪,會讀到 alpha 留下的、被當成可信)。判準來源:計劃預期值表 S3 三列、〈用詞〉覆蓋可信、覆蓋例外。
+    翻紅釘:Robolectric 判不出 → 第一案變 clause;不刪舊檔 → 第二案變 clause;非 Robolectric 也當不可信 → 第三案變 unknown;拿掉 inline 判斷 → 第四案紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+
+    def go(beh, **kw):
+        log = tmp / "a.log"
+        log.unlink(missing_ok=True)
+        root, fake = _ckc_repo(1, beh, **kw)
+        roots.extend([root, fake])
+        r = _ck_run(root, fake, runlog=log)
+        return r, _ckc_reach(root), _ckm_phase(_ckm_calls(log)), log
+    try:
+        r, reach, ph, _l = go({"__cov__": {"pass": {"alphaCase": [1]}, "zero": ["bravoCase"]}}, robo=("bravoCase",))
+        check("S3 Robolectric 的 bravo 有紀錄數 0 → unknown(覆蓋接不起來)、壞法跑 alpha 與 bravo",
+              len(reach) == 1 and reach[0].get("reach") == "unknown" and reach[0].get("reach_why") == "覆蓋接不起來"
+              and _ckc_names(ph.get("1", [])) == {"alphaCase", "bravoCase"}, f"{reach} {ph}\n{r.stderr[-500:]}")
+        r, reach, ph, log = go({"__cov__": {"pass": {"alphaCase": [1]}, "noexec": ["bravoCase"]}}, robo=("bravoCase",))
+        check("S3 bravo 覆蓋資料沒產出(開跑前刪了 alpha 留下的)→ unknown(覆蓋資料沒產出)、跑全部",
+              len(reach) == 1 and reach[0].get("reach") == "unknown" and reach[0].get("reach_why") == "覆蓋資料沒產出"
+              and _ckc_names(ph.get("1", [])) == {"alphaCase", "bravoCase"}, f"{reach} {ph} {_ckc_cov(log)}\n{r.stderr[-500:]}")
+        r, reach, ph, _l = go({"__cov__": {"pass": {}, "zero": ["bravoCase"]}}, robo=("alphaCase",))
+        check("S3 非 Robolectric 的 bravo 有紀錄數 0、alpha 可信沒經過 → none", len(reach) == 1 and reach[0].get("reach") == "none" and not ph,
+              f"{reach} {ph}\n{r.stderr[-500:]}")
+        r, reach, ph, _l = go({"__cov__": {"pass": {"alphaCase": [1]}}}, inline=True)
+        check("S3 壞法行在 inline fun 本體 → unknown(覆蓋例外)、跑全部",
+              len(reach) == 1 and reach[0].get("reach") == "unknown" and reach[0].get("reach_why") == "覆蓋例外"
+              and _ckc_names(ph.get("1", [])) == {"alphaCase", "bravoCase"}, f"{reach} {ph}\n{r.stderr[-500:]}")
+        r, reach, ph, _l = go({"__cov__": {"pass": {"alphaCase": [1]}, "nolines": [1]}})
+        check("S3 覆蓋例外:分析時那幾行沒有任何指令紀錄 → unknown(這一行沒有指令紀錄)、跑全部",
+              len(reach) == 1 and reach[0].get("reach") == "unknown" and reach[0].get("reach_why") == "這一行沒有指令紀錄"
+              and _ckc_names(ph.get("1", [])) == {"alphaCase", "bravoCase"}, f"{reach} {ph}\n{r.stderr[-500:]}")
+        r, reach, ph, _l = go({"__cov__": {"pass": {"alphaCase": [1]}, "analyze_fail": True}})
+        check("S3 分析呼叫失敗 → unknown(分析失敗)、跑全部", len(reach) == 1 and reach[0].get("reach_why") == "分析失敗"
+              and _ckc_names(ph.get("1", [])) == {"alphaCase", "bravoCase"}, f"{reach} {ph}\n{r.stderr[-500:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+    m = _load_lumos_inproc()
+    cases = [("inline fun load() {", "        val k = a === b", "覆蓋例外"), ("fun load() {", "    const val K = 1 + 2", "覆蓋例外"),
+             ("", "val top = a === b", "覆蓋例外"), ("companion object {", "        val K = a === b", "覆蓋例外"),
+             ("fun load() {", "        val k1 = a1 === b1", ""), ("private inline fun <T> f() {", "        g()", "覆蓋例外")]
+    got = [m._choice_cov_exception(d, ln) for d, ln, _w in cases]
+    check("S3 覆蓋例外:inline fun、const val、頂層與 companion 屬性初始值 → 覆蓋例外;一般函式本體不是", got == [w for _d, _l, w in cases], str(got))
+    ns = {}
+    exec(_CKC_JX, ns)
+    p = tmp.parent / f"gctl-ckc-{_os_mod.getpid()}.exec"
+    try:
+        ns["_jx_write"](str(p), "alphaCase", [("x/Vm", [False] * 9 + [True]), ("x/sub/W", [True]), ("org/junit/Assert", [True]), ("x/Gone", [False])])
+        n1 = m._choice_cov_proj_hits(p.read_bytes(), {"x"})
+        n2 = m._choice_cov_proj_hits(p.read_bytes(), {"x", "x/sub"})
+        check("S3 Python 讀 exec:專案類別有紀錄數(第 10 個探針才為真也算;套件外與沒探針的不算)", (n1, n2) == (1, 2), f"{n1} {n2}")
+        bad = m._choice_cov_proj_hits(b"\x01\xc0\xc1\x10\x07", {"x"})
+        check("S3 Python 讀 exec:magic 不對 → None(不可信)", bad is None, repr(bad))
+    finally:
+        p.unlink(missing_ok=True)
+
+
+def t_choice_cov_breaker():
+    """[選擇點存活回指 S4] 前 5 支 Robolectric 測試的專案類別有紀錄數都是 0 → 第 5 支跑完當場停止掛覆蓋(第 6 支起不帶覆蓋初始化腳本)、印一行原因、
+    run cov tripped、壞法跑全部守的測試;Robolectric 只有 3 支而都是 0 → 同樣斷路。判準來源:計劃預期值表 S4 兩列。
+    翻紅釘:斷路門檻改 6 → 第 6 支也帶覆蓋那條紅;少於 5 支不斷 → 第二案紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        log = tmp / "a.log"
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}, "zero": list(_CKC_T6)}}, tests=_CKC_T6, robo=_CKC_T6)
+        roots += [root, fake]
+        r = _ck_run(root, fake, "--no-merge", runlog=log)
+        cov = [n for n, _w in _ckc_cov(log)]
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        ph = _ckm_phase(_ckm_calls(log))
+        base6 = [c for c, st in _ckm_calls(log) if st == "base" and c == "foxtrotCase"]
+        check("S4 前 5 支帶覆蓋、第 6 支起不帶(第 6 支仍量了一次基準)", cov == list(_CKC_T6[:5]) and len(base6) == 1, f"{cov} {base6}\n{r.stderr[-500:]}")
+        check("S4 印一行斷路原因、run cov tripped", "斷路" in r.stderr and run_ev.get("cov") == "tripped", f"{run_ev}\n{r.stderr[-500:]}")
+        check("S4 壞法跑全部守的測試", _ckc_names(ph.get("1", [])) == set(_CKC_T6), str(ph))
+        reach = _ckc_reach(root)
+        check("S4 斷路後覆蓋全算不明(覆蓋接不起來)", len(reach) == 1 and reach[0].get("reach") == "unknown" and reach[0].get("reach_why") == "覆蓋接不起來", str(reach))
+        log.unlink(missing_ok=True)
+        t3 = _CKC_T6[:3]
+        root, fake = _ckc_repo(1, {"__cov__": {"zero": list(t3)}}, tests=t3, robo=t3)
+        roots += [root, fake]
+        r = _ck_run(root, fake, "--no-merge", runlog=log)
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        check("S4 Robolectric 只有 3 支而都是 0 → 同樣斷路(cov tripped)", run_ev.get("cov") == "tripped" and "斷路" in r.stderr, f"{run_ev}\n{r.stderr[-500:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_baseline_once():
+    """[選擇點存活回指 S5] 開了覆蓋:覆蓋基準在 guard-kill 那棵隔離樹裡每支守的測試恰跑一次、結果進基準快取,壞法階段不再量基準;--no-merge 或守的測試只有
+    1 支照樣呼叫準備物件;掛覆蓋紅、不掛綠的那支用不掛的基準、覆蓋算不明(掛覆蓋才紅)。判準來源:計劃預期值表 S5 兩列。
+    翻紅釘:基準不進快取 → 「每支一次」紅;準備物件掛在合併那條路上 → --no-merge 那條紅;掛覆蓋紅不重跑 → 跑不出結果而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    t3 = _CKM_TESTS
+
+    def go(beh, *args, tests=t3):
+        log = tmp / "a.log"
+        log.unlink(missing_ok=True)
+        root, fake = _ckc_repo(2, beh, tests=tests)
+        roots.extend([root, fake])
+        r = _ck_run(root, fake, *args, runlog=log)
+        return r, root, log
+    try:
+        r, root, log = go({"__cov__": {"pass": {"alphaCase": [1, 2]}}})
+        cov = _ckc_cov(log)
+        singles = [c for c, st in _ckm_calls(log) if st == "base" and "," not in c]
+        check("S5 3 支守的測試各掛覆蓋跑一次、都在 guard-kill 的隔離樹", sorted(n for n, _w in cov) == sorted(t3)
+              and all("lumos-kill-" in w for _n, w in cov), f"{cov}\n{r.stderr[-500:]}")
+        check("S5 單支基準每支恰一次(壞法階段與合併沒有再量)", sorted(singles) == sorted(t3), str(singles))
+        r, root, log = go({"__cov__": {"pass": {"alphaCase": [1, 2]}}}, "--no-merge")
+        check("S5 --no-merge 照樣呼叫準備物件", sorted(n for n, _w in _ckc_cov(log)) == sorted(t3) and len(_ckc_reach(root)) == 2, str(_ckc_cov(log)))
+        r, root, log = go({"__cov__": {"pass": {"alphaCase": [1, 2]}}}, tests=("alphaCase",))
+        check("S5 守的測試只有 1 支照樣呼叫準備物件", [n for n, _w in _ckc_cov(log)] == ["alphaCase"] and len(_ckc_reach(root)) == 2, str(_ckc_cov(log)))
+        r, root, log = go({"__cov__": {"pass": {"alphaCase": [1, 2]}, "red": ["bravoCase"]}})
+        evs = _ck_gov(root, kind="choice-kill")
+        reach = _ckc_reach(root)
+        bravo = [c for c, st in _ckm_calls(log) if st == "base" and c == "bravoCase"]
+        check("S5 bravo 掛覆蓋紅、不掛綠 → 重跑一次不掛的當基準(不判基準不綠)", len(bravo) == 2 and evs and all(e.get("verdict") == "survived" for e in evs),
+              f"{bravo} {evs}\n{r.stderr[-500:]}")
+        check("S5 bravo 覆蓋不明 → 兩行 unknown(掛覆蓋才紅)", len(reach) == 2 and all(e.get("reach") == "unknown" and e.get("reach_why") == "掛覆蓋才紅" for e in reach),
+              str(reach))
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def _ckc_signal_run(root, fake, log, mark, sig, *args):
+    p = subprocess.Popen([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "choice-kill", "--diff", "main..HEAD", *args], cwd=root,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_ck_env(fake, log, floor="60", CK_MARK=str(mark)),
+                         stdin=subprocess.DEVNULL, preexec_fn=_ppc_sigint_default)
+    t0 = _ckm_time.time()
+    while not mark.exists() and p.poll() is None and _ckm_time.time() - t0 < 120:
+        _ckm_time.sleep(0.05)
+    t1 = _ckm_time.time()
+    p.send_signal(sig)
+    _out, err = p.communicate(timeout=120)
+    return p.returncode, _ckm_time.time() - t1, err
+
+
+def t_choice_cov_resume():
+    """[選擇點存活回指 S6] 同一個 at_sha 的覆蓋基準跑到第 3 支被中斷,再跑一次(--only 指到另一行)→ 只跑第 3 支以後的覆蓋基準(前 2 支取續跑快取的
+    覆蓋資料檔),新那一行的經過從快取的覆蓋資料檔重新分析、不被當成沒經過。判準來源:計劃預期值表 S6 列。
+    翻紅釘:不存快取 → 第二次三支都跑;快取只存分析結果 → 新那一行判成沒經過(none)。"""
+    import signal as _sig
+    if _os_mod.name == "nt":
+        raise _SrcOnly("非 POSIX,這段沒驗到")
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        log, mark = tmp / "a.log", tmp / "mark"
+        root, fake = _ckc_repo(2, {"__cov__": {"pass": {"alphaCase": [2]}, "mark": "charlieCase"}}, tests=_CKM_TESTS)
+        roots += [root, fake]
+        rc, secs, err = _ckc_signal_run(root, fake, log, mark, _sig.SIGINT)
+        first = [n for n, _w in _ckc_cov(log)]
+        check("S6 第一次跑到第 3 支被中斷、沒有 reach", first == list(_CKM_TESTS) and not _ckc_reach(root) and rc == 2, f"rc={rc} {first}\n{err[-500:]}")
+        log.unlink(missing_ok=True)
+        beh = Path(root) / "tests" / "beh.json"
+        r = _ck_run(root, fake, "--only", _ck_loc(2), runlog=log)
+        second = [n for n, _w in _ckc_cov(log)]
+        reach = _ckc_reach(root, _ck_fp(2, 2))
+        check("S6 第二次只跑第 3 支的覆蓋基準", second == ["charlieCase"], f"{second}\n{r.stderr[-500:]}")
+        singles2 = [c for c, st in _ckm_calls(log) if st == "base" and "," not in c]
+        check("S6/實測 取快取的那 2 支連基準一起取用:合併快篩不再逐支重量 alpha、bravo 的基準(只量第 3 支)", singles2 == ["charlieCase"], str(singles2))
+        check("S6 新那一行的經過從快取的 alpha 覆蓋資料檔重新分析 → clause S1", len(reach) == 1 and reach[0].get("reach") == "clause"
+              and reach[0].get("reach_clauses") == ["Projects/選擇_計劃#S1"], f"{reach}\n{r.stderr[-500:]}")
+        check("S6 續跑快取在工作目錄 choice-cov/<at_sha>/ 底下、自帶忽略檔", any((Path(root) / ".lumos" / "note-audit" / "choice-cov").glob("*/*.exec"))
+              and beh.is_file(), str(list((Path(root) / ".lumos" / "note-audit").rglob("*"))[:10]))
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_interrupt():
+    """[選擇點存活回指 S7] 覆蓋基準跑到第二支時收到第一個中斷訊號 → 當場收掉那次 Gradle 呼叫(不等 60 秒)、不寫任何 reach 事件、rc 照 choice-kill
+    被中斷時的值(2)、run interrupted。判準來源:計劃預期值表 S7 列。翻紅釘:覆蓋基準的呼叫不帶當場收的標記 → 等滿 60 秒而紅。"""
+    import signal as _sig
+    if _os_mod.name == "nt":
+        raise _SrcOnly("非 POSIX,這段沒驗到")
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        log, mark = tmp / "a.log", tmp / "mark"
+        root, fake = _ckc_repo(1, {"__cov__": {"mark": "bravoCase"}})
+        roots += [root, fake]
+        rc, secs, err = _ckc_signal_run(root, fake, log, mark, _sig.SIGINT)
+        runs = _ck_gov(root, kind="run")
+        check("S7 第二支掛覆蓋跑到一半收到 SIGINT → 當場收掉(不等 60 秒)", secs < 30, f"{secs:.1f}s\n{err[-400:]}")
+        check("S7 沒有 reach 事件、沒有壞法事件、rc 2、run interrupted", not _ckc_reach(root) and not _ck_gov(root, kind="choice-kill") and rc == 2
+              and len(runs) == 1 and runs[0].get("interrupted") is True, f"rc={rc} {runs}\n{err[-400:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def _ckc_points(root, fake):
+    cp = subprocess.run([sys.executable, GRAPHCTL, "choice-points", "--diff", "main..HEAD", "--repo", str(root)], cwd=root, capture_output=True,
+                        text=True, env=_ck_env(fake), stdin=subprocess.DEVNULL)
+    return cp, {ln.split()[0]: ln for ln in cp.stdout.splitlines() if ln.startswith("  " + _CHOICE_MAIN)}
+
+
+def _ckc_append(root, ev):
+    import json as _j
+    with open(Path(root) / "docs" / ".governance-log.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(_j.dumps(ev, ensure_ascii=False) + "\n")
+
+
+def t_choice_reach_points():
+    """[選擇點存活回指 S8] choice-points 讀到存活行有有效 reach → 存活後面印覆蓋分類加「未判讀」;reach 的 cov_sha 跟現在不同或沒有 reach → 印「未分類」,
+    其他輸出不變。判準來源:計劃預期值表 S8 列、〈範圍〉10 的字樣。
+    翻紅釘:不比 cov_sha → 第二案仍印分類;沒有 reach 也印分類 → 第三案紅。"""
+    roots = []
+    try:
+        root, fake = _ckc_repo(2, {"alphaCase": {"kill": [1]}, "__cov__": {"pass": {"alphaCase": [1]}}})
+        roots += [root, fake]
+        r = _ck_run(root, fake)
+        cp, at = _ckc_points(root, fake)
+        l2, l1 = at.get(_ck_loc(2), ""), at.get(_ck_loc(1), "")
+        check("S8 有效 reach none、沒有 layer → 存活後面印「沒有條款經過 未判讀」", l2.endswith("存活  沒有條款經過 未判讀"), f"{cp.stdout[-600:]}\n{r.stderr[-300:]}")
+        check("S8 殺掉那一行不加分類", "殺掉" in l1 and "未判讀" not in l1 and "未分類" not in l1, l1)
+        last = dict(_ckc_reach(root, _ck_fp(2, 2))[-1], cov_sha="0" * 16, token="t" * 16)
+        _ckc_append(root, last)
+        cp2, at2 = _ckc_points(root, fake)
+        check("S8 最新一筆 reach 的 cov_sha 跟現在不同 → 未分類、其他行不變", at2.get(_ck_loc(2), "").endswith("存活  未分類") and at2.get(_ck_loc(1)) == l1,
+              cp2.stdout[-600:])
+        root, fake = _ckc_repo(2, {"alphaCase": {"kill": [1]}}, cov=False)
+        roots += [root, fake]
+        r = _ck_run(root, fake)
+        cp3, at3 = _ckc_points(root, fake)
+        check("S8 沒有 reach 事件(沒開覆蓋)→ 存活後面印未分類;帳上沒有 reach 事件", "存活" in at3.get(_ck_loc(2), "") and at3.get(_ck_loc(2), "").endswith("  未分類") and not _ckc_reach(root),
+              cp3.stdout[-600:])
+        check("S8 其他輸出不變(統計行與殺掉行)", at3.get(_ck_loc(1)) == l1 and cp3.stdout.splitlines()[-1] == cp.stdout.splitlines()[-1], cp3.stdout[-400:])
+    finally:
+        _ck_cleanup(*roots)
+
+
+def t_choice_aux_readers():
+    """[選擇點存活回指 S10 reach 那半] 帳上有 reach、reach-run 事件時,_choice_ledger_index 的結果與 gov「第一次判定」跟沒有時相同;via cov 的存活計在 gov
+    「依覆蓋判存活」那一行;新事件型別不對的那一行被讀者略過而不中斷;_choice_ledger_aux 取同鍵最後一筆有效 reach。判準來源:計劃預期值表 S10 列。
+    翻紅釘:_choice_ledger_index 收 reach → 第一條紅;gov 把 via cov 算進第一次判定 → 殺掉率那條紅;aux 不驗型別 → 壞行那條紅。"""
+    import json as _j
+    import shutil
+    m = _load_lumos_inproc()
+
+    def ev(kind, **kw):
+        return {"ts": "2026-11-26T10:00:00", "commit": "c", "gate": "choice-kill", "kind": kind, "hard": False, "nodes": [], "note": "x",
+                "token": _os_mod.urandom(8).hex(), **kw}
+
+    def ck(fp, verdict, attempt=1, via="run", **kw):
+        return ev("choice-kill", **{"file": _CHOICE_MAIN, "fp": fp, "row": "C-7", "verdict": verdict, "attempt": attempt, "via": via,
+                                    "killing_test": "", "reason": "", "tests_sha": "t", "new_sha": "n" * 16, **kw})
+    reach = ev("reach", file=_CHOICE_MAIN, fp="a1", new_sha="n" * 16, reach="clause", reach_clauses=["Projects/P#S3"], reach_n=1, reach_why="",
+               cov_sha="c" * 16, run_id="r1")
+    old = [ck("a1", "survived"), ck("k1", "killed"), ev("run", changed=3, mutant_lines=2, secs=5)]
+    new = [old[0], reach, old[1], ck("c1", "survived", via="cov", judged="cov", tests_sha="cov:t", cov_sha="c" * 16),
+           ev("reach", file=_CHOICE_MAIN, fp="a1", new_sha="n" * 16, reach="none", reach_clauses=[], reach_n="壞", reach_why="", cov_sha="d" * 16, run_id="r2"),
+           ev("reach-run", cov_secs=3), old[2]]
+    check("S10 _choice_ledger_index 有沒有 reach、reach-run 事件結果相同(via cov 那筆另算)",
+          m._choice_ledger_index(old) == {k: v for k, v in m._choice_ledger_index(new).items() if k != (_CHOICE_MAIN, "c1")}, "")
+    aux = m._choice_ledger_aux(new)
+    check("S10 _choice_ledger_aux:同鍵取最後一筆型別對的 reach(壞的那行略過)、invalid 與 layer 先空", aux.get((_CHOICE_MAIN, "a1"), {}).get("reach") == reach
+          and aux[(_CHOICE_MAIN, "a1")].get("layer") is None and aux[(_CHOICE_MAIN, "a1")].get("invalid") == [], str(aux))
+    rows_old = [_j.dumps(x, ensure_ascii=False) + "\n" for x in old]
+    rows_new = [_j.dumps(x, ensure_ascii=False) + "\n" for x in new] + ['{"gate": "choice-kill", "kind": "reach", "reach_n": "x"}\n']
+    segs = []
+    for rows in (rows_old, rows_new):
+        root, vault = _stats_fixture("gctl-ckc-st-", rows)
+        try:
+            out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+            segs.append(out[out.find("改動選擇點"):])
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+    check("S10 gov 第一次判定不變(1/2)", "第一次跑殺掉率 1/2" in segs[0] and "第一次跑殺掉率 1/2" in segs[1], segs[1][:600])
+    check("S10 via cov 的存活計在「依覆蓋判存活 1」、沒有就是 0", "依覆蓋判存活 1" in segs[1] and "依覆蓋判存活 0" in segs[0], segs[1][:900])
+
+
+def t_choice_reach_only():
+    """[選擇點存活回指 S11] choice-kill --reach-only:只跑覆蓋基準與分析、不寫壞法事件、只對帳上存活而沒有有效 reach(或 reach 是暫時性 unknown)的行補 reach、
+    寫一筆 reach-run;跟 --no-cov、--only、--max-mutants、--no-merge 同給 → rc 2。判準來源:計劃預期值表 S11 列、〈範圍〉7。
+    翻紅釘:不分暫時性 → 有效 clause 那行也補而紅;prep_only 沒擋配方 → 多了壞法呼叫而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        log = tmp / "a.log"
+        root, fake = _ckc_repo(2, {"__cov__": {"pass": {"alphaCase": [1, 2]}}})
+        roots += [root, fake]
+        _ck_run(root, fake)
+        fp1, fp2 = _ck_fp(1, 2), _ck_fp(2, 2)
+        r2 = _ckc_reach(root, fp2)[-1]
+        _ckc_append(root, dict(r2, reach="unknown", reach_clauses=[], reach_n=0, reach_why="分析失敗", token="u" * 16))
+        n_ck, n1 = len(_ck_gov(root, kind="choice-kill")), len(_ckc_reach(root, fp1))
+        r = _ck_run(root, fake, "--reach-only", runlog=log)
+        new2 = _ckc_reach(root, fp2)
+        check("S11 只對 reach 暫時性 unknown 的那行補(有效 clause 那行不補)", len(_ckc_reach(root, fp1)) == n1 and len(new2) == 3
+              and new2[-1].get("reach") == "clause", f"{new2}\n{r.stdout[-300:]}{r.stderr[-500:]}")
+        check("S11 不寫壞法事件、沒有壞法階段的呼叫", len(_ck_gov(root, kind="choice-kill")) == n_ck and not _ckm_phase(_ckm_calls(log)), str(_ckm_calls(log)))
+        rr = _ck_gov(root, kind="reach-run")
+        check("S11 寫一筆 reach-run 帶 cov_secs、rc 0", len(rr) == 1 and type(rr[0].get("cov_secs")) is int and r.returncode == 0, f"rc={r.returncode} {rr}")
+        for extra in (["--no-cov"], ["--only", _ck_loc(1)], ["--max-mutants", "3"], ["--no-merge"]):
+            r = _ck_run(root, fake, "--reach-only", *extra)
+            check(f"S11 --reach-only 跟 {extra[0]} 同給 → rc 2", r.returncode == 2 and "--reach-only" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_carry():
+    """[選擇點存活回指 S21] via cov 的存活:之後同樣開覆蓋、cov_sha 相同 → 帶過去不重跑;關掉覆蓋(--no-cov)或 cov_sha 變了 → 重跑那一行;
+    事件 tests_sha 以 cov: 開頭,用沒有 cov_sha 判斷的舊判法(_choice_kill_pick 不給 cov_sha_of)讀一定判成要重跑。判準來源:計劃預期值表 S21 兩列。
+    翻紅釘:via cov 照舊比 tests_sha → --no-cov 那條不重跑而紅;不比 cov_sha → 變了那條紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        log = tmp / "a.log"
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {}}})
+        roots += [root, fake]
+        _ck_run(root, fake)
+        ev = (_ck_gov(root, kind="choice-kill") or [{}])[-1]
+        r = _ck_run(root, fake, runlog=log)
+        check("S21 同樣開覆蓋、cov_sha 相同 → 帶過去(沒有新事件)", len(_ck_gov(root, kind="choice-kill")) == 1 and "這次不重跑" in r.stdout,
+              f"{r.stdout[-400:]}{r.stderr[-300:]}")
+        log.unlink(missing_ok=True)
+        r = _ck_run(root, fake, "--no-cov", runlog=log)
+        evs = _ck_gov(root, kind="choice-kill")
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        check("S21 --no-cov 再跑 → 那一行重跑壞法、記 via run、run cov off", len(evs) == 2 and evs[-1].get("via") == "run" and _ckm_phase(_ckm_calls(log))
+              and run_ev.get("cov") == "off" and not _ckc_cov(log), f"{evs} {run_ev}\n{r.stderr[-400:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+    m = _load_lumos_inproc()
+    check("S21 事件 tests_sha 以 cov: 開頭", str(ev.get("tests_sha", "")).startswith("cov:") and ev.get("via") == "cov", str(ev))
+    ident_new = ev.get("new_sha")
+    x = {"file": ev.get("file"), "line": 5, "fp": ev.get("fp"), "status": "mutant", "mutant": {"identity": {"new_sha": ev.get("new_sha")}}}
+    res, idx = {"lines": [x]}, {(ev.get("file"), ev.get("fp")): [ev]}
+    ts = str(ev.get("tests_sha", ""))[4:]
+    old = m._choice_kill_pick(res, idx, set(), set(), ts, None)
+    same = m._choice_kill_pick(res, idx, set(), set(), ts, None, cov_sha_of=lambda _x: ev.get("cov_sha"))
+    diff = m._choice_kill_pick(res, idx, set(), set(), ts, None, cov_sha_of=lambda _x: "f" * 16)
+    check("S21 舊判法(不給 cov_sha_of)→ 要重跑;cov_sha 相同 → 帶過去;cov_sha 變了(例:補了一支守的測試)→ 要重跑",
+          old[0] == [x] and not old[1] and same[0] == [] and same[1] and diff[0] == [x], f"{old} {same} {diff}")
+    # 代碼審 r1 F1(正確性 c2、邊界 b2、合約 k1、通才 g1):守的測試雜湊或那支檔 blob 帶不明標記時 cov_sha 算不出來(None),
+    # 帶過去與 reach 有效都判成不同,跟舊路徑「雜湊帶不明標記就當成變了」(r2 H1)同一條規則;翻紅釘:不明照樣雜湊 → 兩次都是同一個值、被帶過去
+    U = m._CHOICE_TESTS_UNKNOWN
+    check("代碼審 r1 F1 守的測試雜湊或檔 blob 帶不明標記 → cov_sha 算不出來(None)",
+          m._choice_cov_sha("h" + U, "b", "n") is None and m._choice_cov_sha("h", U, "n") is None and m._choice_cov_sha("h", None, "n") is None
+          and isinstance(m._choice_cov_sha("h", "b", "n"), str), "")
+    for stored in ("", str(m._choice_cov_sha("h" + U, "b", ident_new))):   # 第二個:舊寫法會把不明標記照樣雜湊,帳上存的就是這次會算出的同一個值
+        evu = dict(ev, tests_sha="cov:h" + U, cov_sha=stored)
+        got = m._choice_kill_pick(res, {(ev.get("file"), ev.get("fp")): [evu]}, set(), set(), "h" + U, None,
+                                  cov_sha_of=lambda _x: m._choice_cov_sha("h" + U, "b", ident_new))
+        check(f"代碼審 r1 F1 via cov 存活、這次守的測試雜湊帶不明標記(帳上 cov_sha={stored[:6]!r})→ 重跑、不帶過去", got[0] == [x] and not got[1], str(got))
+    check("代碼審 r1 F1 choice-points:現在的 cov_sha 算不出來 → reach 不算有效(印未分類)",
+          not m._choice_reach_valid({"cov_sha": ""}, m._choice_cov_sha("h" + U, "b", "n")) and m._choice_reach_valid({"cov_sha": "s"}, "s"), "")
+
+
+def t_choice_cov_subset_judge():
+    """[選擇點存活回指 S23] 依覆蓋只交子集(甲經過、乙沒經過)給 guard-kill:_ChoiceKillRun 照子集判,存活記 survived 不是跑不出結果「缺結果」;
+    合併快篩對子集的判讀只比子集的名字(一次合併呼叫就過,不退回逐支)。判準來源:計劃預期值表 S23 列。
+    壞法 1 只有甲經過、壞法 2 甲乙都經過:合併道是甲乙(合併基準仍是整組那一條),壞法 1 的快篩只帶甲。
+    翻紅釘:order 不改成子集 → 缺結果而紅;合併判讀拿整組名字比 → 對不到名字、多一次逐支呼叫而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        log = tmp / "a.log"
+        root, fake = _ckc_repo(2, {"__cov__": {"pass": {"alphaCase": [1, 2], "bravoCase": [2]}}})
+        roots += [root, fake]
+        r = _ck_run(root, fake, runlog=log)
+        ev = _ck_by_file(_ck_gov(root, kind="choice-kill")).get(_ck_fp(1, 2), {})
+        ph = _ckm_phase(_ckm_calls(log))
+        check("S23 子集存活 → survived(不是缺結果)、合併判", ev.get("verdict") == "survived" and ev.get("judged") == "merged", f"{ev}\n{r.stderr[-500:]}")
+        check("S23 合併快篩只帶子集、一次就過(不退回逐支);壞法 2 帶甲乙", ph.get("1") == ["alphaCase"] and ph.get("2") == ["alphaCase,bravoCase"], str(ph))
+        log.unlink(missing_ok=True)
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}}})
+        roots += [root, fake]
+        r = _ck_run(root, fake, "--no-merge", runlog=log)
+        ev = (_ck_gov(root, kind="choice-kill") or [{}])[-1]
+        check("S23 --no-merge 子集存活 → survived、只逐支跑甲", ev.get("verdict") == "survived" and _ckm_phase(_ckm_calls(log)).get("1") == ["alphaCase"],
+              f"{ev}\n{r.stderr[-500:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_config_keys():
+    """[選擇點存活回指 範圍 1] 平台設定的 coverage 鍵穿過 load_platforms(多平台與舊單平台 test 節都讀、預設 False),型別不對丟 ValueError;
+    choice-kill 登記 --no-cov 與 --reach-only。判準來源:計劃〈範圍〉1、7。翻紅釘:舊單平台不讀 → 第二條紅;不擋型別 → 第三條紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    try:
+        multi = m.load_platforms(tmp, cfg={"platforms": {"a": {"profile": "kotlin-junit", "root": ".", "coverage": True}, "b": {"profile": "kotlin-junit", "root": "."}},
+                                           "default_platform": "a"})
+        check("範圍 1 多平台 coverage 照設定、沒設預設 False", multi["platforms"]["a"]["coverage"] is True and multi["platforms"]["b"]["coverage"] is False, str(multi))
+        one = m.load_platforms(tmp, cfg={"test_profile": "kotlin-junit", "test": {"run_cmd": "x {method}", "coverage": True}})
+        check("範圍 1 舊單平台 test 節同樣讀", one["platforms"]["kotlin-junit"]["coverage"] is True, str(one))
+        bad = []
+        for cfg in ({"platforms": {"a": {"profile": "kotlin-junit", "coverage": "yes"}}}, {"test_profile": "kotlin-junit", "test": {"coverage": 1}}):
+            try:
+                m.load_platforms(tmp, cfg=cfg)
+                bad.append(False)
+            except ValueError as e:
+                bad.append("coverage" in str(e))
+        check("範圍 1 coverage 型別不對丟 ValueError(多平台與單平台)", bad == [True, True], str(bad))
+    finally:
+        _ck_cleanup(tmp)
+    h = subprocess.run([sys.executable, GRAPHCTL, "choice-kill", "--help"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    check("範圍 1、7 choice-kill 說明登記 --no-cov 與 --reach-only", "--no-cov" in h.stdout and "--reach-only" in h.stdout, h.stdout[-600:])
+
+
+
+
+def t_choice_cov_robo_exec():
+    """[選擇點存活回指 代碼審 r1 F2(正確性 c1、邊界 b1)] Robolectric 測試改看那支測試的覆蓋資料:有任一類別名以 org/robolectric/ 開頭就算。
+    @RunWith(AndroidJUnit4::class) 與繼承帶 runner 的基底類別這兩種寫法(檔裡沒有 RobolectricTestRunner 字樣)專案類別有紀錄數 0 → 不可信、斷路;
+    檔裡提到 RobolectricTestRunner 但覆蓋資料沒有 Robolectric 類別的一般 JUnit 測試 → 0 是真的沒碰(none)。判準來源:計劃〈用詞〉覆蓋可信(本輪改成看覆蓋資料)。
+    翻紅釘:照原始碼字串判 → 前兩案判成可信的沒經過(none、整行記存活)而紅、第三案判成不可信而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+
+    def go(beh, **kw):
+        log = tmp / "a.log"
+        log.unlink(missing_ok=True)
+        root, fake = _ckc_repo(1, beh, **kw)
+        roots.extend([root, fake])
+        r = _ck_run(root, fake, "--no-merge", runlog=log)
+        return r, root, log
+    try:
+        for style in ("androidx", "base"):
+            r, root, log = go({"__cov__": {"pass": {}, "zero": ["bravoCase"]}}, robo=("bravoCase",), style=style)
+            reach = _ckc_reach(root)
+            run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+            check(f"F2 {style} 寫法的 Robolectric 測試專案類別有紀錄數 0 → unknown(覆蓋接不起來)、斷路、壞法照跑",
+                  len(reach) == 1 and reach[0].get("reach") == "unknown" and reach[0].get("reach_why") == "覆蓋接不起來"
+                  and run_ev.get("cov") == "tripped" and not [e for e in _ck_gov(root, kind="choice-kill") if e.get("via") == "cov"],
+                  f"{reach} {run_ev}\n{r.stderr[-500:]}")
+        t6 = _CKC_T6
+        r, root, log = go({"__cov__": {"zero": list(t6)}}, tests=t6, robo=t6, style="androidx")
+        check("F2 AndroidJUnit4 寫法 6 支都是 0 → 第 5 支跑完斷路、第 6 支不帶覆蓋", [n for n, _w in _ckc_cov(log)] == list(t6[:5]), str(_ckc_cov(log)))
+        r, root, log = go({"__cov__": {"pass": {}, "zero": ["bravoCase"]}}, style="runner_text")
+        reach = _ckc_reach(root)
+        check("F2 檔裡提到 RobolectricTestRunner、覆蓋資料沒有 Robolectric 類別的一般 JUnit 測試 0 → 可信的沒經過(none)",
+              len(reach) == 1 and reach[0].get("reach") == "none", f"{reach}\n{r.stderr[-500:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+    m = _load_lumos_inproc()
+    ns = {}
+    exec(_CKC_JX, ns)
+    p = Path(tempfile.gettempdir()) / f"gctl-ckc-robo-{_os_mod.getpid()}.exec"
+    try:
+        ns["_jx_write"](str(p), "a", [("x/Vm", [True]), ("org/robolectric/android/internal/AndroidTestEnvironment", [True])])
+        a = m._choice_cov_exec_robo(p.read_bytes())
+        ns["_jx_write"](str(p), "a", [("x/Vm", [True]), ("org/robolectric/internal/AndroidSandbox$1", [True])])
+        a2 = m._choice_cov_exec_robo(p.read_bytes())
+        ns["_jx_write"](str(p), "a", [("x/Vm", [True]), ("org/robolectric/internal/SdkEnvironment", [True])])
+        a3 = m._choice_cov_exec_robo(p.read_bytes())
+        ns["_jx_write"](str(p), "a", [("x/Vm", [True]), ("org/robolectric/internal/SandboxTestRunner", [True]), ("org/robolectric/RobolectricTestRunner", [True]),
+                                       ("org/robolectric/android/internal/AndroidTestEnvironment", [False])])
+        b = m._choice_cov_exec_robo(p.read_bytes())
+        check("F2/實測 建立 Android 環境的類別(AndroidTestEnvironment、AndroidSandbox、SdkEnvironment)有執行紀錄才算 Robolectric;只有 runner 類別或環境類別沒執行不算",
+              (a, a2, a3, b) == (True, True, True, False), f"{a} {a2} {a3} {b}")
+    finally:
+        p.unlink(missing_ok=True)
+
+
+def t_choice_cov_red_breaker():
+    """[選擇點存活回指 代碼審 r1 F3(資源 s1、s2、邊界 b6)] 連續 3 支「掛覆蓋紅、不掛綠」就斷路:第 4 支起不帶覆蓋初始化腳本、run cov tripped、
+    原因掛覆蓋才紅;壞法照跑(存活不是跑不出結果)。中間有一支掛覆蓋綠就重算。
+    翻紅釘:掛覆蓋紅不算進任何煞車 → 第 4 支也帶覆蓋而紅;連續數不歸零 → 第二案斷路而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    t4 = _CKC_T6[:4]
+    try:
+        log = tmp / "a.log"
+        root, fake = _ckc_repo(1, {"__cov__": {"red": list(t4)}}, tests=t4)
+        roots += [root, fake]
+        r = _ck_run(root, fake, "--no-merge", runlog=log)
+        cov = [n for n, _w in _ckc_cov(log)]
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        reach = _ckc_reach(root)
+        ev = (_ck_gov(root, kind="choice-kill") or [{}])[-1]
+        check("F3 連續 3 支掛覆蓋才紅 → 第 4 支起不帶覆蓋", cov == list(t4[:3]), f"{cov}\n{r.stderr[-500:]}")
+        check("F3 run cov tripped、reach unknown(掛覆蓋才紅)、壞法照跑記存活", run_ev.get("cov") == "tripped" and len(reach) == 1
+              and reach[0].get("reach_why") == "掛覆蓋才紅" and ev.get("verdict") == "survived" and "斷路" in r.stderr, f"{run_ev} {reach} {ev}")
+        log.unlink(missing_ok=True)
+        root, fake = _ckc_repo(1, {"__cov__": {"red": [t4[0], t4[1], t4[3]]}}, tests=t4)
+        roots += [root, fake]
+        r = _ck_run(root, fake, "--no-merge", runlog=log)
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        check("F3 中間一支掛覆蓋綠 → 連續數歸零、不斷路(4 支都帶覆蓋)", [n for n, _w in _ckc_cov(log)] == list(t4) and run_ev.get("cov") == "on",
+              f"{_ckc_cov(log)} {run_ev}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_analyze_edges():
+    """[選擇點存活回指 代碼審 r1 F4、F5、F10] 分析說樹上沒有類別(noclasses)→ unknown(分析失敗,暫時性);分析輸出缺某支測試的序號 → 那支不明(分析失敗),
+    不是沒經過;續跑快取的覆蓋資料檔讀不出來 → 刪掉那份、這次重量。翻紅釘:缺鍵當成沒經過 → 第二案 none 而紅;快取壞了不重量 → 第三案沒重跑而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}, "noclasses": True}})
+        roots += [root, fake]
+        _ck_run(root, fake)
+        reach = _ckc_reach(root)
+        m = _load_lumos_inproc()
+        check("F4 樹上沒有類別 → unknown(分析失敗、暫時性)", len(reach) == 1 and reach[0].get("reach_why") == "分析失敗" and "分析失敗" in m._CHOICE_REACH_TEMP,
+              str(reach))
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}, "drop_hits": ["bravoCase"]}})
+        roots += [root, fake]
+        _ck_run(root, fake)
+        reach = _ckc_reach(root)
+        check("F5 分析輸出缺 bravo 的序號 → unknown(分析失敗),不是 clause 只跑 alpha", len(reach) == 1 and reach[0].get("reach") == "unknown"
+              and reach[0].get("reach_why") == "分析失敗", str(reach))
+        log = tmp / "a.log"
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}}})
+        roots += [root, fake]
+        _ck_run(root, fake)
+        cache = sorted((Path(root) / ".lumos" / "note-audit" / "choice-cov").glob("*/*.exec"))
+        for c in cache:
+            c.write_bytes(b"not an exec")
+        r = _ck_run(root, fake, "--only", _ck_loc(1), runlog=log)
+        check("F10 續跑快取讀不出來 → 這次兩支都重量、reach 照樣 clause", len(cache) == 2 and sorted(n for n, _w in _ckc_cov(log)) == ["alphaCase", "bravoCase"]
+              and _ckc_reach(root)[-1].get("reach") == "clause", f"{cache} {_ckc_cov(log)}\n{r.stderr[-400:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_init_scripts():
+    """[選擇點存活回指 代碼審 r1 F9(通才 g5)] 假 Gradle 不讀初始化腳本,關鍵設定改壞時其他測試照綠:這裡直接釘住腳本內容——includeNoLocationClasses = true
+    與排除 jdk.internal.* 要在 pluginManager.withPlugin('jacoco') 區塊裡(寫在 afterEvaluate 會靜默沒生效,2026-11-26 實測)、要開 enableUnitTestCoverage;
+    分析腳本要用 JaCoCo 的 CoverageBuilder、Analyzer、ExecFileLoader,任務要依賴變體的編譯任務、樹上沒有類別時輸出 noclasses。"""
+    m = _load_lumos_inproc()
+    init, ana = m._CHOICE_COV_INIT, m._CHOICE_COV_ANALYZE
+    i = init.find("pluginManager.withPlugin('jacoco')")
+    blk = init[i:]
+    check("F9 覆蓋初始化腳本:jacoco 外掛套上後才設 includeNoLocationClasses = true 與排除 jdk.internal.*、不用 afterEvaluate",
+          i >= 0 and "includeNoLocationClasses = true" in blk and "jdk.internal.*" in blk and "includeNoLocationClasses" not in init[:i]
+          and "afterEvaluate" not in init, init)
+    check("F9 覆蓋初始化腳本開 enableUnitTestCoverage(application 與 library 兩種外掛)",
+          init.count("enableUnitTestCoverage true") == 2 and "com.android.application" in init and "com.android.library" in init, init)
+    check("F9 分析腳本用 JaCoCo 分析 API、依賴編譯任務、沒有類別時回報 noclasses",
+          all(k in ana for k in ("CoverageBuilder", "Analyzer", "ExecFileLoader", "jacocoAnt", "dependsOn", "lumosCovVariant", "noclasses")), ana[:400])
+
+
+def t_choice_cov_groovy_dep():
+    """[選擇點存活回指 代碼審 r2 正確性 c1、邊界 b1、通才 g4] 分析任務依賴變體編譯任務:Groovy 的 GString 跟 String 用 in 比永遠不等,
+    任務名清單裡有 "${v}" 的字串要先 toString。假 Gradle 不執行腳本,所以這裡①靜態擋「in [ … ${ … ]」這種寫法 ②本機找得到 Gradle 附的 Groovy 就真跑
+    那一行選任務的比對(找不到就只做①並印一行說沒真跑)。翻紅釘:拿掉 *.toString() → ①與②都紅。"""
+    import glob
+    import re as _re
+    m = _load_lumos_inproc()
+    ana = m._CHOICE_COV_ANALYZE
+    bad = _re.findall(r"\bin\s*\[[^\]]*\$\{[^\]]*\]", ana)
+    check("r2 c1 分析腳本沒有拿 GString 清單做 in 比對", not bad, str(bad))
+    line = next((ln.strip() for ln in ana.splitlines() if ln.strip().startswith("def want =")), "")
+    check("r2 c1 分析腳本先把要依賴的編譯任務名轉成字串清單(def want = …)", "*.toString()" in line and "compile${v}Kotlin" in line, ana[:600])
+    import pwd
+    gh = Path(_os_mod.environ.get("GRADLE_USER_HOME") or Path(pwd.getpwuid(_os_mod.getuid()).pw_dir) / ".gradle")   # 跑測試時 HOME 是假的;這裡只讀真的 Gradle 快取
+    jars = sorted(glob.glob(str(gh / "wrapper" / "dists" / "gradle-*" / "*" / "gradle-*" / "lib" / "groovy-[0-9]*.jar")))
+    java = _ksp_sh.which("java")
+    if not (jars and java and line):
+        print("    (本機沒有 Gradle 附的 Groovy 或 java,r2 c1 只做靜態檢查)")
+        return
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-groovy-"))
+    try:
+        (tmp / "t.groovy").write_text("def v = 'Debug'\n" + line.split("//")[0] + "\nprintln(['compileDebugKotlin', 'compileDebugJavaWithJavac', 'compileReleaseKotlin'].findAll { it in want })\n",
+                                      encoding="utf-8")
+        r = subprocess.run([java, "-cp", jars[-1], "groovy.ui.GroovyMain", str(tmp / "t.groovy")], capture_output=True, text=True, timeout=120,
+                           stdin=subprocess.DEVNULL)
+        check("r2 c1 真跑 Groovy:變體 Debug 選中 compileDebugKotlin 與 compileDebugJavaWithJavac、不選 Release",
+              r.stdout.strip() == "[compileDebugKotlin, compileDebugJavaWithJavac]", f"{r.stdout}\n{r.stderr[-400:]}")
+    finally:
+        _ck_cleanup(tmp)
+
+
+def _ckc_cb_stub(m, names, meth, remaining=10 ** 6):
+    """不跑 Gradle 的 _KillCovBase 樣板:走真的建構子(建構子多欄位時樣板跟著有,代碼審 r3 架構對齊 #2);prep 只給 remaining、interrupted、
+    _cache_path(回 None)、state;c 只給建構子、名稱檢查與 red_rerun 用到的欄位;meth 覆寫成指定的方法名(測不合法名字用)。"""
+    import types
+    prep = types.SimpleNamespace(remaining=lambda: remaining, interrupted=False, state={}, _cache_path=lambda plat, n: None)
+    c = types.SimpleNamespace(pentry={"profile": {"name_filter": "ident"}, "root": tempfile.gettempdir()}, coll_cache={}, plat="kotlin-junit",
+                              run_dir=tempfile.gettempdir(), mstate={}, scratch=tempfile.gettempdir(), pdata={}, floor=3.0, run_cmd="true", baselines={})
+    cb = m._KillCovBase(prep, c, list(names), {""}, None, "/nonexistent.exec", "Debug", None)
+    cb.meth = dict(meth)
+    cb._cmd = {n: "true" for n in names}
+    return cb
+
+
+def t_choice_cov_name_check():
+    """[選擇點存活回指 代碼審 r2 通才 g1] 覆蓋路徑自己的名稱檢查:測試方法名不合法(含半形逗號)→ 那支覆蓋記「名稱檢查沒過」、不進要量的清單,
+    合法的照量。翻紅釘:拿掉名稱檢查 → b,Case 進了要量的清單而紅。"""
+    m = _load_lumos_inproc()
+    cb = _ckc_cb_stub(m, ["x", "y"], {"x": "b,Case", "y": "aCase"})
+    todo = cb.cached()
+    check("r2 g1 名稱不合法的那支記名稱檢查沒過、不量;合法的進要量的清單", todo == ["y"] and cb.why == {"x": "名稱檢查沒過", "y": ""}, f"{todo} {cb.why}")
+
+
+def t_choice_cov_rerun_edges():
+    """[選擇點存活回指 代碼審 r2 資源 s1、s2] 掛覆蓋跑滿單支上限(不是被剩下時限截斷)→ 當場斷路(原因掛覆蓋才紅),不等連續 3 支;
+    不掛的重跑被剩下時限截斷 → 記時間不夠、回報被截斷(不寫成這支的基準)。翻紅釘:逾時不當場斷路 → 第一案紅;重跑截斷照寫基準 → 第二案紅。"""
+    m = _load_lumos_inproc()
+    orig = m._kill_run
+    try:
+        m._kill_run = lambda *a, **k: (0, "ok", 1.0, False)
+        cb = _ckc_cb_stub(m, ["x"], {"x": "xCase"})
+        got = cb.red_rerun("x", (1, "", 600.0, True), 600.0)
+        check("r2 s2 掛覆蓋逾時 → 當場斷路、原因掛覆蓋才紅;不掛重跑綠 → 基準照用、沒截斷",
+              cb.tripped and cb.trip_why == "掛覆蓋才紅" and got[:4] == (0, "ok", 1.0, False) and got[5] is False, f"{cb.tripped} {cb.trip_why} {got}")
+        m._kill_run = lambda *a, **k: (1, "", 600.0, True)
+        cb = _ckc_cb_stub(m, ["x"], {"x": "xCase"})
+        got = cb.red_rerun("x", (1, "", 600.0, True), 600.0)
+        check("r3 議題第 1 條 掛與不掛都跑滿上限(測試本身就慢)→ 不斷路、記基準不綠", not cb.tripped and cb.why["x"] == "基準不綠" and got[5] is False,
+              f"{cb.tripped} {cb.why} {got}")
+        m._kill_run = lambda *a, **k: (1, "", 5.0, True)
+        cb = _ckc_cb_stub(m, ["x"], {"x": "xCase"}, remaining=5.0)
+        got = cb.red_rerun("x", (1, "x FAILED", 3.0, False), 600.0)
+        check("r2 s1 不掛的重跑被剩下時限截斷 → 時間不夠、回報被截斷", cb.why["x"] == "時間不夠" and got[5] is True and got[4] == 8.0, f"{cb.why} {got}")
+    finally:
+        m._kill_run = orig
+
+
+def t_choice_cov_parse_keys():
+    """[選擇點存活回指 代碼審 r2 邊界 b2] 分析輸出缺 nolines 或 noclasses → 分析失敗(不當成沒經過記存活);三個鍵都在才算。
+    判準來源:真的分析腳本一定寫三個鍵(_CHOICE_COV_ANALYZE)。翻紅釘:缺鍵照收 → 前兩案回空原因而紅。"""
+    m = _load_lumos_inproc()
+    a = m._choice_cov_parse('{"hits": {"0": []}, "noclasses": false}', ["t"], {"g": 0})
+    b = m._choice_cov_parse('{"hits": {"0": []}, "nolines": []}', ["t"], {"g": 0})
+    c = m._choice_cov_parse('{"hits": {"0": [0]}, "nolines": [], "noclasses": false}', ["t"], {"g": 0})
+    check("r2 b2 缺 nolines、缺 noclasses → 分析失敗;齊全 → t 經過 g", a[2] == "分析失敗" and b[2] == "分析失敗" and c == ({"t": {"g"}}, set(), ""),
+          f"{a} {b} {c}")
+
+
+def t_choice_cov_prune_keep():
+    """[選擇點存活回指 代碼審 r2 通才 g2、正確性 c3、邊界 b3] 每次 choice-kill 開頭清續跑快取:這次的 at_sha 算保留的一個,其餘只留最新的,
+    清完連這次一共 2 個;符號連結的資料夾不跟、不刪。翻紅釘:不呼叫清快取 → 舊資料夾都還在而紅;先清後建 → 剩 3 個而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}}})
+        roots += [root, fake]
+        top = Path(root) / ".lumos" / "note-audit" / "choice-cov"
+        for k, nm in enumerate(("aaaaaaa1", "bbbbbbb2", "ccccccc3")):
+            (top / nm).mkdir(parents=True)
+            _os_mod.utime(top / nm, (1_000_000 + k, 1_000_000 + k))
+        (tmp / "outside").mkdir()
+        (top / "ddddddd4").symlink_to(tmp / "outside", target_is_directory=True)
+        r = _ck_run(root, fake)
+        left = sorted(x.name for x in top.iterdir() if not x.is_symlink())
+        cur = [x for x in left if x not in ("aaaaaaa1", "bbbbbbb2", "ccccccc3")]
+        check("r2 g2/c3 清完只剩這次的 at_sha 與最新的一個舊的(ccccccc3)", len(cur) == 1 and sorted(set(left) - set(cur)) == ["ccccccc3"],
+              f"{left}\n{r.stderr[-400:]}")
+        check("r2 g2 符號連結的資料夾不跟、不刪", (top / "ddddddd4").is_symlink() and (tmp / "outside").is_dir(), str(list(top.iterdir())))
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_analyze_budget():
+    """[選擇點存活回指 代碼審 r2 通才 g3] 分析前的時間門:剩下的總時限不夠「分析逾時(至少 60 秒)加一個壞法的預估」→ 不叫分析、那行 unknown(時間不夠)。
+    翻紅釘:拿掉時間門 → 叫了分析、reach clause 而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        log = tmp / "a.log"
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}}})
+        roots += [root, fake]
+        r = _ck_run(root, fake, "--no-merge", "--max-seconds", "40", runlog=log)
+        reach = _ckc_reach(root)
+        called = any(len(x) > 2 and x[2] == "analyze" for x in _ck_log(log))
+        check("r2 g3 剩下時限不到分析逾時 60 秒 → 不叫分析、unknown(時間不夠)", not called and len(reach) == 1 and reach[0].get("reach") == "unknown"
+              and reach[0].get("reach_why") == "時間不夠", f"{called} {reach}\n{r.stderr[-500:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_proj_pkgs():
+    """[選擇點存活回指 第一段放行後實測 2026-11-26] 專案類別看平台主程式全部檔的 package,不只這次改到的檔:Robolectric 測試只碰到沒改的 y 套件
+    (改到的是 x/Vm.kt)→ 專案類別有紀錄數不是 0、不斷路、照覆蓋判;判準來源:計劃〈用詞〉專案類別(平台原始碼的套件)。測試目錄裡的 package 不算專案類別。
+    翻紅釘:只看改到的檔的套件 → 前 5 支 Robolectric 都是 0、斷路而紅。"""
+    t6 = _CKC_T6
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        log = tmp / "a.log"
+        extra = {"app/src/main/java/y/Other.kt": "package y\n\nclass Other\n", "app/src/test/java/z/Helper.kt": "package z\n\nclass Helper\n"}
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}, "cls": "y/Other"}}, tests=t6, robo=t6, extra=extra)
+        roots += [root, fake]
+        r = _ck_run(root, fake, "--no-merge", runlog=log)
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        reach = _ckc_reach(root)
+        check("實測 Robolectric 只碰沒改的主程式套件 → 不斷路、6 支都掛覆蓋、reach clause", run_ev.get("cov") == "on" and len(_ckc_cov(log)) == 6
+              and len(reach) == 1 and reach[0].get("reach") == "clause", f"{run_ev.get('cov')} {_ckc_cov(log)} {reach}\n{r.stderr[-500:]}")
+        m = _load_lumos_inproc()
+        got = m._choice_cov_src_pkgs(root)
+        check("實測 主程式套件收 x 與 y、不收測試目錄的 z", {"x", "y"} <= got and "z" not in got, str(got))
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_src_pkgs_edges():
+    """[選擇點存活回指 補修代碼審 r1 架構 a1、邊界 b1 b2、資源 r2 r3] 掃主程式套件的邊界:主程式裡叫 test 的套件資料夾照收;src 底下的變體測試資料夾
+    (testDebug、androidTestFree、jvmTest)與共用跳過清單(build、vendor)不收;檔首 BOM 與反引號套件名照收;符號連結檔與具名管道不開;看滿上限就停並提醒。
+    判準來源:Android 官方〈Advanced test setup〉變體測試資料夾放 src/test<變體>、src/androidTest<變體>;計劃〈用詞〉專案類別。
+    翻紅釘:跳過清單在任何深度比對字面 test → com/a/test 漏收而紅;不去 BOM → bom 套件變預設套件而紅;不檢查一般檔 → 開具名管道卡住。"""
+    import shutil
+    import io, contextlib
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-pkgs-"))
+    outside = Path(tempfile.mkdtemp(prefix="gctl-ckc-pkgs-out-"))
+    try:
+        files = {"app/src/main/java/com/a/test/T.kt": "package com.a.test\n", "app/src/main/java/bom/B.kt": "\ufeffpackage bom.x\n",
+                 "app/src/main/java/bt/C.kt": "// 授權\n@file:JvmName(\"C\")\npackage `bt`.y\n",
+                 "app/src/testDebug/java/td/D.kt": "package td\n", "app/src/androidTestFree/java/af/E.kt": "package af\n",
+                 "lib/src/jvmTest/kotlin/jt/F.kt": "package jt\n", "app/build/gen/G.kt": "package gen\n", "vendor/v/H.java": "package v;\n"}
+        for rel, txt in files.items():
+            (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp / rel).write_text(txt, encoding="utf-8")
+        real = outside / "S.kt"
+        real.write_text("package outside.sym\n", encoding="utf-8")
+        (tmp / "app/src/main/java/sym.kt").symlink_to(real)
+        (tmp / "app/src/main/java/symdir").symlink_to(outside, target_is_directory=True)
+        if hasattr(_os_mod, "mkfifo"):
+            _os_mod.mkfifo(tmp / "app/src/main/java/pipe.kt")
+        got = m._choice_cov_src_pkgs(tmp)
+        want_in, want_out = {"com/a/test", "bom/x", "bt/y"}, {"td", "af", "jt", "gen", "v", "outside/sym"}
+        check("補修 主程式 test 套件、BOM、反引號照收;變體測試資料夾、多平台測試、build、vendor、符號連結(檔與資料夾)不收", want_in <= got and not (got & want_out),
+              str(got))
+        old = m._CHOICE_COV_SRC_MAX
+        m._CHOICE_COV_SRC_MAX = 1
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                cut = m._choice_cov_src_pkgs(tmp)
+        finally:
+            m._CHOICE_COV_SRC_MAX = old
+        check("補修 看滿上限就停、印一行提醒", len(cut) <= 1 and "上限" in buf.getvalue(), f"{cut} {buf.getvalue()!r}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(outside, ignore_errors=True)
+
+
+def t_choice_cov_base_read_rejects():
+    """[選擇點存活回指 補修代碼審 r1 通才 g1、邊界 b3、架構 a3] 續跑快取的基準檔:只收 rc 0、沒逾時、秒數是有限非負數、輸出尾巴是字串的 JSON 物件;
+    缺檔、壞 JSON、陣列、rc 1、逾時、rc 是 True、秒數是字串、超大整數、NaN、負數、超過上限都回 None(呼叫端刪掉重量,不崩、不把壞基準當綠)。
+    基準檔寫不下(路徑被資料夾佔住)時覆蓋資料照用。翻紅釘:拿掉 rc 與逾時檢查 → rc 1 那案回成綠基準而紅;不接 OverflowError → 超大整數那案丟例外。"""
+    import json, shutil
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-base-"))
+    try:
+        ex = str(tmp / "a.exec")
+        bp = Path(m._choice_cov_base_path(ex))
+        check("補修 沒有基準檔 → None", m._choice_cov_base_read(ex) is None)
+        good = {"rc": 0, "tail": "ok", "el": 1.5, "to": False}
+        bp.write_text(json.dumps(good), encoding="utf-8")
+        check("補修 綠基準 → (0, 尾巴, 秒, False, False)", m._choice_cov_base_read(ex) == (0, "ok", 1.5, False, False), str(m._choice_cov_base_read(ex)))
+        bad = {"rc 1": dict(good, rc=1), "逾時": dict(good, to=True), "rc True": dict(good, rc=True), "秒數字串": dict(good, el="1"),
+               "負秒數": dict(good, el=-1), "尾巴不是字串": dict(good, tail=None)}
+        raw_bad = {"壞 JSON": "{", "陣列": "[]", "超大整數": '{"rc": 0, "tail": "", "el": ' + "9" * 400 + ', "to": false}',
+                   "NaN": '{"rc": 0, "tail": "", "el": NaN, "to": false}', "超過上限": json.dumps(dict(good, tail="x" * 70000))}
+        got = {}
+        for k, v in list(bad.items()) + list(raw_bad.items()):
+            bp.write_text(v if isinstance(v, str) else json.dumps(v), encoding="utf-8")
+            try:
+                got[k] = m._choice_cov_base_read(ex)
+            except Exception as e:  # noqa: BLE001
+                got[k] = f"例外 {type(e).__name__}"
+        check("補修 不合格的基準檔一律 None、不丟例外", all(v is None for v in got.values()), str(got))
+        bp.unlink()
+        cb = _ckc_cb_stub(m, ["alphaCase"], {"alphaCase": "alphaCase"})
+        cb.prep._cache_path = lambda plat, n: str(tmp / "b.exec")
+        Path(m._choice_cov_base_path(str(tmp / "b.exec"))).mkdir()
+        dst = cb.store("alphaCase", b"x", keep=True, base=(0, "t", 1.0, False, False))
+        check("補修 基準檔寫不下 → 覆蓋資料照存、回傳路徑", dst == str(tmp / "b.exec") and (tmp / "b.exec").read_bytes() == b"x", str(dst))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def t_choice_cov_resume_old_cache():
+    """[選擇點存活回指 補修代碼審 r1 正確性 c1] 舊版留下的續跑快取只有覆蓋資料檔、沒有基準檔 → 那幾支刪掉重量,照常跑完、不崩。
+    判準來源:計劃〈範圍〉續跑快取(要覆蓋資料檔與基準檔都在才取用)。翻紅釘:取快取不看基準檔在不在 → 把 None 當基準放進去、合併快篩讀基準時崩潰而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        log = tmp / "a.log"
+        root, fake = _ckc_repo(2, {"__cov__": {"pass": {"alphaCase": [2]}}}, tests=_CKM_TESTS)
+        roots += [root, fake]
+        _ck_run(root, fake, "--only", _ck_loc(1))
+        bases = list((Path(root) / ".lumos" / "note-audit" / "choice-cov").glob("*/*.base.json"))
+        for b in bases:
+            b.unlink()
+        r = _ck_run(root, fake, "--only", _ck_loc(2), runlog=log)
+        again = [n for n, _w in _ckc_cov(log)]
+        reach = _ckc_reach(root, _ck_fp(2, 2))
+        check("補修 舊快取沒有基準檔 → 每支都重量覆蓋、不崩、新那一行照覆蓋判", len(bases) == len(_CKM_TESTS) and "Traceback" not in r.stderr
+              and again == list(_CKM_TESTS) and len(reach) == 1 and reach[0].get("reach") == "clause",
+              f"bases={len(bases)} rc={r.returncode} {again} {reach}\n{r.stderr[-800:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_all_zero_trip():
+    """[選擇點存活回指 第一段放行後網路調研 2026-11-27] 沒有 Robolectric 的專案,JaCoCo 插不了樁(例:agent 版本不支援這個 JDK 的類別檔,
+    「Unsupported class file major version」)時每支測試的專案類別有紀錄數都是 0;只有 Robolectric 才有的斷路器擋不到,一般 JUnit 的 0 會被當成真的沒經過、
+    整行不跑就記存活。量完全部、一支都沒記到專案類別 → 斷路、全部不明、壞法跑全部守的測試。翻紅釘:沒有這道 → reach none、via cov 存活而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        root, fake = _ckc_repo(1, {"__cov__": {"zero": ["alphaCase", "bravoCase"]}})
+        roots += [root, fake]
+        r = _ck_run(root, fake, "--no-merge")
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        reach = _ckc_reach(root)
+        cov_ev = [e for e in _ck_gov(root, kind="choice-kill") if e.get("via") == "cov"]
+        check("調研 一般 JUnit 測試全部 0 → 斷路、reach unknown、沒有依覆蓋判的存活", run_ev.get("cov") == "tripped" and len(reach) == 1
+              and reach[0].get("reach") == "unknown" and not cov_ev and "斷路" in r.stderr, f"{run_ev.get('cov')} {reach} {cov_ev}\n{r.stderr[-500:]}")
+        root, fake = _ckc_repo(1, {"__cov__": {"zero": ["bravoCase"]}})
+        roots += [root, fake]
+        _ck_run(root, fake, "--no-merge")
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        check("調研 ★對照★ 只有一支 0、另一支有記到 → 不斷路(cov on)", run_ev.get("cov") == "on", str(run_ev.get("cov")))
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_robo_zero_cache():
+    """[選擇點存活回指 代碼審 r2 邊界 b4] Robolectric 測試的覆蓋資料專案類別有紀錄數 0(設定沒生效)不進續跑快取:下次續跑那支會重量,
+    不會讀回同一份壞資料;可信的照存。翻紅釘:照樣存進快取 → 快取有 2 份而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+    roots = []
+    try:
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}, "zero": ["bravoCase"]}}, robo=("bravoCase",))
+        roots += [root, fake]
+        r = _ck_run(root, fake, "--no-merge")
+        cache = sorted((Path(root) / ".lumos" / "note-audit" / "choice-cov").glob("*/*.exec"))
+        reach = _ckc_reach(root)
+        check("r2 b4 0 的 Robolectric 覆蓋資料不進快取(只存 alpha 那 1 份),那行照記覆蓋接不起來",
+              len(cache) == 1 and len(reach) == 1 and reach[0].get("reach_why") == "覆蓋接不起來", f"{cache} {reach}\n{r.stderr[-400:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_judged_counts():
+    """[選擇點存活回指 代碼審 r1 F8(合約 k2、通才 g3)] 依覆蓋判存活的那筆 judged 記 cov、run 那筆多 cov_judged,merged + single + cov_judged 等於這次判定數(ran)。
+    翻紅釘:cov 不計 → 相加小於 ran 而紅。"""
+    roots = []
+    try:
+        root, fake = _ckc_repo(2, {"__cov__": {"pass": {"alphaCase": [1]}}})
+        roots += [root, fake]
+        _ck_run(root, fake)
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        check("F8 run 那筆 cov_judged 1、merged + single + cov_judged 等於 ran(2)", run_ev.get("cov_judged") == 1
+              and run_ev.get("merged", 0) + run_ev.get("single", 0) + run_ev.get("cov_judged", 0) == run_ev.get("ran") == 2, str(run_ev))
+        rck = [rw.get("ck") or {} for rw in _ckm_gov_ck(_load_lumos_inproc(), root) if rw.get("kind") == "run"]
+        check("r2 k2 gov 的 ck 帶出 cov_judged,讀端也驗得了 merged + single + cov_judged == ran", rck and rck[-1].get("cov_judged") == 1
+              and rck[-1].get("merged", 0) + rck[-1].get("single", 0) + rck[-1]["cov_judged"] == rck[-1].get("ran"), str(rck))
+    finally:
+        _ck_cleanup(*roots)
 
 
 if __name__ == "__main__":
