@@ -150408,6 +150408,26 @@ def t_choice_cov_proj_pkgs():
         _ck_cleanup(*roots, tmp)
 
 
+def t_choice_cov_pkg_of():
+    """[選擇點覆蓋套件正規式修補 代碼審 r1 架構對齊 #1、通才 #1 #2] 讀 package 宣告只有一支:檔首 BOM、反引號套件名、package 與名字之間換行都認;
+    壞法行的套件(_choice_cov_req)跟掃主程式套件對同一支檔讀出的值相同。判準來源:Kotlin 文法 packageHeader(關鍵字後接識別字,中間可換行)。
+    翻紅釘:_choice_cov_req 改回自己寫的行內正規式 → BOM 那案兩邊不同而紅。"""
+    m = _load_lumos_inproc()
+    cases = {"\ufeffpackage a.b\n": "a/b", "package `x`.y\n": "x/y", "package\nn.m\n": "n/m", "// 沒有\nclass A\n": "", "  package p\n": "p"}
+    got = {k: m._choice_cov_pkg_of(k) for k in cases}
+    check("修補 BOM、反引號、換行、沒有宣告、縮排都照 Kotlin 文法讀", got == cases, str(got))
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-pkgof-"))
+    try:
+        (tmp / "app/src/main/java/a/b").mkdir(parents=True)
+        (tmp / "app/src/main/java/a/b/V.kt").write_text("\ufeffpackage a.b\n\nval x = 1\n", encoding="utf-8")
+        x = {"file": "app/src/main/java/a/b/V.kt", "line": 3, "decl": "", "mutant": {"identity": {"old": "val x = 1", "new": "val x = 2"}}}
+        req = m._choice_cov_req(tmp, x, 0)
+        check("修補 壞法行的套件跟掃主程式套件讀出的相同(帶 BOM 的檔)", req["pkg"] == "a/b" and m._choice_cov_src_pkgs(tmp) == {"a/b"},
+              f"{req['pkg']} {m._choice_cov_src_pkgs(tmp)}")
+    finally:
+        _ck_cleanup(tmp)
+
+
 def t_choice_cov_src_pkgs_edges():
     """[選擇點存活回指 補修代碼審 r1 架構 a1、邊界 b1 b2、資源 r2 r3] 掃主程式套件的邊界:主程式裡叫 test 的套件資料夾照收;src 底下的變體測試資料夾
     (testDebug、androidTestFree、jvmTest)與共用跳過清單(build、vendor)不收;檔首 BOM 與反引號套件名照收;符號連結檔與具名管道不開;看滿上限就停並提醒。
