@@ -1,0 +1,94 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/選擇點變異加速第四段_計劃.md b/docs/lumos-toolchain-knowledge/Projects/選擇點變異加速第四段_計劃.md
+index 6a9f4c5db..1836f8370 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/選擇點變異加速第四段_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/選擇點變異加速第四段_計劃.md
+@@ -39,21 +39,21 @@ REVISIT:2026-12-31 讀治理帳每個壞法那筆的 `merge_why`、`single_runs`
+ ## 實測(來源)
+ 
+ FACT:實驗專案 11-26 重跑 142 個壞法 14197 秒;快篩通過 45 個、有失敗 66 個、編不過 6 個(三類平均 18、28、7 秒);沒跑乾淨 15 個:逾時 11 個裡 10 個判殺掉、1 個跑不出結果,結果檔讀不出來(zero_cases) 4 個裡 3 個判殺掉、1 個存活;斷路器跳開 1 次、試探恢復 1 次,停用期間 10 個平均 378 秒 [來源:人工] [confirmed:2026-11-26]
+ FACT:實驗專案(JUnit 4.13.2、Robolectric 4.16)帶事件初始化腳本(內容同〈做法〉1 的 `_CHOICE_MERGE_INIT`,分行寫)跑一支掛住的探針測試,90 秒逾時收掉後輸出最後是「HangProbeTest > b_hangs STARTED」、沒有對應的 PASSED;類別印的是簡名、事件行頂格;不帶腳本的對照組輸出看不出跑到哪一支;收掉後沒有殘留的測試執行程序 [來源:人工] [confirmed:2026-11-26]
+ FACT:逐支流程遇到單支逾時就判「跑不出結果:測試掛住」並停在那個壞法(`t_choice_kill_merge_failed_first` S1 案 5 釘住);所以掛住的那支要排在沒跑到的那些後面,不然本來殺得掉的壞法會變成跑不出結果 [來源:人工] [confirmed:2026-11-26]
+ 
+ ## 用詞
+ 
+ - **沒跑乾淨**、**合併道**、**快篩結果四類**:沿用 [[Projects/選擇點變異加速_計劃]]〈用詞〉。
+ - **斷路器停用**:沿用 [[Projects/選擇點變異加速第三段_計劃]]〈用詞〉。
+-- **事件行**:合併呼叫輸出裡一行經 `_choice_merge_event_line` 用字串切得出來(不用正規式:長行上會回溯成二次方,代碼審 r1):行首不得有空白,`<類別> > <測試名> <事件>`,事件是 `STARTED`、`PASSED`、`FAILED`、`SKIPPED` 之一、後面只准有行尾空白。在第一個 ` > ` 切開:前面是類別、後面去掉事件字樣是測試名(所以測試名可以含 ` > `)。身分照既有 `_choice_merge_fullname` 那套換成完整名(類別的 `$` 換成 `.`、測試名去掉參數尾巴)。例:`FooTest > bar[1] FAILED` → `FooTest.bar`;`Outer$Inner > c STARTED` → `Outer.Inner.c`。
++- **事件行**:合併呼叫輸出裡一行經 `_choice_merge_event_line` 用字串切得出來(不用正規式:長行上會回溯成二次方,代碼審 r1):行首不得有空白,`<類別> > <測試名> <事件>`,事件是 `STARTED`、`PASSED`、`FAILED`、`SKIPPED` 之一、後面只准有行尾空白(實作用 `str.rstrip()`,所以 `\xa0`、全形空白這類也算;只影響順序)。在第一個 ` > ` 切開:前面是類別、後面去掉事件字樣是測試名(所以測試名可以含 ` > `)。身分照既有 `_choice_merge_fullname` 那套換成完整名(類別的 `$` 換成 `.`、測試名去掉參數尾巴)。例:`FooTest > bar[1] FAILED` → `FooTest.bar`;`Outer$Inner > c STARTED` → `Outer.Inner.c`。
+ - **對到**:照既有 `_choice_merge_hits`:完整名等於合併道的測試名 m,或以「. 加 m」結尾。
+ - **四層**:合併道每個測試名照對到的事件分一層,一個名字只進一層、優先序由上而下:有 `FAILED` → 紅層;有 `STARTED` 而之後沒有同一支的 `PASSED`/`FAILED`/`SKIPPED`,而且輸出沒被截斷 → 掛住層;有 `PASSED` 或 `SKIPPED` → 通過層;其餘(都沒有,或輸出被截斷時開始了沒看到結束)→ 未知層。輸出被截斷指輸出裡有 `_kill_cap` 插的 `...[truncated ` 標記行。
+ - **跑到測試**:輸出裡至少一行 `STARTED` 事件行。
+ 
+ ## 做法
+ 
+ 1. **初始化腳本**(`_isolated_worktree`、`_kill_merge_ready`、`_kill_merge_base`、`_choice_merge_cmd`):
+    - 常數 `_CHOICE_MERGE_INIT` 是腳本內容:`allprojects { tasks.withType(Test).configureEach { testLogging { events "started", "passed", "failed", "skipped" } } }`(Groovy 寫法,Kotlin 建置腳本的專案也吃)。
+    - `_isolated_worktree` 給出的物件多一個 `scratch`(它 mkdtemp 建的那個上層資料夾,收尾整個刪掉;帶 `--keep-worktree` 時跟現場一起留下);choice-kill 的現場 `c` 多帶 `scratch`。腳本路徑是 `<scratch>/lumos-merge-events.init.gradle`,不弄髒工作樹;`c` 沒有 `scratch`(既有單元測試直接給的現場)→ 不帶腳本,行為跟現在一樣。
+    - `_kill_merge_ready` 只算路徑不寫檔,拿帶腳本的指令做過長判斷;`sh["init"]` 放路徑。Windows 上路徑含 `_WIN_CMD_SPECIAL` 任一字元 → `sh["init"]` 是 None。
+@@ -85,34 +85,34 @@ FACT:逐支流程遇到單支逾時就判「跑不出結果:測試掛住」並
+ ## 不做
+ 
+ - 不調快篩逾時倍數(合併基準 × 5):實驗專案合併基準約 15–20 秒,上限約 90 秒,11 次逾時多等的總共約 10 分鐘;調低會讓機器忙時正常的壞法也逾時。
+ - 不查 `zero_cases` 的根因:4 次,事件排序對它一樣適用(輸出裡有 FAILED 就先跑);累積更多 `merge_why` 再說。
+ - 不把逾時直接判殺掉、不改逐支遇到掛住就停的行為。
+ - 不另做 Gradle 版本、設定快取、Isolated Projects 的相容判斷:帶腳本沒產生結果檔就不帶重試,一次涵蓋(Gradle 拒收腳本時在跑測試之前就失敗)。
+ 
+ ## 驗收條款
+ 
+ - [S1] 當平台組能合併、現場帶 `scratch` 時,合併指令 應 在接好的 `--tests` 段之後帶 ` --init-script <scratch>/lumos-merge-events.init.gradle`(路徑照 `shlex.quote`)、檔案內容 應 等於 `_CHOICE_MERGE_INIT`,逐支指令 應 不帶;現場沒有 `scratch` 時 應 不帶、照常合併;`scratch` 寫不進去時 應 印「事件初始化腳本寫不進去」、不帶、照常合併;原字串 `--tests` 段後面還有其他參數時,`--init-script` 應 插在那些參數之前;Windows 上路徑含 `%` 時 應 不帶 [test:t_choice_kill_merge_events_cmd]
+-- [S6] 當帶腳本的合併基準 rc 1 而且沒寫結果檔、不帶腳本那次通過時,choice-kill 應 印「帶事件初始化腳本的合併基準不通過」、之後的快篩指令 應 不帶 `--init-script`、照常合併,run 那筆 `merge_init_off` 應 是 {平台: 原因};兩次都不通過時 應 照現在不合併;合併基準本身有失敗或 rc 不是 0(結果檔有寫)時 應 不重試、只跑一次合併基準 [test:t_choice_kill_merge_events_cmd]
+-- [S2] 當快篩逾時、輸出依序是 a PASSED、b FAILED、c STARTED(沒有結束)、d 沒出現時,逐支順序 應 是 b、d、c、a,單支 b 紅時 應 只跑 b、判 killed by b;`b[1] FAILED` 應 對到 b;測試名含 ` > ` 的事件 應 對到那支;行首有空白的同樣字串 應 不算事件行;輸出有截斷標記、c 開始沒結束時 c 應 進未知層(順序 b、c、d、a);快篩結果檔零案例、輸出有 b FAILED 時 應 先跑 b;快篩逾時、輸出沒有事件行時 應 照原順序(同第二段 S2);前一個壞法照事件排過、下一個壞法套不上而交逐支時 應 照原順序;快篩有失敗時 應 照第二段的結果檔名單 [test:t_choice_kill_merge_events_order]
+-- [S3] 當連續 5 個壞法快篩逾時、每次輸出都有 STARTED 事件行時,choice-kill 應 不跳開斷路器、run 那筆 `merge_tripped` 假、`merge_unclean` 是 {平台: {逾時(跑到測試後掛住): 5}},每個壞法那筆 `merge_why` 是 {平台: 逾時(跑到測試後掛住)};連續 15 個時 應 跳開、印的原因是「逾時(跑到測試後掛住)」;連續 5 個快篩逾時、輸出沒有事件行時 應 照舊跳開、`merge_unclean` 的「逾時」是 5;依序 4 個沒事件行的逾時、1 個有事件行的逾時、1 個沒事件行的逾時時 應 在第 6 個跳開(中間那個不計也不歸零);斷路器停用中試探快篩逾時而且有事件行時 應 不恢復 [test:t_choice_kill_merge_hang_breaker]
++- [S6] 當帶腳本的合併基準 rc 1 而且沒寫結果檔、不帶腳本那次通過時,choice-kill 應 印「帶事件初始化腳本的合併基準不通過」、之後的快篩指令 應 不帶 `--init-script`、照常合併,run 那筆 `merge_init_off` 應 是 {平台: 原因};兩次都不通過時 應 照現在不合併;合併基準本身有失敗或 rc 不是 0(結果檔有寫)時 應 不重試、只跑一次合併基準;重試的上限 應 照剩下的總時限重算(兩支各 40 秒、剩 100 秒、第一次花掉 70 秒 → 重試上限 ≤ 30) [test:t_choice_kill_merge_events_cmd]
++- [S2] 當快篩逾時、輸出依序是 a PASSED、b FAILED、c STARTED(沒有結束)、d 沒出現時,逐支順序 應 是 b、d、c、a,單支 b 紅時 應 只跑 b、判 killed by b;`b[1] FAILED` 應 對到 b;測試名含 ` > ` 的事件 應 對到那支;行首有空白的同樣字串 應 不算事件行;輸出有截斷標記、c 開始沒結束時 c 應 進未知層(順序 b、c、d、a);快篩結果檔零案例、輸出有 b FAILED 時 應 先跑 b;快篩逾時、輸出沒有事件行時 應 照原順序(同第二段 S2);前一個壞法照事件排過、下一個壞法套不上而交逐支時 應 照原順序;快篩有失敗時 應 照第二段的結果檔名單;含六萬個 ` > ` 的長行 應 一秒內解完;行尾 `\r` 的事件行 應 照樣認得 [test:t_choice_kill_merge_events_order]
++- [S3] 當連續 5 個壞法快篩逾時、每次輸出都有 STARTED 事件行時,choice-kill 應 不跳開斷路器、run 那筆 `merge_tripped` 假、`merge_unclean` 是 {平台: {逾時(跑到測試後掛住): 5}},每個壞法那筆 `merge_why` 是 {平台: 逾時(跑到測試後掛住)};連續 15 個時 應 跳開、印的原因是「逾時(跑到測試後掛住)」;連續 5 個快篩逾時、輸出沒有事件行時 應 照舊跳開、`merge_unclean` 的「逾時」是 5;依序 4 個沒事件行的逾時、1 個有事件行的逾時、1 個沒事件行的逾時時 應 在第 6 個跳開(中間那個不計也不歸零);斷路器停用中試探快篩逾時而且有事件行時 應 不恢復;15 次跳開、試探通過恢復、再 1 次 應 不再跳開(恢復後從頭數);原本的計數跳開前先有 3 次跑到測試後逾時、恢復後 14 次 應 不跳開;門檻經 `_KillMerge(hang_breaker=…)` 帶入時 應 照帶入的值跳開 [test:t_choice_kill_merge_hang_breaker]
+ - [S4] 當帶 `--no-merge` 時,choice-kill 的呼叫數與順序 應 跟現在相同 [test:t_choice_kill_no_merge_unchanged]
+ - [S5] 當在實驗專案強制重跑 11-26 那次的 25 個慢壞法時,總秒數、斷路器有沒有跳開、每個壞法的 `merge_why` 與 `single_runs` 應 記下來跟〈預期效益〉對照 [manual:在 Android 實驗專案用可重跑已殺掉行的腳本重跑那 25 個壞法,讀治理帳寫進驗證紀錄]
+ 
+ ## 預期值表
+ 
+ | 條款 | 輸入 | 預期 | 來源 |
+ |---|---|---|---|
+ | S1 | 能合併、有 scratch;另案沒有 scratch;另案寫不進去;另案 `--tests` 段後還有參數;另案 Windows 路徑含 % | 一:合併指令帶 --init-script、檔案等於常數、逐支不帶;二:不帶、照常合併;三:印寫不進去、不帶、照常合併;四:插在其他參數前;五:不帶 | 本計劃第一條 WHY;11-26 探針實驗 |
+-| S6 | 帶腳本合併基準 rc 1 沒結果檔、不帶通過;另案兩次都不通過;另案合併基準本身有失敗 | 一:印不通過那行、快篩不帶、照常合併、merge_init_off;二:不合併;三:不重試、合併基準一次 | 本計劃〈做法〉1;Gradle 設定快取與 Isolated Projects 文件 |
+-| S2 | 快篩逾時,事件 a 通過、b 紅、c 開始沒結束、d 沒出現;另案帶參數;另案名字含 ` > `;另案行首空白;另案輸出截斷;另案零案例帶 b 紅;另案沒有事件行;另案前一個壞法排過、下一個套不上;另案有失敗 | 一:b、d、c、a,b 紅就停、killed by b;二、三:對到;四:不算事件;五:b、c、d、a;六:先跑 b;七、八:原順序;九:照結果檔名單 | 本計劃第一條 WHY;第二段 S1、S2 |
+-| S3 | 連續 5 次逾時有 STARTED;連續 15 次;另案沒有事件行;另案 4 無、1 有、1 無;另案停用中試探逾時有事件 | 一:不跳開、merge_unclean 那個鍵 5、merge_why;二:跳開;三:跳開、逾時 5;四:第 6 個跳開;五:不恢復 | 本計劃第二條 WHY;redress、Azure 依失敗種類分門檻 |
++| S6 | 帶腳本合併基準 rc 1 沒結果檔、不帶通過;另案兩次都不通過;另案合併基準本身有失敗;另案剩 100 秒、第一次花 70 秒 | 一:印不通過那行、快篩不帶、照常合併、merge_init_off;二:不合併;三:不重試、合併基準一次;四:重試上限 ≤ 30 | 本計劃〈做法〉1;Gradle 設定快取與 Isolated Projects 文件 |
++| S2 | 快篩逾時,事件 a 通過、b 紅、c 開始沒結束、d 沒出現;另案帶參數;另案名字含 ` > `;另案行首空白;另案輸出截斷;另案零案例帶 b 紅;另案沒有事件行;另案前一個壞法排過、下一個套不上;另案有失敗;另案六萬個 ` > ` 的長行;另案行尾 \r | 一:b、d、c、a,b 紅就停、killed by b;二、三:對到;四:不算事件;五:b、c、d、a;六:先跑 b;七、八:原順序;九:照結果檔名單;十:一秒內解完;十一:認得 | 本計劃第一條 WHY;第二段 S1、S2 |
++| S3 | 連續 5 次逾時有 STARTED;連續 15 次;另案沒有事件行;另案 4 無、1 有、1 無;另案停用中試探逾時有事件;另案 15 次跳開、恢復、再 1 次;另案 3 次後原計數跳開、恢復、14 次;另案門檻帶 3 | 一:不跳開、merge_unclean 那個鍵 5、merge_why;二:跳開;三:跳開、逾時 5;四:第 6 個跳開;五:不恢復;六、七:不跳開;八:第 3 次跳開 | 本計劃第二條 WHY;redress、Azure 依失敗種類分門檻 |
+ | S4 | `--no-merge` | 呼叫數與順序不變 | [[Projects/選擇點變異加速_計劃]] S13 |
+ | S5 | 實驗專案 25 個慢壞法 | 記下總秒數、跳開、merge_why、single_runs | 本計劃〈預期效益〉 |
+ 
+ ## 回退
+ 
+ - 先關不還原:`LUMOS_SKIP_CHOICE_MERGE=1` 或 `--no-merge`,合併整個不開(事件與排序跟著不用)。
+ - 只想關事件:沒有單獨開關;還原功能提交。腳本被 Gradle 拒收(沒產生結果檔)時工具自己不帶重試,不用人關。`merge_why` 的新字樣是既有欄位的新值,讀者照字串讀;`merge_init_off` 是新欄位,讀者缺欄讀成空字典。
+ 
+ ## 實務隱患
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+index 8a05e591a..26256a1c6 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
++++ b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+@@ -59,20 +59,21 @@ summary: |-
+   PITFALL:第一個訊號落在看完停止旗標之後、合併程序登記之前,回呼收不到、合併呼叫跑完整段 [出處:代碼審 code-選擇點變異加速 r1 正確性 #2、資源 #1、通才 #4] [根因:收程序只靠回呼看登記表] [修法:_kill_run 登記合併程序之後再看一次 interrupted、是就當場收(pthread_sigmask 包 Popen 不可靠,bpo-1975)] [test:t_choice_kill_merge_signal_race]
+   PITFALL:快篩逾時上限不受剩下總時限約束,一次快篩可能超出 --max-seconds 好幾分鐘;只測上限的純函式時,呼叫端改回舊算式測試照綠 [出處:代碼審 code-選擇點變異加速 r1 資源 #2、r2 通才 #1、r3 通才 #1、邊界 #1] [根因:上限只看合併基準耗時與下限] [修法:快篩上限加 min(…, max(剩下總時限, 1))(_choice_merge_screen_cap),合併基準呼叫端同族(r3 邊界 #1);測試攔下 _kill_run 斷言兩處收到的逾時值,不用真實睡眠的端到端案例(負載下隨機紅,r3 通才 #1)] [test:t_choice_kill_merge_cap_wiring]
+   PITFALL:壞法的配方一支都不在合併道(那幾支單支基準全紅)時照開一次快篩,還把它記成合併判 [出處:代碼審 code-選擇點變異加速 r1 通才 #2] [根因:開快篩前沒看配方跟合併道有沒有交集] [修法:_kill_merge_in_lane 先看,沒有交集就不套壞法、直接交逐支] [test:t_choice_kill_merge_no_lane_chunk]
+   PITFALL:判法(judged)在交出的列與收尾各記一份,交出列上那份沒有讀者、兩份可能不一致 [出處:代碼審 code-選擇點變異加速 r1 整合 #4、通才 #1、架構對齊 #2、r4 整合 #1] [根因:建構後才設的合併旗標讓兩處各算一次] [修法:判法只在 _ChoiceKillRun 收尾算一份,結果列不帶 judged(on_row 與 result_out 照欄位白名單另組列,只有 --json 會整列吐出,測試看 --json)] [test:t_choice_kill_merge_cap_wiring] [test:t_choice_kill_merge_ledger_counts]
+   PITFALL:比對兩次各自卡總時限的 choice-kill 測試(合併對 --no-merge),把睡眠與時限同比例縮小會在機器忙時隨機紅,兩邊跑到的壞法數誰多誰少都會發生(合併要先量基準、多一段開銷) [出處:代碼審 code-選擇點變異加速 r2 修正關卡,減半版並行三份兩份紅] [根因:固定開銷不隨比例縮小,絕對餘裕不夠] [修法:這類測試保留原本的絕對時限;要縮短耗時改用直接呼叫函式、換掉執行與剩餘時限的卡線測試] [test:t_choice_kill_merge_budget_reestimate]
+   WHY:合併快篩有失敗時,_kill_merge_iter 照先紅順序交出這個壞法的配方(_kill_merge_failed_first:合併失敗名單裡的排前面、其餘接後面,兩邊各自維持守的測試排序;名單空照原順序);名單由 _choice_merge_classify 的選用參數 failed 在有失敗那一支照合併道原排序從寬算(任一筆 failure 或 error 案例的完整名等於它或以「. 加它」結尾就列),掛在平台現場 c.merge_failed、每個壞法開快篩前清空;判定仍由逐支單支結果決定,殺掉它的是先紅順序第一支強殺掉的那支 [出處:[[Projects/選擇點變異加速第二段_計劃]] 做法 1] [因:被殺的壞法成本大頭在逐支依序找第一支紅的(實測 19–96 次),合併結果已指出哪幾支紅] [不選:合併直接判殺掉;用結果檔歸因記殺掉者] [代價:開或關合併(含 --no-merge 重判),同一個壞法的判定可能在殺掉與跑不出結果之間不同、殺掉它的測試也可能不同,帳上會出現分歧;兩邊都不會記成存活,逾時變多由 [[Projects/選擇點變異加速第二段_計劃]] RETIRE-IF ④ 盯] [test:t_choice_kill_merge_failed_first] [test:t_choice_kill_merge_failed_names]
+   WHY:一個壞法也合併(_kill_merge_ready 拿掉「壞法少於 2 個」那道,_KillMerge 不再收壞法數);一個平台組不合併時 _kill_merge_off 把固定原因記進 _KillMerge.plats[平台] = (False, 原因)(只這一處,run 的 merge_off 由它算出)並印一行「⚠ <平台>:這次不合併(<原因>),照逐支跑」(印不印由呼叫端傳 quiet:合併基準不乾淨照既有那行印、中斷與時限到只記不印;量基準途中停下時收到訊號記中斷、總時限到記時限到,常數 _CHOICE_MERGE_HALT_SIGNAL、_CHOICE_MERGE_HALT_DEADLINE;要記基準量不齊或合併道不足 2 支之前先看停止旗標(_kill_merge_halt_check),已停就照中斷或時限到記;_KillMerge.on_signal 在建訊號處理時就交給 on_first,不留空窗),守的不同名字不到 2 支先於時限門判,時限門排最後,時限不夠與基準量不齊同一行接要帶多大的 --max-seconds(已花秒數加約需秒數加 60 進位到百;基準量不齊時約需照全部支數與已量平均估;〔第三段起平均不含這次量到的第一支〕);快篩沒跑乾淨的計斷路器原因(classify 原字串)分平台累計進 unclean、跳開那行印最後一次 [出處:[[Projects/選擇點變異加速第二段_計劃]] 做法 2–4] [因:--only 單點的存活壞法逐支 169 支約 30 分鐘、合併 16–18 秒;預設時限對 169 支整次靜默不合併;11-25 斷路器跳開原因沒記、事後查不出] [不選:把預設 --max-seconds 調大(對話裡跑會被工具逾時砍掉)] [test:t_choice_kill_merge_single_mutant] [test:t_choice_kill_merge_budget_hint] [test:t_choice_kill_merge_off_reasons] [test:t_choice_kill_merge_unclean_reasons]
+   PITFALL:測試總檔新加的小工具函式跟既有的同名時,後定義的會靜靜蓋掉前面那個,兩處都改用新版本、本機子集照綠,只有全套的重複定義檢查會紅 [出處:2026-11-24 選擇點加速 PR CI 紅] [根因:功能分支推送前只跑文件子集,重複定義檢查只在全套跑] [修法:新工具函式先 grep 測試總檔有沒有同名] [test:t_test_file_no_duplicate_defs]
+   WHY:合併快篩的斷路器跳開後改成半開:_kill_merge_iter 在斷路器停用(plats 是 (False, _CHOICE_MERGE_TRIPPED))時,每累計 _CHOICE_MERGE_PROBE_EVERY(10)個能跑快篩的壞法就拿下一個跑一次試探快篩;_kill_merge_breaker 收到試探結果是通過或有失敗就恢復(啟用、streak 歸零、reopen 加一、標準錯誤印「試探快篩跑乾淨了,恢復合併」),編不過與沒跑乾淨都不恢復、計數類只累計原因;跳開時 trips 加一。_kill_merge_singles 量基準時這次量到的第一支(含冷編譯)不拿來估、已量少於 2 支不判收手。_choice_merge_facts 的讀不出來帶拒收代碼「結果檔讀不出來(<代碼>)」,_kill_merge_screen 把快篩沒跑乾淨的原因記進 whys [出處:[[Projects/選擇點變異加速第三段_計劃]];2026-11-25 實驗專案完整跑法斷路器跳開後剩 137 個壞法要 13–14 小時、單點重跑第一支 27.7 秒讓合併沒開] [因:沒跑乾淨重現不出、屬偶發,跳開一次整次停用代價是剩下全部壞法;第一支含冷編譯不是單支代表耗時] [不選:調高斷路器門檻(只是延後);讓有失敗也歸零平常的計數(第一段設計審裁的口徑)] [test:t_choice_kill_merge_half_open]
+   WHY:合併快篩帶事件初始化腳本、沒跑乾淨照事件排序、跑到測試後逾時另外數:_kill_merge_ready 算出 <scratch>/lumos-merge-events.init.gradle(scratch 是 _isolated_worktree 的上層暫存資料夾;現場沒有就不帶、Windows 路徑含 cmd.exe 特殊字元也不帶),_kill_merge_base 寫檔(寫不進去印一行、不帶)並把 --init-script 插在 --tests 段之後,帶腳本的合併基準沒產生結果檔(「找不到 JUnit 結果檔」,Gradle 拒收腳本的樣子)就不帶再跑一次(上限照剩下的總時限重算)、通過就照常合併並記 merge_init_off,其他不通過不重試;_choice_merge_events 讀頂格的 Gradle 事件行(類別 > 測試名 STARTED|PASSED|FAILED|SKIPPED),快篩沒跑乾淨時 _kill_merge_screen 把紅層放 merge_failed、掛住層加通過層放 merge_back,_kill_merge_failed_first 排成紅、未知、掛住、通過(輸出被截斷時不判掛住);_choice_merge_classify 判逾時時輸出有 STARTED 就回「逾時(跑到測試後掛住)」、不計原本的 streak,_kill_merge_breaker 另數 hang_streak,連續 _CHOICE_MERGE_HANG_BREAKER(15)次才跳開,通過或有失敗歸零;跳開與試探恢復時兩個連續計數都歸零(共用 _kill_merge_trip) [出處:[[Projects/選擇點變異加速第四段_計劃]];2026-11-26 實驗專案重跑 142 個壞法,快篩逾時 11 個裡 10 個逐支後判殺掉、斷路器被逾時連 5 次跳開] [因:Gradle 逾時被收掉時沒有 JUnit 結果檔,只剩輸出;逾時多半是壞法讓測試掛住,但工具上限不夠時也會跑到測試才逾時,要保留煞車] [不選:讀部分結果檔(Gradle 結束才寫);跑到測試的逾時完全不計(沒有煞車);掛住的排最前(逐支遇到掛住就判跑不出結果並停)] [test:t_choice_kill_merge_events_order]
++  PITFALL:Kotlin 反引號測試名含 `(` 時,事件行的身分照 `_choice_merge_fullname` 從第一個 `(` 截掉,對不到那支、落未知層,排序退回原順序(只影響順序、不改判定) [出處:[[Projects/選擇點變異加速第四段_計劃]] 代碼審 r1 邊界席] [根因:參數尾巴的截法跟 JUnit 結果檔那條路共用] [repro:_choice_merge_events("x.V > foo (bar) FAILED", ["foo (bar)"]) 回 failed 空]
+ related:
+   - "[[Projects/guard殺傷力驗證_計劃]]"
+   - "[[Systems/check-t-sentinel]]"
+   - "[[Systems/test-profile-multiplatform]]"
+   - "[[Verification/2026-07-10_guard殺傷力驗證]]"
+   - "[[Projects/併發與效能表態要合約背書_計劃]]"
+   - "[[Projects/殺傷力配方失配提醒_計劃]]"
+ aliases:
+   - 殺傷力驗證
+ decisions:
