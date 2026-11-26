@@ -1,0 +1,87 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 749a38b4f..4681ace0e 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -78652,21 +78652,21 @@ def _choice_range(rr, diff, branch):
+     if name and name in _note_reread_mainline_names(rr, tip):
+         return None, None, f"目前分支 {_kill_esc(name)} 就是主線——要看哪一段改動,帶 --diff <A..B>"
+     start, why = _push_range_start(rr, "0" * len(tip), tip, remote, f"refs/heads/{name}" if name else None)
+     if start is None:
+         return None, None, f"{why};帶 --diff <A..B> 指定要看的範圍"
+     if start == _PUSH_START_UNKNOWN:
+         return None, None, f"算不出範圍的起點({why})"
+     return f"{start}..{tip}", tip, None
+ 
+ 
+-def _choice_points_line(x, status):
++def _choice_points_rows(x, status):
+     """choice-points 一行改到的行 → 要印的行(清單):定位、列號、類別、壞法、外層宣告、帳上狀態;帳上是存活時底下多一行型錄的為什麼欄。"""
+     loc = f"{_kill_esc(x['file'])}:{x['line']}"
+     decl = f" [{_kill_esc(x['decl'])}]" if x["decl"] else ""
+     mut = x["mutant"]
+     if mut is None:
+         return [f"  {loc}  {_CHOICE_STATUS_TEXT[x['status']]}{decl}"]
+     ident = mut["identity"]
+     shown = (f"{_kill_esc(ident['old'].strip())[:_CHOICE_SHOW_MAX]} → {_kill_esc(ident['new'].strip())[:_CHOICE_SHOW_MAX]}"
+              if ident else _kill_esc(mut["template"]))
+     st = _CHOICE_STATUS_TEXT["not_unique"] if x["status"] == "not_unique" else status.get((x["file"], x["fp"]), _CHOICE_STATUS_TEXT["unrun"])
+@@ -78699,21 +78699,21 @@ def cmd_choice_points(env, diff=None, branch=None, repo=None):
+         return 3
+     except _ChoiceUnverifiable as e:
+         print(f"沒檢查到:語法樹掃描算不出來({_kill_esc(str(e))[:160]})", file=sys.stderr)
+         return 3
+     except (_KtSitUnverifiable, OSError, subprocess.TimeoutExpired) as e:
+         print(f"choice-points:讀不到改動({_kill_esc(str(e))[:160] or e.__class__.__name__})", file=sys.stderr)
+         return 2
+     status = _choice_ledger_status(rr, at_sha, [(x["file"], x["fp"]) for x in res["lines"] if x["mutant"] is not None], rng=rng)
+     print(f"改動選擇點(範圍 {rng[:12]}..{at_sha[:12]};論文 4.1 每行最多一個壞法)")
+     for x in res["lines"]:
+-        print("\n".join(_choice_points_line(x, status)))
++        print("\n".join(_choice_points_rows(x, status)))
+     for rel in res["big"]:
+         print(f"  {_kill_esc(rel)}  超過讀檔上限 {_KT_SIT_READ_MAX // 1048576}MB,沒掃")
+     print("".join(f"  {_kill_esc(rel)}  沒檢查到:語法樹掃描算不出來({_kill_esc(why)[:160]})\n" for rel, why in res["unverified"]), end="")
+     n_point = sum(1 for x in res["lines"] if x["status"] != "arid")
+     n_mut = sum(1 for x in res["lines"] if x["mutant"] is not None)
+     print(f"統計:改到的行 {res['changed']}、有選擇點的行 {n_point}、有壞法的行 {n_mut}"
+           + (f"(ast-grep {res['ast_grep']})" if res["ast_grep"] else ""))
+     return _choice_points_unverified(res["unverified"])
+ 
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index c92f02fb9..91a8a5bb1 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -149421,25 +149421,31 @@ def _ckp_catalog_change_push():
+         _ck_cleanup(fake2)
+         check("S24 推送前:計劃改成 done、之後只改程式再推、killing_test 仍被條款綁著 → 不擋(不算過期)", r.returncode == 0 and "過期" not in r.stdout,
+               f"rc={r.returncode}\n{r.stdout[-500:]}")
+     finally:
+         _ck_cleanup(root, fake)
+ 
+ 
+ def t_choice_survivor_why():
+     """[選擇點路線 低成本一] 存活那一行底下多印型錄那一列「為什麼行為不同」欄:choice-kill 判完存活時印、choice-points 讀帳是存活時印;
+     殺掉與沒跑的行不印;欄位是空、「—」或「(無)」時不印。判準來源:Projects/選擇點對應需求路線_計劃〈優先序調整〉先做的低成本兩件第一件。
+-    翻紅釘:不印 → choice-kill 那條與 choice-points 那條紅;殺掉也印 → 殺掉那條紅;佔位字也印 → 佔位那條紅。"""
++    翻紅釘:不印 → choice-kill 那條與 choice-points 那條紅;只認完全等於「存活」→ 合併快篩判那條紅;殺掉也印 → 殺掉那條紅;佔位字也印 → 佔位那條紅。"""
+     m = _load_lumos_inproc()
+     check("為什麼欄:有內容 → 一行縮排的「為什麼行為不同:…」", m._choice_why_line("相等與不相等對調") == "      為什麼行為不同:相等與不相等對調",
+           repr(m._choice_why_line("相等與不相等對調")))
+     check("為什麼欄:空、「—」、「(無)」、None → 不印", all(m._choice_why_line(w) == "" for w in ("", " ", "—", "(無)", None)))
++    x = {"file": "a.kt", "line": 3, "fp": "f", "decl": "", "status": "mutant",
++         "mutant": {"row": "C-7", "category": "ROR", "identity": None, "template": "t", "why": "相等與不相等對調"}}
++    rows = {st: m._choice_points_rows(x, {("a.kt", "f"): st}) for st in ("存活", "存活(合併快篩判)", "已放行", "跑不出結果")}
++    check("choice-points 帳上是「存活(合併快篩判)」(合併快篩預設開時的存活)也印為什麼欄;已放行、跑不出結果不印",
++          [len(rows[k]) for k in ("存活", "存活(合併快篩判)", "已放行", "跑不出結果")] == [2, 2, 1, 1]
++          and rows["存活(合併快篩判)"][1] == "      為什麼行為不同:相等與不相等對調", str(rows))
+     root = fake = None
+     try:
+         root, fake = _ck_repo(2, {"alphaCase": {"kill": [1]}})
+         r = _ck_run(root, fake)
+         why = "      為什麼行為不同:相等與不相等對調,判斷結果整個反過來"
+         lines = r.stdout.splitlines()
+         at = {ln.split()[0]: i for i, ln in enumerate(lines) if ln.startswith("  " + _CHOICE_MAIN)}
+         i2, i1 = at.get(_ck_loc(2)), at.get(_ck_loc(1))
+         check("choice-kill 存活那一行的下一行印型錄的為什麼欄", i2 is not None and "存活" in lines[i2] and i2 + 1 < len(lines) and lines[i2 + 1] == why,
+               r.stdout[-800:])

@@ -77877,6 +77877,13 @@ _CHOICE_CALL_NAME_RE = re.compile(rb"(\?\.|\.)\s*([A-Za-z_]\w*)")   # `.` 或 `?
 _CHOICE_STATUS_TEXT = {"none": "沒有壞法", "arid": "乾節點", "not_unique": "不唯一", "unrun": "沒跑"}
 
 
+def _choice_why_line(why):
+    """型錄那一列「為什麼行為不同」欄 → 存活那一行底下多印的一行(縮排六格);空、「—」、「(無)」不印回空字串。
+    第三批起這一欄寫成業務問題,人看到存活就知道要拍板什麼(Projects/選擇點對應需求路線_計劃〈優先序調整〉低成本第一件)。"""
+    w = " ".join(str(why or "").split())
+    return "" if w in ("", "—", "(無)") else f"      為什麼行為不同:{_kill_esc(w)}"
+
+
 class _ChoiceNoTool(Exception):
     """ast-grep 不在 PATH(或 PATH 不安全、解出來在 repo 裡):choice-points 回 3「沒檢查到」(〈用詞〉ast-grep 不在 PATH)。"""
 
@@ -78451,7 +78458,7 @@ def _choice_pick(rel, text, b, line_of, ln, nodes, rows, categories, fp, ctx=Non
                 if not edits:
                     continue
                 ident = _choice_identity(rel, text, fp, row, edits, line_of, ctx)
-                return {"row": row["id"], "category": cat, "template": tpl, "line": ln, "edits": edits, "identity": ident,
+                return {"row": row["id"], "category": cat, "template": tpl, "line": ln, "edits": edits, "identity": ident, "why": row.get("why"),
                         "also": _choice_also(text, row, b, n["op"], ident["new"], n["s"], n["e"]) if ident else None}
     return None
 
@@ -78652,6 +78659,22 @@ def _choice_range(rr, diff, branch):
     return f"{start}..{tip}", tip, None
 
 
+def _choice_points_lines(x, status):
+    """choice-points 一行改到的行 → 要印的行(清單):定位、列號、類別、壞法、外層宣告、帳上狀態;帳上是存活時底下多一行型錄的為什麼欄。"""
+    loc = f"{_kill_esc(x['file'])}:{x['line']}"
+    decl = f" [{_kill_esc(x['decl'])}]" if x["decl"] else ""
+    mut = x["mutant"]
+    if mut is None:
+        return [f"  {loc}  {_CHOICE_STATUS_TEXT[x['status']]}{decl}"]
+    ident = mut["identity"]
+    shown = (f"{_kill_esc(ident['old'].strip())[:_CHOICE_SHOW_MAX]} → {_kill_esc(ident['new'].strip())[:_CHOICE_SHOW_MAX]}"
+             if ident else _kill_esc(mut["template"]))
+    st = _CHOICE_STATUS_TEXT["not_unique"] if x["status"] == "not_unique" else status.get((x["file"], x["fp"]), _CHOICE_STATUS_TEXT["unrun"])
+    also = "(補 import)" if mut.get("also") else ""
+    wl = _choice_why_line(mut.get("why")) if st.startswith("存活") else ""
+    return [f"  {loc}  {mut['row']} {mut['category']}  {shown}{also}{decl}  {st}"] + ([wl] if wl else [])
+
+
 def cmd_choice_points(env, diff=None, branch=None, repo=None):
     """lumos choice-points(〈範圍〉1):唯讀,列出改到的行與每行挑中的壞法(定位、列號、類別、壞法、外層宣告)與帳上狀態,
     最後一行統計(改到的行數、有選擇點的行數、有壞法的行數)。rc:0 列完(含型錄缺檔只提醒);2 範圍不對、在主線上沒給 --diff、
@@ -78683,18 +78706,7 @@ def cmd_choice_points(env, diff=None, branch=None, repo=None):
     status = _choice_ledger_status(rr, at_sha, [(x["file"], x["fp"]) for x in res["lines"] if x["mutant"] is not None], rng=rng)
     print(f"改動選擇點(範圍 {rng[:12]}..{at_sha[:12]};論文 4.1 每行最多一個壞法)")
     for x in res["lines"]:
-        loc = f"{_kill_esc(x['file'])}:{x['line']}"
-        decl = f" [{_kill_esc(x['decl'])}]" if x["decl"] else ""
-        mut = x["mutant"]
-        if mut is None:
-            print(f"  {loc}  {_CHOICE_STATUS_TEXT[x['status']]}{decl}")
-            continue
-        ident = mut["identity"]
-        shown = (f"{_kill_esc(ident['old'].strip())[:_CHOICE_SHOW_MAX]} → {_kill_esc(ident['new'].strip())[:_CHOICE_SHOW_MAX]}"
-                 if ident else _kill_esc(mut["template"]))
-        st = _CHOICE_STATUS_TEXT["not_unique"] if x["status"] == "not_unique" else status.get((x["file"], x["fp"]), _CHOICE_STATUS_TEXT["unrun"])
-        also = "(補 import)" if mut.get("also") else ""
-        print(f"  {loc}  {mut['row']} {mut['category']}  {shown}{also}{decl}  {st}")
+        print("\n".join(_choice_points_lines(x, status)))
     for rel in res["big"]:
         print(f"  {_kill_esc(rel)}  超過讀檔上限 {_KT_SIT_READ_MAX // 1048576}MB,沒掃")
     print("".join(f"  {_kill_esc(rel)}  沒檢查到:語法樹掃描算不出來({_kill_esc(why)[:160]})\n" for rel, why in res["unverified"]), end="")
@@ -79242,6 +79254,9 @@ class _ChoiceKillRun:
                  "survived": "存活:沒有測試守著這個選擇", "no_result": f"跑不出結果:{_kill_esc(reason)[:160]}"}[verdict]
         ab = f"(基準不綠沒跑:{'、'.join(n for _p, n in aborted)})" if aborted else ""
         print(f"  {_kill_esc(loc)}  {x['mutant']['row']}  {shown}{ab}", file=self.out)
+        wl = _choice_why_line(x["mutant"].get("why")) if verdict == "survived" else ""
+        if wl:
+            print(wl, file=self.out)
         self.out.flush()
 
     def on_row(self, row):
