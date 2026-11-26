@@ -299,6 +299,51 @@ The full practice is in [Implementation test quality](skills/lumos-project-notes
 
 </details>
 
+## Kotlin: every coding choice you change must be backed by a requirement (choice points)
+
+Many spots in a change can be written another way that still compiles but behaves differently, such as `<` versus `<=`, or `flatMapLatest` versus `flatMapConcat`. These are "choice points": the author made a decision there, and a requirement should stand behind it. Before a push, Lumos swaps each changed choice point for an alternative and runs the tests bound to the plan. If a test fails, a requirement is guarding that choice. If the tests still pass, a person decides whether the spec is missing, the test is too weak, or the swap is genuinely equivalent.
+
+This currently supports Kotlin (Android) projects only, and it adds test-running time before a push.
+
+<p align="center">
+  <a href="assets/choice-points-en.svg">
+    <img src="assets/choice-points-en.svg" alt="Choice point flow: write spec clauses and tests from requirements first; after implementation, the syntax tree finds forms on changed lines that still compile but behave differently, swaps one per line, and runs the bound tests in an isolated copy; a failing test means a requirement guards it and the push goes ahead, while passing tests block the push for a person to decide whether the spec missed it (add a clause and a failing test) or it is not a requirement (record the reason and allow it)" width="760">
+  </a>
+</p>
+
+<details>
+<summary>Design rationale, how it works, current status and limits</summary>
+
+**Why do this**
+
+- **Syntax is a product of requirements**: every choice that has an alternative expresses some requirement. Once choice points line up with the spec, code review no longer has to check line by line whether the syntax is right, and people can focus on the requirements themselves.
+- **Spec tests first, then trace back**: following TDD, tests are written from the requirements first. After implementation, alternative forms are picked from the syntax tree and traced back to those tests, to separate "this choice is not a requirement" from "the spec did not think of this". The goal is not to generate every possible mutant.
+- **It also checks whether the requirements are complete, and stops code an AI wrote just to finish the task**: forms that match no requirement are caught before the push.
+
+**How it works**
+
+- **Follows Google's diff-based mutation testing paper** ([Practical Mutation Testing at Scale](https://arxiv.org/abs/2102.11378)): ast-grep reads the Kotlin syntax tree, only changed lines are considered, and each line gets one alternative. Spots that do not affect behavior, such as logging and assertions, are skipped.
+- **`lumos choice-points`**: read-only; lists the choice points on changed lines, the alternative each will be swapped for, and their current status.
+- **`lumos choice-kill`**: swaps in the alternatives in an isolated copy, runs the tests, and writes the results to the governance log.
+- **Pre-push check**: if a changed choice point has not been dealt with (never run, tests still pass, no result, or the record is stale), pre-push blocks. It can be resolved in two ways: add a spec clause bound to a test that fails, or have a person record "equivalent" or "not a requirement" and let it through. The review loop also makes a quick prediction before recording a pass.
+
+**Current status (2026-11)**
+
+- **Live**: the main flow has been enforced since 2026-11-16, and has gone through the full "blocked → add a test → allowed" cycle on a real Android project.
+- **55 rows in the alternatives table**: the first batch covers comparison, logical and arithmetic operators, statement deletion, and API sibling methods. The second batch (2026-11-17) adds common misuses such as null handling, scope functions and Compose keys. The third batch (2026-11-22) adds business-scenario forms such as coroutine scopes, number parsing and `singleOrNull`.
+- **In progress: speed**: each choice point used to take about 6 minutes, so a branch with about 200 of them took 17 to 20 hours. The first three speed-up stages screen with all tests merged into a single call, run the likely-failing tests first, and recover automatically from occasional failures. A rerun of 142 choice points on the experiment project then took about 3.9 hours, 100 seconds each on average and 3.6 times faster, though still short of the estimate. The fourth stage (2026-11-26) has Gradle report when each test starts and finishes, so when a screen cannot finish, the search starts from the tests that already failed or hung; the estimate for the same 142 is 1.5 to 2 hours, not yet measured.
+- **Not done yet**: running several copies in parallel and choosing tests by coverage; both wait for the speed measurements.
+- **Review in 2027-01**: two months after launch, check how often survivors are judged "not a requirement" and how long each run takes. If more than 80% are judged "not a requirement", or the median run takes over ten minutes, the pre-push check is downgraded to a reminder.
+
+**Limits**
+
+- **Only forms listed in the table are checked**: numeric constants, `when` branches and whole blocks of logic are not covered yet.
+- **One alternative per line**: other choice points on the same line are not checked if they were not picked this time.
+- **A failing test does not prove the right reason**: it only shows the swap is caught by a test, not that the failure is due to that requirement; judging "not a requirement" is entirely up to people.
+- **Pre-push only reads the records and does not rerun**: the records come from the developer's own runs. CI does not run this check, and nothing is checked when pushing with `--no-verify` or when ast-grep is not installed.
+
+</details>
+
 ## Android: checking speed and memory on a real device
 
 After an Android change, Lumos checks two things on a real phone or tablet: **did it get slower**, and **does it hold on to memory it never gives back**. When something is wrong, it digs down one layer at a time until it can name the function and line responsible; every step is written into an evidence record, so someone with the same raw data can rerun it and get the same result.
