@@ -6403,6 +6403,15 @@ def _apply_test_overrides(prof, ov, where):
     return prof
 
 
+def _platform_cov_flag(spec, where):
+    """平台設定的 coverage 鍵(Projects/選擇點存活回指條款_計劃 範圍 1:true 才做 choice-kill 的逐測試覆蓋)→ bool;沒設是 False,
+    不是布林照既有欄位丟 ValueError(呼叫端照「設定錯誤」那條路印擋下)。"""
+    v = spec.get("coverage", False) if isinstance(spec, dict) else False
+    if not isinstance(v, bool):
+        raise ValueError(f"設定檔 {where}.coverage 要是 true 或 false,現在是 {type(v).__name__}")
+    return v
+
+
 _PLATFORM_ROOT_WARNED = set()   # {(平台, root)}:root 不存在的警告這次執行講過了(load_platforms 一次規格閘會被叫好幾次)
 
 
@@ -6438,7 +6447,7 @@ def load_platforms(repo_root, cfg=None):
                                      # 「這個平台用的是哪一支測試工具」的名字原本在這裡被丟掉,而合約測試閘要拿它
                                      # 去查該工具「跑過的證據」長什麼樣。多平台分支同樣補一份。
                                      "profile_name": name,
-                                     "run_cmd": _tcfg.get("run_cmd")}}}
+                                     "run_cmd": _tcfg.get("run_cmd"), "coverage": _platform_cov_flag(_tcfg, "test")}}}
     out = {}
     for plat, spec in plats.items():
         if not isinstance(spec, dict):
@@ -6453,7 +6462,8 @@ def load_platforms(repo_root, cfg=None):
             print(f"⚠ 平台 '{plat}' 的 root 不存在: {root}(該平台 discover 將掃不到測試)", file=sys.stderr)
         out[plat] = {"profile": _apply_test_overrides(dict(TEST_PROFILES[pname]), spec, f"platforms['{plat}']"),
                      "root": root, "profile_name": pname,
-                     "run_cmd": spec.get("run_cmd")}   # guard kill 用;缺=None
+                     "run_cmd": spec.get("run_cmd"),   # guard kill 用;缺=None
+                     "coverage": _platform_cov_flag(spec, f"platforms['{plat}']")}
     default = cfg.get("default_platform")
     if default is None:
         if len(out) == 1:
@@ -17902,7 +17912,7 @@ def _gov_choice_counts(rows):
     from collections import Counter
     c = {"ever": set(), "changed": [], "mutant_lines": [], "secs": [], "first": Counter(), "after": Counter(), "waive": Counter(),
          "nores": Counter(), "shape": Counter(), "test_files": {}, "blocked": 0, "pass_blocked": 0, "stale_blocked": 0, "unverified": 0,
-         "row_mut": {}, "row_waive": {}}
+         "row_mut": {}, "row_waive": {}, "cov_surv": 0, "cov_keys": set(), "cov_rerun": set()}
     for r in rows:
         if r.get("gate") == "lint-new" and r.get("ck_waive"):
             w = r["ck_waive"]
@@ -17961,6 +17971,12 @@ def _gov_choice_count_verdict(c, r, ck):
     key, v = (ck.get("file"), ck.get("fp")), r.get("verdict")
     if type(r.get("attempt")) is int and r["attempt"] == 1 and r.get("via") == "run":   # 第一次「自動跑」;人裁寫回的不算(r1 g4)
         c["first"][v] += 1
+    # 依覆蓋判存活(Projects/選擇點存活回指條款_計劃 範圍 6):via cov 另列;之後同鍵第一次 via run 的判定另列「依覆蓋判存活後改跑」
+    if v == "survived" and r.get("via") == "cov":
+        c["cov_surv"] += 1
+        c["cov_keys"].add(key)
+    elif r.get("via") == "run" and key in c["cov_keys"]:
+        c["cov_rerun"].add(key)
     if v == "survived":
         c["ever"].add(key)
     elif v == "killed":
@@ -17990,6 +18006,7 @@ def _render_gov_choice(rows):
     print(f"    被回報的存活 {len(c['ever'])} 行(RETIRE-IF 的分母);choice-kill 呼叫 {len(c['secs'])} 次:改動行中位數 {med(c['changed'])}、"
           f"有壞法的行中位數 {med(c['mutant_lines'])}、耗時中位數 {med(c['secs'], ' 秒')}")
     print(f"    第一次跑殺掉率 {c['first']['killed']}/{n1}" + (f"({c['first']['killed'] / n1:.2f})" if n1 else ""))
+    print(f"    依覆蓋判存活 {c['cov_surv']}、依覆蓋判存活後改跑 {len(c['cov_rerun'])}(Projects/選擇點存活回指條款_計劃;不算進第一次判定)")
     print(f"    存活處置:寫回規格 {c['after']['寫回規格']}、補測試後殺掉 {c['after']['補測試後殺掉']}、放行 {sum(c['waive'].values())}"
           + (f"({'、'.join(f'{k} {v}' for k, v in sorted(c['waive'].items()))})" if c["waive"] else ""))
     if c["nores"]:
@@ -18472,6 +18489,11 @@ _GOV_FIELD_TYPES = {
     # 選擇點變異加速第三段(做法 2、4):每個壞法那筆的快篩沒跑乾淨原因、run 那筆的跳開與恢復次數
     **dict.fromkeys(("merge_why", "merge_trips", "merge_reopen", "merge_init_off"), (dict,)),
     "single_runs": (int,),
+    # 選擇點存活回指條款(Projects/選擇點存活回指條款_計劃 範圍 4):reach 事件與 run、reach-run 那筆的覆蓋欄位;讀者拿來比對與加總,型別錯就跳過那一行
+    **dict.fromkeys(("reach", "reach_why", "cov_sha", "cov"), (str,)),
+    "reach_clauses": (list,),
+    "reach_clauses_truncated": (bool,),
+    **dict.fromkeys(("reach_n", "cov_secs", "cov_skipped", "cov_selected", "cov_full", "cov_judged"), (int,)),
 }
 
 
@@ -18560,7 +18582,9 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
          **({k: d.get(k) for k in ("verdict", "row", "attempt", "reason", "via", "run_id")} if d.get("gate") == "choice-kill" else {}),
          # gov --stats 的選擇點段(_render_gov_choice)要的欄位:每個壞法、run、blocked 各自的數;選擇點放行(lint-new waived 帶 scope choice-kill)的理由標籤與形狀
          **({"ck": dict({k: d.get(k) for k in ("file", "fp", "killing_test", "changed", "mutant_lines", "secs", "reasons", "site",
-                                                "ran", "base_secs", "merged", "single", "merge_tripped")},
+                                                "ran", "base_secs", "merged", "single", "merge_tripped",
+                                                # 選擇點存活回指條款(範圍 4、10):reach 事件的分類、run 的覆蓋欄位
+                                                "reach", "reach_why", "cov", "cov_secs", "cov_skipped", "cov_selected", "cov_full", "cov_judged")},
                         **({"judged": d.get("judged") or "single"} if d.get("kind") == "choice-kill" else {}),   # 缺 judged 的舊帳讀成 single
                         # 第二段計劃:缺 merge_kind 讀成空字典(每個平台都當 none)、缺 single_runs 讀成 0;run 那筆缺 merge_unclean、merge_off 讀成空字典
                         **({"merge_kind": d.get("merge_kind") or {}, "single_runs": d.get("single_runs") or 0} if d.get("kind") == "choice-kill" else {}),
@@ -21052,6 +21076,9 @@ LOOP_NOT_CLOSE_EVENTS = {
     ("choice-kill", "run"),
     ("choice-kill", "blocked"),
     ("choice-kill", "unverified"),
+    # 選擇點存活回指條款(Projects/選擇點存活回指條款_計劃 範圍 4):每個壞法行的覆蓋分類、--reach-only 一次呼叫,都是陳述
+    ("choice-kill", "reach"),
+    ("choice-kill", "reach-run"),
 }
 LOOP_CLOSE_SINCE = "2026-08-22"   # 治理帳出現第一筆 design-loop converged 的日子
 # ★誠實記★:code-loop 的放行事件早得多(最早 2026-07-05),比這個日期早六週。
@@ -28198,7 +28225,7 @@ def _kill_run(cmd, cwd, timeout, keep_re=None, started=None, merge=None):
     (合約測試閘拿它保住「執行了 N 支」那一行;見 _kill_cap)。回傳形狀不變。
     started 給一個 _BtProcs 就經由它開程序並登記(合約測試閘同時跑時,一支出錯要收掉同批還在跑的;
     已經在收尾就不再開、丟 _BtStopped);不給不影響。
-    merge 給 choice-kill 的 _KillMerge:這筆登記在 _KILL_RUN_LIVE 的程序帶「合併」標記(Popen 物件上的 _lumos_merge 屬性),第一個訊號的回呼
+    merge 給 choice-kill 的 _KillMerge 或 _KillPrep(任何帶 interrupted 屬性、on_signal 走 _kill_signal_marked 的物件):這筆登記在 _KILL_RUN_LIVE 的程序帶「合併」標記(Popen 物件上的 _lumos_merge 屬性),第一個訊號的回呼
     (_KillMerge.on_signal)只當場收帶標記的那幾支(Projects/選擇點變異加速_計劃 做法 4);★登記之後再看一次 merge.interrupted★,訊號落在呼叫端看完
     停止旗標之後、登記之前時回呼收不到它,這裡當場收掉(代碼審 code-選擇點變異加速 r1 正確性 #2;用 pthread_sigmask 包 Popen 不可靠,
     Python 文件 signal 一節與 bpo-1975)。不給不影響。"""
@@ -28334,7 +28361,7 @@ def _kill_attribute(out, method):
 
 def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                    as_json=False, keep_worktree=False, id_prefixes=None, result_out=None, recipes_override=None,
-                   source=None, stop_group_on=None, on_row=None, should_stop=None, merge=None):
+                   source=None, stop_group_on=None, on_row=None, should_stop=None, merge=None, prep=None, prep_only=False):
     """跑節點的 kill 配方:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅。
     rc:全 killed(含 timed_out)=0;任一 survived=1;有 drifted/abort/error 而無 survived=2;
     零配方/缺 run_cmd/config 壞=2。
@@ -28354,7 +28381,10 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
     compile_error、ran_solo——壞法階段真的逐支跑了這一支,choice-kill 拿來數 single_runs);weak 在那條配方結束時就蓋好(整套一起跑、平台標 flaky、筆記有未提交改動、這條的修改時間沒錯開,四個來源在那時都已知)。
     should_stop:每條配方之間呼叫,回真就停(後面的配方沒有列)。
     merge:choice-kill 的合併快篩(_KillMerge;Projects/選擇點變異加速_計劃):給了就每個平台組先判能不能合併,能就開跑量齊單支基準與合併基準、
-    每個壞法先跑一次合併呼叫,乾淨而且沒有失敗才整批記存活,其餘照下面原封不動的逐支流程(_kill_merge_iter);不給(None)時行為與輸出不變。"""
+    每個壞法先跑一次合併呼叫,乾淨而且沒有失敗才整批記存活,其餘照下面原封不動的逐支流程(_kill_merge_iter);不給(None)時行為與輸出不變。
+    prep:choice-kill 的準備物件(_KillPrep;Projects/選擇點存活回指條款_計劃 範圍 2,形狀同 merge):給了就每個平台組在建好隔離工作樹、跑任何配方之前呼叫
+    prep.run(現場) 一次——跟 merge 給不給、能不能合併無關——它在同一棵樹用同一份基準快取量逐測試覆蓋,回傳這組要跑的配方(依覆蓋選過的子集);
+    prep_only=True(choice-kill --reach-only)時準備物件做完就換下一組、不跑任何配方。不給(None)時行為與輸出不變。"""
     import json
     import os
     import subprocess
@@ -28476,11 +28506,16 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
             mstate = {"w": 0, "r": 0, "unsure": set()}
             # 合併快篩(選用):能合併的平台組由 _kill_merge_iter 先量齊基準、每個壞法先跑一次合併呼叫,判全部存活的壞法不再交給下面這段;
             # 沒過的照原順序交出來,由下面這段逐支流程一字不改地跑
-            mctx = None if merge is None else types.SimpleNamespace(
+            mctx = None if merge is None and prep is None else types.SimpleNamespace(
                 plat=plat, plist=plist, pentry=pentry, run_cmd=run_cmd, pdata=pdata, run_dir=run_dir, wt=wt, wt_real=wt_real, baselines=baselines,
                 mstate=mstate, floor=floor, hk=hk, results=results, coll_cache=coll_cache, override=recipes_override is not None, flaky=bool(flaky),
                 node_dirty=node_dirty, mt_warned=mt_warned, scratch=getattr(_iw, "scratch", None))
-            for r in (plist if mctx is None else _kill_merge_iter(merge, mctx)):
+            # 準備物件(選用):建好樹之後、跑任何配方之前,獨立於合併快篩(範圍 2;設計審 r3:原本掛在合併那條路上,--no-merge 與合併道不足 2 支時不叫)
+            if prep is not None:
+                plist = mctx.plist = prep.run(mctx)
+                if prep_only:
+                    continue
+            for r in (plist if merge is None else _kill_merge_iter(merge, mctx)):
                 if hk.between(r, plat):   # 同組已有決定性的結果:記了略過列,不跑
                     continue
                 method = _kill_method_name(r.get("test", ""), pdata)   # 去平台前綴、Kotlin 反引號拆殼後進名稱規則
@@ -28865,7 +28900,8 @@ _CHOICE_MERGE_NO_FILES = object()   # _choice_merge_facts:結果資料夾裡沒�
 def _choice_merge_facts(rdir, tq):
     """合併呼叫的結果資料夾 → (facts, 原因)。原因 None 是讀到了;_CHOICE_MERGE_NO_FILES 是沒有結果檔;其餘是沒跑乾淨的原因字串
     (讀不出來、超過大小上限,都計斷路器)。先看大小再逐檔交 _secev_junit_facts(拒收、剖析錯誤、過深、超過案例數上限都算讀不出來)。
-    讀不出來的原因帶拒收代碼:「結果檔讀不出來(<代碼>)」,讀檔錯誤是 OSError(Projects/選擇點變異加速第三段_計劃 做法 3)。"""
+    讀不出來的原因帶拒收代碼:「結果檔讀不出來(<代碼>)」,讀檔錯誤是 OSError(Projects/選擇點變異加速第三段_計劃 做法 3)。
+    沒有案例的空殼檔(_choice_merge_ghost_suite)略過;全部都是空殼才算 zero_cases(每支目標測試照樣由 _choice_merge_classify 要求恰好對到一筆)。"""
     try:
         files = sorted(p for p in Path(rdir).glob("TEST-*.xml") if p.is_file())
         sizes = [p.stat().st_size for p in files]
@@ -28875,16 +28911,41 @@ def _choice_merge_facts(rdir, tq):
         return None, _CHOICE_MERGE_NO_FILES
     if max(sizes) > _CHOICE_MERGE_FILE_MAX or sum(sizes) > _CHOICE_MERGE_TOTAL_MAX:
         return None, "結果檔超過大小上限"
-    facts = {}
+    facts, ghosts = {}, 0
     for p in files:
         try:
-            got, why = _secev_junit_facts(p.read_bytes(), tq)
+            raw = p.read_bytes()
+            got, why = _secev_junit_facts(raw, tq)
         except OSError:
             got, why = None, "OSError"
+        if why == "zero_cases" and _choice_merge_ghost_suite(raw):   # 背景輸出歸到的空殼結果檔:先不算,最後看別的檔有沒有讀到案例
+            ghosts += 1
+            continue
         if why:   # 帶上拒收代碼(第三段計劃做法 3:8 個 _secev_junit_facts 代碼加 OSError,事後分得出是哪種)
             return None, f"結果檔讀不出來({why})"
         facts.update(got)
+    if ghosts and not facts:
+        return None, "結果檔讀不出來(zero_cases)"
     return facts, None
+
+
+def _choice_merge_ghost_suite(raw):
+    """沒有案例的 JUnit 檔是不是空殼(只裝 Gradle 歸過來的背景輸出,第一段放行後 2026-11-26 實測):根是 testsuite 或 testsuites、每個 testsuite 宣告的
+    tests、failures、errors 都是 0(沒寫算 0)、沒有任何 testcase、error、failure 元素。讀不成算不是(照舊拒收)。檔已經過大小上限與 _secev_junit_facts
+    (DTD 那類拒收在它前面就擋了)。"""
+    import xml.etree.ElementTree as _ET
+    try:
+        root = _ET.fromstring(raw)
+    except (_ET.ParseError, ValueError):
+        return False
+    if root.tag not in ("testsuite", "testsuites"):
+        return False
+    for el in root.iter():
+        if el.tag in ("testcase", "error", "failure"):
+            return False
+        if el.tag == "testsuite" and any(el.get(k, "0").strip() != "0" for k in ("tests", "failures", "errors")):
+            return False
+    return True
 
 
 def _choice_merge_event_line(line):
@@ -29001,11 +29062,329 @@ class _KillMerge:
 
     def on_signal(self):
         """第一個終止訊號的回呼(_situation_rule_signals 的 st.on_first):當場收掉 _KILL_RUN_LIVE 裡帶「合併」標記的程序群組;
-        單支基準與逐支流程照現在等那一支跑完。"""
-        self.interrupted = True
-        for proc in list(_KILL_RUN_LIVE.values()):
-            if getattr(proc, "_lumos_merge", False):
-                _kill_proc_group(proc)
+        單支基準與逐支流程照現在等那一支跑完(_kill_signal_marked,準備物件共用)。"""
+        _kill_signal_marked(self)
+
+
+def _kill_signal_marked(obj):
+    """第一個終止訊號的回呼(_KillMerge 與 _KillPrep 共用):obj.interrupted 設 True,當場收掉 _KILL_RUN_LIVE 裡帶「合併」標記(_lumos_merge)的程序群組;
+    沒帶標記的(單支基準、逐支配方)照現在等那一支跑完(代碼審 code-選擇點存活回指條款第一段 r1 F13:原本兩支各寫一份)。"""
+    obj.interrupted = True
+    for proc in list(_KILL_RUN_LIVE.values()):
+        if getattr(proc, "_lumos_merge", False):
+            _kill_proc_group(proc)
+
+
+class _KillPrep:
+    """cmd_guard_kill 的選用參數 prep(Projects/選擇點存活回指條款_計劃〈用詞〉準備物件;形狀同 _KillMerge):choice-kill 建它、傳進去,guard-kill 在每個平台組
+    建好隔離工作樹、跑任何配方之前呼叫 run(現場) 一次(跟合併快篩開不開無關)。這一段做 ② 覆蓋基準(_kill_measure_singles 加覆蓋初始化腳本,結果進
+    guard-kill 的基準快取;每支的步驟在 _KillCovBase)、③ 斷路器、④ 一次 Gradle 呼叫的分析、⑥ 回傳依覆蓋選過的配方並呼叫 on_done(平台, {group: 那一行在這個平台組的分類});
+    ① 合批編譯檢查與 ⑤ 抽查是第二段的事,這裡沒有(_lines 之前與之後是它們的位置)。
+    帶進去:deadline(總時限的期限,monotonic)、cov(開了覆蓋的平台集合)、req({group: _choice_cov_req 那一筆})、on_done、cache(續跑快取資料夾或 None)、
+    blob_of({(平台, 測試名): 測試所在檔物件編號},續跑快取的鍵)。帶出來:state({平台: on|tripped|off})、secs(花的秒數)、interrupted(第一個訊號來過)。"""
+
+    def __init__(self, deadline, cov, req, on_done, cache=None, blob_of=None):
+        self.deadline, self.cov, self.req, self.on_done = deadline, set(cov), dict(req), on_done
+        self.cache, self.blob_of = cache, dict(blob_of or {})
+        self.state, self.secs, self.interrupted = {}, 0.0, False
+        self._src_pkgs = {}   # 平台根 → 主程式套件集合(_measure 每個平台組都用,只掃一次)
+
+    def remaining(self):
+        return self.deadline - time.monotonic()
+
+    def on_signal(self):
+        """第一個終止訊號:當場收掉覆蓋基準、不掛重跑、分析這幾種帶標記的呼叫(_kill_signal_marked)。"""
+        _kill_signal_marked(self)
+
+    def run(self, c):
+        """一個平台組 → 這組要跑的配方(依覆蓋選過);途中收到訊號丟 _KillHalt(guard-kill 照現在停,不寫 reach)。"""
+        t0 = time.monotonic()
+        try:
+            lines = self._lines(c)
+        finally:
+            self.secs += time.monotonic() - t0
+        self.on_done(c.plat, lines)
+        return [r for r in c.plist if r.get("group") not in lines or r.get("test") in lines[r["group"]]["keep"]]
+
+    def _lines(self, c):
+        """{group: {"cls": clause|none|unknown, "why", "keep": 要跑的測試名集合, "pass": 經過的測試名集合}}(〈用詞〉覆蓋分類、依覆蓋選測試;平台組這一層)。"""
+        by = {}
+        for r in c.plist:
+            by.setdefault(r.get("group"), [])
+            if r.get("test") not in by[r.get("group")]:
+                by[r.get("group")].append(r.get("test"))
+        names = list(dict.fromkeys(n for ns in by.values() for n in ns))
+        why, hits, nolines = self._measure(c, names, [g for g in by if g in self.req])
+        out = {}
+        for g, ns in by.items():
+            if g not in self.req:
+                continue
+            w = self.req[g]["exc"] or next((why[n] for n in ns if why.get(n)), "") or ("這一行沒有指令紀錄" if g in nolines else "")
+            if w:
+                out[g] = {"cls": "unknown", "why": w, "keep": set(ns), "pass": set()}
+                continue
+            ps = {n for n in ns if g in hits.get(n, ())}
+            out[g] = {"cls": "clause" if ps else "none", "why": "", "keep": ps, "pass": ps}
+        return out
+
+    def _cache_path(self, plat, name):
+        sig = self.blob_of.get((plat, name))
+        if self.cache is None or not sig or _CHOICE_TESTS_UNKNOWN in str(sig):
+            return None
+        return os.path.join(str(self.cache), _choice_sha(f"{plat}\n{name}\n{sig}\n{_CHOICE_COV_INIT_VER}", 24) + ".exec")
+
+    def _measure(self, c, names, groups):
+        """覆蓋基準與分析 → (每支測試不明的原因 {名: 原因或空字串}, {名: 經過的 group 集合}, 沒有指令紀錄的 group 集合)。
+        步驟:接得起來嗎(_KillCovBase.start)→ 續跑快取(cached)→ 量覆蓋基準(_kill_measure_singles 帶 wrap、after)→ 收尾補原因(settle)→ 分析(_analyze)。"""
+        if c.plat not in self.cov:
+            self.state.setdefault(c.plat, "off")
+            return {n: "沒開覆蓋" for n in names}, {}, set()
+        self.state[c.plat] = "on"
+        root = str(c.pentry["root"])
+        if root not in self._src_pkgs:   # 一個平台根只掃一次(補修代碼審 r1 資源 r1)
+            self._src_pkgs[root] = _choice_cov_src_pkgs(root)
+        pkgs = {self.req[g]["pkg"] for g in groups} | self._src_pkgs[root]   # 平台主程式全部的套件,不只這次改到的(第一段放行後實測)
+        cb = _KillCovBase.start(self, c, names, pkgs)
+        if cb is None:
+            print(f"⚠ {_kill_esc(c.plat)}:這次接不起逐測試覆蓋(run_cmd 要是帶模組的 test<變體>UnitTest 任務),壞法跑全部守的測試", file=sys.stderr)
+            return {n: "覆蓋接不起來" for n in names}, {}, set()
+        todo = cb.cached()
+        _kill_measure_singles(c, todo, cb.cmd_of(todo), self.remaining, wrap=cb.wrap, after=cb.after)
+        cand = cb.settle()
+        if not cand:
+            return cb.why, {}, set()
+        hits, nolines, bad = self._analyze(c, cb.shape, cb.variant, cand, cb.got, groups)
+        for n in cand:
+            if bad or n not in hits:   # 整次失敗,或輸出缺這支測試的序號、型別不對:那支不明,不是沒經過(代碼審 r1 F5)
+                cb.why[n] = bad or "分析失敗"
+        return cb.why, hits, nolines
+
+    def _analyze(self, c, shape, variant, cand, got, groups):
+        """④ 一次 Gradle 呼叫在 Gradle 程序裡用 JaCoCo 分析 API 讀 cand 的覆蓋資料檔 → ({名: 經過的 group 集合}(輸出缺那支或型別不對就不放), 沒有指令紀錄的 group 集合,
+        失敗原因或空字串)。逾時 max(60, 支數 × 0.5) 秒;剩下的時間不夠「逾時加一個壞法的預估(已量基準的平均)」就不做(時間不夠;代碼審 r1 F6);
+        樹上沒有類別(分析腳本回 noclasses)記分析失敗(暫時性;r1 F4);帶當場收的標記。"""
+        import json
+        cap = max(60.0, len(cand) * 0.5)
+        els = [b[2] for b in c.baselines.values() if isinstance(b[2], (int, float))]
+        if self.remaining() < cap + (sum(els) / len(els) if els else _CHOICE_MERGE_UNIT_SECS):
+            return {}, set(), "時間不夠"
+        idx = {g: k for k, g in enumerate(groups)}
+        out = os.path.join(c.scratch, "lumos-cov-out.json")
+        man = os.path.join(c.scratch, "lumos-cov-manifest.json")
+        ainit = _choice_merge_init_path(c, _CHOICE_COV_ANALYZE_NAME)
+        try:
+            if ainit is None or not _choice_init_file_write(ainit, _CHOICE_COV_ANALYZE):
+                raise OSError("分析初始化腳本寫不進去")
+            with open(man, "w", encoding="utf-8") as fh:
+                json.dump({"variant": variant, "out": out, "execs": [[k, got[n]] for k, n in enumerate(cand)],
+                           "mutants": [{k2: v for k2, v in dict(self.req[g], i=idx[g]).items() if k2 != "exc"} for g in groups]}, fh)
+            if os.path.exists(out):
+                os.unlink(out)
+        except OSError:
+            return {}, set(), "分析失敗"
+        acmd = _choice_cov_analyze_cmd(c.run_cmd, shape, ainit, man)
+        if acmd is None:
+            return {}, set(), "分析失敗"
+        rc, _tail, _el, to = _kill_run(acmd, c.run_dir, cap, merge=self)
+        c.mstate["r"] = int(time.time())
+        if self.interrupted:
+            raise _KillHalt()
+        return _choice_cov_parse(_choice_cov_read(out) if rc == 0 and not to else None, cand, idx)
+
+
+class _KillCovBase:
+    """_KillPrep 一個平台組的覆蓋基準現場(〈範圍〉2 ② ③;從 _KillPrep._measure 依步驟拆出):why {名: 不明原因}、got {名: 覆蓋資料檔}、
+    seen(算進斷路器的 Robolectric 測試的專案類別有紀錄數)、wrapped {名: 這次有沒有掛覆蓋}、tripped(斷路了;trip_why 斷路的原因)、red_streak(連續幾支掛覆蓋才紅)。
+    pkgs 是專案套件(平台主程式全部原始檔與改到的原始檔的 package 宣告,斜線分隔;沒有宣告是預設套件 ""——代碼審 r1 F11;只看改到的檔會讓
+    只碰別的套件的 Robolectric 測試數到 0 而誤斷路,第一段放行後 2026-11-26 實測)。"""
+
+    def __init__(self, prep, c, names, pkgs, shape, ep, variant, init):
+        self.prep, self.c, self.names, self.pkgs, self.shape, self.ep, self.variant, self.init = prep, c, names, pkgs, shape, ep, variant, init
+        self.nf = c.pentry["profile"].get("name_filter", "ident")
+        self.meth = {n: _kill_method_name(n, c.pdata) for n in names}
+        self.why, self.got, self.seen, self.wrapped, self.any_proj = {n: "" for n in names}, {}, [], {}, False
+        self.tripped, self.trip_why, self.red_streak, self.full = False, "", 0, max(600.0, c.floor)
+        self._cmd = {}
+
+    @classmethod
+    def start(cls, prep, c, names, pkgs):
+        """接得起覆蓋嗎:單元測試任務是 test<變體>UnitTest、AGP 覆蓋資料檔在工作樹裡、初始化腳本路徑照 _choice_merge_init_path(Windows 特殊字元不帶)、
+        寫得進去(寫不進去印一行)→ 現場,否則 None。"""
+        shape = _choice_merge_shape(c.run_cmd)
+        ep = _choice_cov_exec_path(c, shape)
+        init = _choice_merge_init_path(c, _CHOICE_COV_INIT_NAME)
+        if ep is None or init is None:
+            return None
+        if not _choice_init_file_write(init, _CHOICE_COV_INIT):
+            print(f"⚠ {_kill_esc(c.plat)}:覆蓋初始化腳本寫不進去", file=sys.stderr)
+            return None
+        return cls(prep, c, names, pkgs, shape, ep[0], ep[1], init)
+
+    def cmd_of(self, todo):
+        """不加覆蓋的單支指令(guard-kill 基準快取的鍵)。"""
+        self._cmd = {n: _run_cmd_expand(self.c.run_cmd, self.meth[n], name_filter=self.nf) for n in todo}
+        return self._cmd
+
+    def trip(self, why, msg):
+        """斷路:之後都不掛覆蓋、run 那筆 cov tripped、全部算不明(原因 why),印一行。"""
+        self.tripped, self.trip_why = True, why
+        self.prep.state[self.c.plat] = "tripped"
+        print(f"⚠ {_kill_esc(self.c.plat)}:覆蓋斷路——{msg},其餘測試不再掛覆蓋,這次壞法都跑全部守的測試", file=sys.stderr)
+
+    def breaker(self, cnt, robo, final=False):
+        """③ 斷路器:前 _CHOICE_COV_BREAKER 支 Robolectric 測試(看覆蓋資料認;不足 _CHOICE_COV_BREAKER 支就是全部,量完才判)的專案類別有紀錄數都是 0 → 斷路。"""
+        if cnt is not None and robo and not self.tripped:
+            self.seen.append(cnt)
+        need = len(self.seen) if final else _CHOICE_COV_BREAKER
+        if not self.tripped and self.seen and len(self.seen) >= need and not any(self.seen[:need]):
+            self.trip("覆蓋接不起來", f"前 {need} 支 Robolectric 測試的覆蓋資料裡專案類別有紀錄數都是 0(覆蓋設定沒生效)")
+
+    def take(self, n, data, dst):
+        """一份覆蓋資料檔已經在 dst(或 dst 是 None:存不下來):記 got、數專案類別、看是不是 Robolectric(_choice_cov_exec_robo:建 Android 環境的類別有執行紀錄);
+        Robolectric 的 0 是設定沒生效,不是沒碰專案類別(非 Robolectric 的 0 是真的)→ (專案類別有紀錄數或 None, 是不是 Robolectric)。"""
+        cnt = _choice_cov_proj_hits(data, self.pkgs) if data is not None else None
+        robo = bool(_choice_cov_exec_robo(data)) if cnt is not None else False
+        if dst is None or cnt is None:
+            self.why[n] = "覆蓋資料沒產出"
+            return None, False
+        self.got[n] = dst
+        self.any_proj = self.any_proj or cnt > 0
+        if cnt == 0 and robo:
+            self.why[n] = "覆蓋接不起來"
+        return cnt, robo
+
+    def cached(self):
+        """名稱檢查(_test_name_ok、撞名,同合併道;不合的那支覆蓋算不明、基準照現在逐支流程)與續跑快取:同一個 at_sha、同一支測試與所在檔、同一版初始化腳本的
+        覆蓋資料檔直接取用(分析每次重做);讀不出來的那份刪掉、這次重量(代碼審 r1 F10、F12)→ 還要量的測試名清單。"""
+        todo = []
+        for n in self.names:
+            m = self.meth[n]
+            if not _test_name_ok(m) or _name_collision_reason(m, self.c.pentry, self.c.pentry["root"], self.c.coll_cache):
+                self.why[n] = "名稱檢查沒過"
+                continue
+            cp = self.prep._cache_path(self.c.plat, n)
+            data = _choice_cov_read(cp) if cp and os.path.isfile(cp) else None
+            base = _choice_cov_base_read(cp) if data is not None else None
+            if data is not None and base is not None and _choice_cov_exec_classes(data) is not None and not self.robo_zero(data):
+                # 連那支的基準一起取用:不然合併快篩會把取快取的每支再逐支重量一次,快取白存(第一段放行後實測:169 支 689 秒)
+                self.c.baselines.setdefault(_run_cmd_expand(self.c.run_cmd, self.meth[n], name_filter=self.nf), base)
+                self.breaker(*self.take(n, data, cp))
+                continue
+            for x in (cp, _choice_cov_base_path(cp)) if cp else ():
+                try:
+                    os.unlink(x)
+                except OSError:
+                    pass
+            todo.append(n)
+        return todo
+
+    def wrap(self, n, cmd):
+        """量一支之前:斷路了就不掛;否則刪掉 AGP 固定位置的覆蓋資料檔(跑完沒有新檔就是這支沒產出,不會讀到上一支的)、掛覆蓋初始化腳本、帶當場收的標記。"""
+        if self.tripped:
+            self.wrapped[n] = False
+            return cmd, None
+        try:
+            os.unlink(self.ep)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            self.wrapped[n] = False
+            self.why[n] = "覆蓋資料沒產出"
+            return cmd, None
+        self.wrapped[n] = True
+        return _choice_merge_cmd(self.c.run_cmd, self.shape, [self.meth[n]], self.nf, init=self.init), self.prep
+
+    def after(self, n, res, cap):
+        """量完一支:收到訊號就停;掛了覆蓋而紅 → red_rerun;綠 → 連續掛覆蓋才紅歸零、複製覆蓋資料檔、數專案類別、交斷路器。回傳寫進基準快取的那一份。"""
+        if self.prep.interrupted:   # 第一個訊號當場收掉了這次呼叫(S7):不記基準、停
+            raise _KillHalt()
+        if not self.wrapped.get(n):
+            return (*res, res[2], bool(res[3] and cap < self.full))
+        if res[3] or res[0] != 0:
+            return self.red_rerun(n, res, cap)
+        self.red_streak = 0
+        data = _choice_cov_read(self.ep)
+        if data is None:
+            self.why[n] = "覆蓋資料沒產出"
+            return (*res, res[2], False)
+        self.breaker(*self.take(n, data, self.store(n, data, keep=not self.robo_zero(data), base=res)))
+        return (*res, res[2], False)
+
+    def robo_zero(self, data):
+        """這份覆蓋資料是 Robolectric、專案類別有紀錄數 0(設定沒生效的樣子)→ 真;讀不出來算假(take 另記沒產出)。"""
+        return _choice_cov_proj_hits(data, self.pkgs) == 0 and bool(_choice_cov_exec_robo(data))
+
+    def store(self, n, data, keep=True, base=None):
+        """覆蓋資料檔存進續跑快取(沒有快取、或 keep 為假就放 scratch;原子寫入走 _write_bytes_atomic,代碼審 r2 架構對齊 a2)→ 路徑或 None。
+        keep 為假:Robolectric 的專案類別有紀錄數 0(設定沒生效)不進快取,免得下次續跑讀回同一份壞資料、重補永遠補不回來(r2 邊界 b4)。"""
+        dst = (self.prep._cache_path(self.c.plat, n) if keep else None) or os.path.join(self.c.scratch, f"lumos-cov-{len(self.got)}.exec")
+        try:
+            _write_bytes_atomic(Path(dst), data)
+        except OSError:
+            return None
+        if keep and base is not None and dst.endswith(".exec"):   # 連這支的綠基準一起存,續跑取用時不必再量(_choice_cov_base_read)
+            try:   # 基準存不下只是下次續跑要重量,這次的覆蓋資料照用(補修代碼審 r1 邊界 b3)
+                _write_bytes_atomic(Path(_choice_cov_base_path(dst)), json.dumps(
+                    {"rc": base[0], "tail": base[1][-_CHOICE_COV_BASE_TAIL:], "el": base[2], "to": bool(base[3])}).encode("utf-8"))
+            except OSError:
+                pass
+        return dst
+
+    def red_rerun(self, n, res, cap):
+        """掛覆蓋紅:被剩下時限截斷就記時間不夠、照回;否則不掛再跑一次(帶當場收的標記、上限照剩下的總時限重算),綠就用這次當基準、覆蓋算不明(掛覆蓋才紅),
+        紅記基準不綠;連續 _CHOICE_COV_RED_BREAKER 支掛覆蓋才紅就斷路(代碼審 r1 F3),掛覆蓋跑滿單支上限而不掛綠當場斷路。
+        回傳 6 項:(rc, 輸出, 秒, 逾時, 兩趟加起來的秒數(_kill_measure_singles 估剩下的用), 被剩下時限截斷)。"""
+        if res[3] and cap < self.full:
+            self.why[n] = "時間不夠"
+            return (*res, res[2], True)
+        pcap = min(self.full, max(self.prep.remaining(), 1.0))
+        plain = _kill_run(self._cmd[n], self.c.run_dir, pcap, merge=self.prep)
+        self.c.mstate["r"] = int(time.time())
+        if self.prep.interrupted:
+            raise _KillHalt()
+        if plain[3] and pcap < self.full:   # 不掛的重跑被剩下時限截斷:不是這支的真基準,不寫(r2 資源 s1)
+            self.why[n] = "時間不夠"
+            return (*plain, res[2] + plain[2], True)
+        green = plain[0] == 0 and not plain[3]
+        self.why[n] = "掛覆蓋才紅" if green else "基準不綠"
+        if res[3] and green and not self.tripped:   # 掛覆蓋跑滿單支上限、不掛綠:比掛覆蓋紅更強的訊號,當場斷路,不等連續 3 支(代碼審 r2 資源 s2);
+            # 不掛也逾時是測試本身慢,不斷路(r3 議題第 1 條:原本斷路在重跑之前,慢測試會關掉整批覆蓋)
+            self.trip("掛覆蓋才紅", f"{_kill_esc(n)} 掛覆蓋跑滿單支上限 {int(self.full)} 秒、不掛綠(覆蓋設定讓測試卡住;逾時也算紅,原因沿用掛覆蓋才紅)")
+        self.red_streak = self.red_streak + 1 if green else 0
+        if self.red_streak >= _CHOICE_COV_RED_BREAKER and not self.tripped:
+            self.trip("掛覆蓋才紅", f"連續 {self.red_streak} 支測試掛覆蓋紅、不掛綠(覆蓋設定讓測試跑不起來)")
+        return (*plain, res[2] + plain[2], False)
+
+    def settle(self):
+        """量完:Robolectric 不足 _CHOICE_COV_BREAKER 支時這裡補判斷路器;收手時沒量到的記時間不夠(斷路了記斷路原因,基準照現在逐支流程補量);
+        斷路了全部算不明 → 要分析的測試名清單。"""
+        self.breaker(None, False, final=True)
+        if not self.tripped and self.got and not self.any_proj:   # 不分 Robolectric:量到的沒有一支記到專案類別 → 覆蓋設定壞了(例:JaCoCo 插不了樁),不能把 0 當沒經過
+            self.trip("覆蓋接不起來", f"量到的 {len(self.got)} 支測試沒有一支記到專案類別(JaCoCo 可能插不了樁,例:agent 版本不支援這個 JDK 的類別檔)")
+        for n in self.names:
+            if not self.why[n] and (n not in self.got or self.tripped):
+                self.why[n] = self.trip_why if self.tripped else "時間不夠"
+        return [n for n in self.names if not self.why[n]]
+
+
+def _choice_cov_parse(raw, cand, idx):
+    """分析輸出 → ({名: 經過的 group 集合}, 沒有指令紀錄的 group 集合, 失敗原因或空字串)。讀不到、不是 JSON、hits 不是物件 → 整次分析失敗;
+    樹上沒有類別(noclasses 為真)、缺 nolines 或 noclasses → 分析失敗(暫時性,代碼審 r1 F4、r2 b2);hits 缺某支的序號或型別不對 → 那支不放進結果(呼叫端記不明,r1 F5)。"""
+    import json
+    try:
+        doc = json.loads(raw) if raw is not None else None
+    except ValueError:
+        doc = None
+    if (not isinstance(doc, dict) or not isinstance(doc.get("hits"), dict) or not isinstance(doc.get("nolines"), list)
+            or type(doc.get("noclasses")) is not bool or doc["noclasses"]):   # 缺 nolines 或 noclasses 也算失敗,不當成「沒經過」(代碼審 r2 邊界 b2)
+        return {}, set(), "分析失敗"
+    back = {k: g for g, k in idx.items()}
+    hits = {}
+    for k, n in enumerate(cand):
+        v = doc["hits"].get(str(k))
+        if isinstance(v, list) and all(type(i) is int for i in v):
+            hits[n] = {back[i] for i in v if i in back}
+    return hits, {back[i] for i in doc["nolines"] if type(i) is int and i in back}, ""
 
 
 def _kill_merge_off(mg, plat, why, need=None, quiet=False):
@@ -29056,10 +29435,11 @@ def _kill_merge_ready(mg, c, methods):
     return dict(shape, rdir=rdir, tq=tq, init=init)
 
 
-def _choice_merge_init_path(c):
-    """事件初始化腳本的路徑(第四段計劃做法 1):只算不寫(寫檔在 _kill_merge_base);現場沒有 scratch、或 Windows 路徑含 cmd.exe 特殊字元 → None。"""
+def _choice_merge_init_path(c, name=_CHOICE_MERGE_INIT_NAME):
+    """初始化腳本的路徑(事件腳本:第四段計劃做法 1;覆蓋與分析腳本:Projects/選擇點存活回指條款_計劃,name 給檔名):只算不寫;現場沒有 scratch、
+    或 Windows 路徑含 cmd.exe 特殊字元 → None。"""
     scratch = getattr(c, "scratch", None)
-    init = os.path.join(scratch, _CHOICE_MERGE_INIT_NAME) if scratch else None
+    init = os.path.join(scratch, name) if scratch else None
     if init and _IS_WIN and any(ch in init for ch in _WIN_CMD_SPECIAL):
         return None
     return init
@@ -29069,12 +29449,19 @@ def _choice_merge_init_write(mg, c, sh):
     """把事件初始化腳本寫到 sh["init"](第四段計劃做法 1);寫不進去 → 印一行、sh["init"] 改 None(這次合併不帶事件,照常合併)。"""
     if not sh.get("init"):
         return
-    try:
-        with open(sh["init"], "w", encoding="utf-8") as fh:
-            fh.write(_CHOICE_MERGE_INIT)
-    except OSError:
+    if not _choice_init_file_write(sh["init"], _CHOICE_MERGE_INIT):
         print(f"⚠ {_kill_esc(c.plat)}:事件初始化腳本寫不進去,這次合併不帶事件", file=sys.stderr)
         sh["init"] = None
+
+
+def _choice_init_file_write(path, text):
+    """寫一份初始化腳本 → 寫進去了沒(合併快篩的事件腳本、覆蓋與分析腳本共用;印字由呼叫端決定)。"""
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    except OSError:
+        return False
+    return True
 
 
 def _choice_merge_clear(rdir):
@@ -29156,13 +29543,23 @@ def _kill_merge_halt_check(mg, c):
 
 
 def _kill_merge_singles(mg, c, uniq, cmd_of):
-    """開跑量齊單支基準(〈做法〉2 第 1 步)→ 量齊了沒。每支之前看停止旗標(hk.between:訊號或總時限到就丟 _KillHalt,同逐支流程);
+    """合併快篩開跑量齊單支基準(〈做法〉2 第 1 步)→ 量齊了沒;規則全在共用的 _kill_measure_singles(Projects/選擇點存活回指條款_計劃〈用詞〉量齊基準:
+    準備物件也用同一支,不另寫量基準的迴圈)。"""
+    return _kill_measure_singles(c, uniq, cmd_of, mg.remaining)
+
+
+def _kill_measure_singles(c, uniq, cmd_of, remaining, wrap=None, after=None):
+    """開跑量齊單支基準 → 量齊了沒(合併快篩與準備物件共用;Projects/選擇點存活回指條款_計劃〈用詞〉量齊基準)。每支之前看停止旗標
+    (hk.between:訊號或總時限到就丟 _KillHalt,同逐支流程);
     ★量完一支就用實測平均重估剩下的要多久★(還沒量的支數 × 平均 × 1.5;平均不含這次量到的第一支、已量少於 2 支不判,第三段計劃做法 1),比剩下的總時限多 → 不量了、回 False(這個平台組不合併,退回逐支、用到才量),
     已量的留在 baselines 給逐支用;被剩下時限截斷而逾時的那支不寫進 baselines(逐支照完整上限重量,不會被記成基準非綠)。開跑那道
     「支數 × 10 秒 × 1.5」只是單價估的門,實際比單價貴時靠這裡收手(代碼審 code-選擇點變異加速 r1 正確性 #1、資源 #3;
     業界 Stryker、Blinky 用不帶壞法那一輪實測的耗時估逾時)。
     收手時把 (全部支數, 全部支數照已量實測平均估的秒數) 放在 c.merge_need(還沒有實測時用單價估),給時限提示用(第二段計劃 做法 3):
-    帶大時限重跑時是新的一次呼叫,基準要從頭全部量(代碼審 r1 g3)。"""
+    帶大時限重跑時是新的一次呼叫,基準要從頭全部量(代碼審 r1 g3)。
+    remaining:回剩下總時限秒數的函式。wrap(測試名, 指令) → (實際要跑的指令, 當場收的標記物件或 None):準備物件拿來加覆蓋初始化腳本、開跑前刪舊的覆蓋資料檔;
+    標記物件交 _kill_run 的 merge(第一個訊號當場收,S7)。after(測試名, (rc, 輸出, 秒, 逾時), 上限) → (rc, 輸出, 秒, 逾時, 實際花的秒數, 被截斷):跑完當場處理
+    (複製覆蓋資料、掛覆蓋紅就不掛重跑一次),前 4 項寫進 baselines(鍵仍是不加覆蓋的指令,壞法階段直接用);實際花的秒數(兩趟加起來)估剩下的時間用;被截斷就收手不記。兩個都不給時行為同原本的 _kill_merge_singles。"""
     measured, full = [], max(600.0, c.floor)
     for i, m in enumerate(uniq):
         if cmd_of[m] in c.baselines:
@@ -29173,17 +29570,23 @@ def _kill_merge_singles(mg, c, uniq, cmd_of):
         rest = measured[1:]
         avg = sum(rest) / len(rest) if rest else _CHOICE_MERGE_UNIT_SECS
         c.merge_need = (len(uniq), avg * len(uniq) * _CHOICE_MERGE_BUDGET_K)
-        if rest and mg.remaining() < avg * left * _CHOICE_MERGE_BUDGET_K:
+        if rest and remaining() < avg * left * _CHOICE_MERGE_BUDGET_K:
             return False
-        if len(measured) == 1 and mg.remaining() < measured[0] * _CHOICE_MERGE_BUDGET_K:   # 只量了一支:照它的速度連再量一支都不夠 → 收手,
-            return False                                                                    # 別讓下一支被截斷、把時間全耗在量基準
-        cap = min(full, max(mg.remaining(), 1.0))
-        b_rc, b_tail, b_el, b_to = _kill_run(cmd_of[m], c.run_dir, cap)
+        if len(measured) == 1 and remaining() < measured[0] * _CHOICE_MERGE_BUDGET_K:   # 只量了一支:照它的速度連再量一支都不夠 → 收手,
+            return False                                                                 # 別讓下一支被截斷、把時間全耗在量基準
+        cap = min(full, max(remaining(), 1.0))
+        cmd, mk = wrap(m, cmd_of[m]) if wrap is not None else (cmd_of[m], None)
+        got = _kill_run(cmd, c.run_dir, cap, merge=mk)
         c.mstate["r"] = int(time.time())
-        if b_to and cap < full:   # 被剩下時限截斷:不算這支的基準
+        if after is not None:   # after 固定回 6 項:多「這支實際花的秒數」(兩趟加起來,估剩下的用)與「被剩下時限截斷」(代碼審 r2 架構對齊 a1、資源 s1)
+            b_rc, b_tail, b_el, b_to, spent, cut = after(m, got, cap)
+        else:
+            b_rc, b_tail, b_el, b_to = got
+            spent, cut = b_el, bool(b_to and cap < full)
+        if cut:   # 被剩下時限截斷:不算這支的基準
             return False
         c.baselines[cmd_of[m]] = (b_rc, b_tail, b_el, b_to, bool(c.mstate["unsure"]))
-        measured.append(b_el)
+        measured.append(spent)
     return True
 
 
@@ -29305,6 +29708,11 @@ def _kill_merge_screen(mg, c, chunk, lane, mcmd, m_el, nf):
     if c.hk.should_stop is not None and c.hk.should_stop():   # 套完壞法、開快篩之前已收到第一個訊號或時限到了:還原、不開快篩、不交列
         _kill_merge_restore(c, target, r0)
         raise _KillHalt()
+    # 依覆蓋選過的壞法只帶子集(Projects/選擇點存活回指條款_計劃 範圍 3):這個壞法的配方只剩合併道的一部分時,合併指令與判讀的名字都用那個子集;
+    # 合併基準仍是整組那一條。配方蓋滿合併道時照原本傳進來的指令(行為不變)
+    names = _kill_merge_subset(c, chunk, lane)
+    if names != lane:
+        mcmd = _choice_merge_cmd(c.run_cmd, c.sh, names, nf, init=None if c.plat in mg.init_off else c.sh.get("init"))
     _choice_merge_clear(c.sh["rdir"])
     rc, tail, _el, to = _kill_run(mcmd, c.run_dir, _choice_merge_screen_cap(m_el, c.floor, mg.remaining()), merge=mg)
     c.mstate["r"] = int(time.time())
@@ -29313,12 +29721,12 @@ def _kill_merge_screen(mg, c, chunk, lane, mcmd, m_el, nf):
         return "break"
     if mg.interrupted:   # 快篩被第一個訊號收掉:這個壞法不交任何列(不記帳)、停
         raise _KillHalt()
-    kind, why, counts = _choice_merge_classify(rc, tail, to, c.sh["rdir"], lane, c.sh["tq"], failed=c.merge_failed)
+    kind, why, counts = _choice_merge_classify(rc, tail, to, c.sh["rdir"], names, c.sh["tq"], failed=c.merge_failed)
     mg.kinds[(c.plat, r0.get("group"))] = kind
     if kind == "unclean":   # 每個壞法那筆帳帶快篩沒跑乾淨的原因(第三段計劃做法 4)
         mg.whys[(c.plat, r0.get("group"))] = why
         # 沒跑乾淨(不分原因)照輸出的事件行排逐支:紅層在前、掛住層與通過層在後(第四段計劃做法 2)
-        evs = _choice_merge_events(tail, lane)
+        evs = _choice_merge_events(tail, names)
         c.merge_failed, c.merge_back = evs["failed"], evs["hung"] + evs["passed"]
     _kill_merge_breaker(mg, c.plat, kind, counts, why)
     if kind != "pass":
@@ -29326,6 +29734,13 @@ def _kill_merge_screen(mg, c, chunk, lane, mcmd, m_el, nf):
     _kill_merge_emit(c, chunk, restored, tail, nf)
     mg.survived.setdefault(c.plat, set()).add(r0.get("group"))
     return "pass"
+
+
+def _kill_merge_subset(c, chunk, lane):
+    """這個壞法的配方在合併道裡的測試名(照合併道原排序);跟合併道一樣多就回 lane 本身(呼叫端靠「is 同一份」判要不要重組指令)。"""
+    mine = {_kill_method_name(r.get("test", ""), c.pdata) for r in chunk}
+    sub = [m for m in lane if m in mine]
+    return lane if len(sub) == len(lane) else sub
 
 
 def _kill_merge_in_lane(c, chunk, lane):
@@ -78592,10 +79007,12 @@ def _choice_compute(repo_root, rng, at_sha, tables, deadline=None, scan_timeout=
     return res
 
 
-def _choice_ledger_status(repo_root, at_sha, keys, rng=None):
+def _choice_ledger_status(repo_root, at_sha, keys, rng=None, reach_out=None, new_sha_of=None):
     """choice-points 印的帳上狀態(〈範圍〉1):{(檔, 行指紋): 狀態字}。讀工作目錄的版控治理帳與放行檔(同 choice-kill;推送前那一道才讀被推版本),
     判法同推送前那一道(_choice_disposition);過期要被讀版本所有計劃綁的測試(_choice_guard 的 bound),算不出來時殺掉照印殺掉。
-    帳或放行檔讀不了 → 每一行都印「帳讀不了」。不在字典裡的行 = 沒跑。"""
+    帳或放行檔讀不了 → 每一行都印「帳讀不了」。不在字典裡的行 = 沒跑。
+    reach_out(選用的字典;Projects/選擇點存活回指條款_計劃 範圍 6、10):帳上是存活的行填覆蓋分類字樣——有有效 reach(最新一筆的 cov_sha 等於現在用
+    守的測試雜湊、那支檔的 blob、new_sha_of 給的 new_sha 算出的值)印「<分類> 未判讀」,否則「未分類」(算不出守的測試時一律未分類)。"""
     if not keys:
         return {}
     evs, gerr = _gov_vc_gate_events(repo_root, _CHOICE_KILL_GATE)
@@ -78611,9 +79028,13 @@ def _choice_ledger_status(repo_root, at_sha, keys, rng=None):
             guard = None
         bound = guard["bound"] if guard else None
     out = {}
+    disp_of = {k: _choice_disposition(idx.get(k) or [], k in wk, bound if bound is not None else {str(e.get("killing_test")) for e in idx.get(k) or []})
+               for k in keys}
+    if reach_out is not None:
+        _choice_reach_fill(Path(repo_root), at_sha, guard if rng else None, [k for k in keys if disp_of[k] == "survived"], evs, reach_out, new_sha_of)
     for k in keys:
         evs_k = idx.get(k) or []
-        disp = _choice_disposition(evs_k, k in wk, bound if bound is not None else {str(e.get("killing_test")) for e in evs_k})
+        disp = disp_of[k]
         if disp == "killed":
             last = evs_k[-1]
             out[k] = f"殺掉 by {_kill_esc(str(last.get('killing_test')))}({'、'.join(_kill_esc(str(c)) for c in last.get('clauses') or [])})"
@@ -78622,6 +79043,26 @@ def _choice_ledger_status(repo_root, at_sha, keys, rng=None):
         elif disp is not None:
             out[k] = {"waived": "已放行", "stale": "過期(殺掉它的測試已沒有條款綁)", "survived": "存活", "no_result": "跑不出結果"}[disp]
     return out
+
+
+def _choice_reach_fill(rr, at_sha, guard, surv, evs, reach_out, new_sha_of):
+    """choice-points 存活行的覆蓋分類字樣填進 reach_out:最新一筆 reach 有效 → 「<分類> 未判讀」,否則「未分類」(〈範圍〉6、10)。"""
+    cur = _choice_reach_cur(rr, at_sha, guard, new_sha_of, surv)
+    aux = _choice_ledger_aux(evs) if surv else {}
+    for k in surv:
+        r = (aux.get(k) or {}).get("reach")
+        reach_out[k] = f"{_choice_reach_text(r)} 未判讀" if _choice_reach_valid(r, cur.get(k)) else "未分類"
+
+
+def _choice_reach_cur(rr, at_sha, guard, new_sha_of, keys):
+    """choice-points 用:{(檔, 行指紋): 現在的 cov_sha 或 None}(跟 choice-kill 同一支 _choice_cov_sha_fn,守的測試雜湊含測試檔內容;查所在檔帶 _CHOICE_CLI_SCAN_TIMEOUT 期限)。
+    只算 keys(帳上是存活的行);沒有就不查(代碼審 r1 F7)。算不出守的測試 → 空字典(全部未分類)。"""
+    if not guard or not new_sha_of or not keys:
+        return {}
+    deadline = time.monotonic() + _CHOICE_CLI_SCAN_TIMEOUT
+    blobs, _ok = _choice_test_blobs(rr, at_sha, guard["tests"], guard["pdata"]["platforms"], deadline=deadline)
+    fn = _choice_cov_sha_fn(rr, at_sha, guard, blobs, deadline=deadline)
+    return {k: fn(k[0], new_sha_of[k]) for k in keys if k in new_sha_of}
 
 
 def _choice_range(rr, diff, branch):
@@ -78659,8 +79100,9 @@ def _choice_range(rr, diff, branch):
     return f"{start}..{tip}", tip, None
 
 
-def _choice_points_lines(x, status):
-    """choice-points 一行改到的行 → 要印的行(清單):定位、列號、類別、壞法、外層宣告、帳上狀態;帳上是存活時底下多一行型錄的為什麼欄。"""
+def _choice_points_lines(x, status, reach=None):
+    """choice-points 一行改到的行 → 要印的行(清單):定位、列號、類別、壞法、外層宣告、帳上狀態;帳上是存活時底下多一行型錄的為什麼欄。
+    reach(選用,{(檔, 行指紋): 字樣},_choice_ledger_status 填的):給了就在存活那一行後面接覆蓋分類加「未判讀」或「未分類」(Projects/選擇點存活回指條款_計劃 範圍 10)。"""
     loc = f"{_kill_esc(x['file'])}:{x['line']}"
     decl = f" [{_kill_esc(x['decl'])}]" if x["decl"] else ""
     mut = x["mutant"]
@@ -78672,7 +79114,8 @@ def _choice_points_lines(x, status):
     st = _CHOICE_STATUS_TEXT["not_unique"] if x["status"] == "not_unique" else status.get((x["file"], x["fp"]), _CHOICE_STATUS_TEXT["unrun"])
     also = "(補 import)" if mut.get("also") else ""
     wl = _choice_why_line(mut.get("why")) if st.startswith("存活") else ""
-    return [f"  {loc}  {mut['row']} {mut['category']}  {shown}{also}{decl}  {st}"] + ([wl] if wl else [])
+    seg = f"  {reach.get((x['file'], x['fp']), '未分類')}" if reach is not None and st.startswith("存活") else ""
+    return [f"  {loc}  {mut['row']} {mut['category']}  {shown}{also}{decl}  {st}{seg}"] + ([wl] if wl else [])
 
 
 def cmd_choice_points(env, diff=None, branch=None, repo=None):
@@ -78703,10 +79146,12 @@ def cmd_choice_points(env, diff=None, branch=None, repo=None):
     except (_KtSitUnverifiable, OSError, subprocess.TimeoutExpired) as e:
         print(f"choice-points:讀不到改動({_kill_esc(str(e))[:160] or e.__class__.__name__})", file=sys.stderr)
         return 2
-    status = _choice_ledger_status(rr, at_sha, [(x["file"], x["fp"]) for x in res["lines"] if x["mutant"] is not None], rng=rng)
+    reach = {}
+    nsha = {(x["file"], x["fp"]): x["mutant"]["identity"]["new_sha"] for x in res["lines"] if x["mutant"] is not None and x["mutant"].get("identity")}
+    status = _choice_ledger_status(rr, at_sha, [(x["file"], x["fp"]) for x in res["lines"] if x["mutant"] is not None], rng=rng, reach_out=reach, new_sha_of=nsha)
     print(f"改動選擇點(範圍 {rng[:12]}..{at_sha[:12]};論文 4.1 每行最多一個壞法)")
     for x in res["lines"]:
-        print("\n".join(_choice_points_lines(x, status)))
+        print("\n".join(_choice_points_lines(x, status, reach)))
     for rel in res["big"]:
         print(f"  {_kill_esc(rel)}  超過讀檔上限 {_KT_SIT_READ_MAX // 1048576}MB,沒掃")
     print("".join(f"  {_kill_esc(rel)}  沒檢查到:語法樹掃描算不出來({_kill_esc(why)[:160]})\n" for rel, why in res["unverified"]), end="")
@@ -78964,7 +79409,8 @@ def _choice_kill_judge(order, rows):
 def _choice_event_extra(ident, verdict, killing, clauses, plans, tests_sha, reason, via, attempt, run_id, aborted=None, judged=None,
                         merge_kind=None, single_runs=None, merge_why=None):
     """choice-kill 每個壞法那筆治理帳的欄位(〈範圍〉2 記;situation-rule --point 成功後那筆共用)。只存雜湊與短欄位。
-    judged(merged 或 single;Projects/選擇點變異加速_計劃 〈用詞〉判法)只有 choice-kill 那筆帶,人裁那筆不帶(讀時當 single)。
+    judged(merged 或 single;Projects/選擇點變異加速_計劃 〈用詞〉判法;依覆蓋判存活的那筆是 cov,Projects/選擇點存活回指條款_計劃 範圍 3)只有 choice-kill 那筆帶,
+    人裁那筆不帶(讀時當 single)。run 那筆的 merged、single、cov_judged 相加等於這次判定的壞法數。
     merge_kind({平台: pass|fail|compile|unclean|none})與 single_runs(壞法階段逐支呼叫次數,開頭量基準不算)同樣只有 choice-kill 那筆帶
     (Projects/選擇點變異加速第二段_計劃 做法 1;讀帳缺欄當 none 與 0)。"""
     import secrets
@@ -79069,11 +79515,13 @@ def _choice_test_blobs(rr, at_sha, tests, plats, deadline=None):
     return out, True
 
 
-def _choice_kill_pick(res, idx, waived, bound, tests_sha, only):
+def _choice_kill_pick(res, idx, waived, bound, tests_sha, only, cov_sha_of=None):
     """挑哪些行跑(〈範圍〉2):→ (要跑的 [行…](沒紀錄或過期的先)、帶過去的 {(檔, 指紋): 狀態}(survived 而守的測試沒變)、
     有效處置的行數、不唯一沒放行的行)。only 給了只看那一行,而且不受「守的測試沒變不重跑」限制。
     no_result 一律重跑:原因多半是環境(基準不綠、逾時、編譯快取),跟守的測試變沒變無關,推送閘叫人「修好後重跑」要真的會重跑
-    (代碼審 code-改動選擇點 r1 g1)。守的測試雜湊帶 _CHOICE_TESTS_UNKNOWN(所在檔查不完或找不到)→ 當成變了,survived 也重跑(只多跑不漏;r2 H1)。"""
+    (代碼審 code-改動選擇點 r1 g1)。守的測試雜湊帶 _CHOICE_TESTS_UNKNOWN(所在檔查不完或找不到)→ 當成變了,survived 也重跑(只多跑不漏;r2 H1)。
+    依覆蓋判的存活(最新一筆 via cov;Projects/選擇點存活回指條款_計劃 範圍 6 帶過去規則):只有這次也開覆蓋(給了 cov_sha_of)而且 cov_sha 相同才帶過去,
+    否則重跑;它的 tests_sha 帶 cov: 前綴,不給 cov_sha_of(舊判法)時照 tests_sha 比一定對不上、一定重跑。"""
     first, again, carried, done, nu = [], [], {}, 0, []
     for x in res["lines"]:
         if only is not None and (x["file"], x["line"]) != only:
@@ -79089,7 +79537,12 @@ def _choice_kill_pick(res, idx, waived, bound, tests_sha, only):
         if x["status"] == "not_unique":
             nu.append(x)
             continue
-        if disp == "survived" and only is None and evs[-1].get("tests_sha") == tests_sha and _CHOICE_TESTS_UNKNOWN not in str(tests_sha):
+        if disp == "survived" and only is None and evs[-1].get("via") == "cov":
+            cs = cov_sha_of(x) if cov_sha_of is not None else None
+            if cs is not None and evs[-1].get("cov_sha") == cs:
+                carried[key] = disp
+                continue
+        elif disp == "survived" and only is None and evs[-1].get("tests_sha") == tests_sha and _CHOICE_TESTS_UNKNOWN not in str(tests_sha):
             carried[key] = disp
             continue
         (first if disp in (None, "stale") else again).append(x)
@@ -79165,9 +79618,10 @@ def _choice_kill_guard(rr, rng, at_sha):
     return guard
 
 
-def _choice_kill_ledger(rr, res, guard, only, blobs):
+def _choice_kill_ledger(rr, res, guard, only, blobs, cov_sha_of=None):
     """讀帳(工作目錄的治理帳與放行檔)挑這次要跑的行 → (帳索引, 守的測試雜湊, _choice_kill_pick 的四個值, 放行過的 {(檔, 行指紋)}) 或 rc 2(帳讀不了)。
-    blobs:_choice_test_blobs 的清單(守的測試雜湊含測試檔內容)。"""
+    blobs:_choice_test_blobs 的清單(守的測試雜湊含測試檔內容)。cov_sha_of 轉給 _choice_kill_pick(這次有開覆蓋才給)。
+    帳索引之後多回一個 _choice_ledger_aux 的結果(--reach-only 判哪些行要補)。"""
     gevs, gerr = _gov_vc_gate_events(rr, _CHOICE_KILL_GATE)
     if gerr:
         return _situation_rule_say(f"治理帳讀不了({_kill_esc(gerr)[:200]}),判不了哪些行已處置")
@@ -79177,7 +79631,417 @@ def _choice_kill_ledger(rr, res, guard, only, blobs):
     idx = _choice_ledger_index(gevs)
     tests_sha = _choice_tests_sha(guard["tests"], blobs)
     wk = _choice_waived_keys(waivers)
-    return idx, tests_sha, _choice_kill_pick(res, idx, wk, guard["bound"], tests_sha, only), wk
+    return idx, tests_sha, _choice_kill_pick(res, idx, wk, guard["bound"], tests_sha, only, cov_sha_of=cov_sha_of), wk, _choice_ledger_aux(gevs)
+
+
+# ── 選擇點存活回指條款第一段(Projects/選擇點存活回指條款_計劃 範圍 2 到 4、6、7):逐測試覆蓋、依覆蓋選測試、reach 事件 ──
+# PIT 先做覆蓋階段記下每支測試跑過的行、每個壞法只跑經過的測試(https://pitest.org/quickstart/basic_concepts);Google 差異式變異只對有覆蓋的行
+# 產生壞法(https://arxiv.org/pdf/2102.11378)。覆蓋只答「有沒有條款經過這行」,是篩子與加速,不是存活的分類本身(那是第 1 步後半的判讀)。
+# Android 單元測試:AGP 開 enableUnitTestCoverage 後才套 jacoco 外掛,includeNoLocationClasses 要寫在 pluginManager.withPlugin('jacoco') 裡
+# (寫在 afterEvaluate 會靜默沒生效,Robolectric 覆蓋全 0;2026-11-26 實測),exec 檔位置由 AGP 決定(destinationFile、-D、-P 都不生效),只能每支跑完複製。
+_CHOICE_COV_INIT_NAME = "lumos-cov.init.gradle"
+_CHOICE_COV_INIT = ("allprojects {\n"
+                    "  pluginManager.withPlugin('com.android.application') {\n"
+                    "    android { buildTypes { debug { enableUnitTestCoverage true } } }\n"
+                    "  }\n"
+                    "  pluginManager.withPlugin('com.android.library') {\n"
+                    "    android { buildTypes { debug { enableUnitTestCoverage true } } }\n"
+                    "  }\n"
+                    "  pluginManager.withPlugin('jacoco') {\n"
+                    "    tasks.withType(Test).configureEach {\n"
+                    "      jacoco {\n"
+                    "        includeNoLocationClasses = true\n"
+                    "        excludes = ['jdk.internal.*']\n"
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n")
+# 分析:一次 Gradle 呼叫在 Gradle 程序裡用 JaCoCo 分析 API 讀全部覆蓋資料檔(用 jacocoAnt 設定的類別載入器;不產 XML 報告),只分析壞法所在檔的套件
+# 資料夾、只留 JaCoCo 記的原始檔名等於那支檔的,輸出 {"hits": {測試序號: [經過的壞法序號]}, "nolines": [那幾行沒有任何指令紀錄的壞法序號]}(2026-11-26 實測 12 支 0.66 秒)
+_CHOICE_COV_ANALYZE_NAME = "lumos-analyze.init.gradle"
+_CHOICE_COV_ANALYZE = r"""def lumosCovAnalyzeTask = { proj ->
+  if (proj.tasks.findByName('lumosCovAnalyze') != null) return
+  proj.apply plugin: 'jacoco'
+  proj.tasks.register('lumosCovAnalyze') {
+    def v = proj.findProperty('lumosCovVariant')
+    if (v) {
+      def want = ["compile${v}Kotlin", "compile${v}JavaWithJavac"]*.toString()   // GString 跟 String 用 in 比永遠不等(代碼審 r2 c1/b1)
+      dependsOn(proj.tasks.matching { it.name in want })
+    }
+    doLast {
+      def man = new groovy.json.JsonSlurper().parse(new File(proj.property('lumosCovManifest').toString()))
+      def urls = proj.configurations.jacocoAnt.files.collect { it.toURI().toURL() } as URL[]
+      def cl = new URLClassLoader(urls, this.class.classLoader)
+      def Loader = cl.loadClass('org.jacoco.core.tools.ExecFileLoader')
+      def Builder = cl.loadClass('org.jacoco.core.analysis.CoverageBuilder')
+      def Analyzer = cl.loadClass('org.jacoco.core.analysis.Analyzer')
+      def roots = proj.rootProject.allprojects.collectMany { p -> [new File(p.buildDir, 'tmp/kotlin-classes/' + man.variant),
+                                                                  new File(p.buildDir, 'intermediates/javac/' + man.variant + '/classes')] }
+      def files = [] as LinkedHashSet
+      man.mutants.each { mm -> roots.each { r -> def d = new File(r, mm.pkg.toString()); if (d.isDirectory()) d.listFiles().findAll { it.name.endsWith('.class') }.each { files << it } } }
+      def hits = [:]
+      def seen = [] as Set
+      man.execs.each { ent ->
+        def loader = Loader.newInstance()
+        loader.load(new File(ent[1].toString()))
+        def b = Builder.newInstance()
+        def a = Analyzer.newInstance(loader.getExecutionDataStore(), b)
+        files.each { f -> f.withInputStream { s -> a.analyzeClass(s, f.path) } }
+        def got = []
+        man.mutants.each { mm ->
+          def total = 0
+          def covered = 0
+          b.getSourceFiles().findAll { it.getPackageName() == mm.pkg && it.getName() == mm.src }.each { sf ->
+            (mm.first..mm.last).each { n -> def c = sf.getLine(n).getInstructionCounter(); total += c.getTotalCount(); covered += c.getCoveredCount() } }
+          if (covered > 0) got << mm.i
+          if (total > 0) seen << mm.i
+        }
+        hits[ent[0].toString()] = got
+      }
+      def nolines = man.mutants.findAll { !(it.i in seen) }.collect { it.i }
+      new File(man.out.toString()).text = groovy.json.JsonOutput.toJson([hits: hits, nolines: nolines, noclasses: files.isEmpty()])
+    }
+  }
+}
+allprojects {
+  pluginManager.withPlugin('com.android.application') { lumosCovAnalyzeTask(project) }
+  pluginManager.withPlugin('com.android.library') { lumosCovAnalyzeTask(project) }
+}
+"""
+def _choice_sha(text, n):
+    """字串的 sha256 前 n 碼(覆蓋這段的指紋共用)。"""
+    import hashlib
+    return hashlib.sha256(str(text).encode("utf-8")).hexdigest()[:n]
+
+
+_CHOICE_COV_INIT_VER = _choice_sha(_CHOICE_COV_INIT + _CHOICE_COV_ANALYZE, 12)   # 覆蓋初始化腳本版本(續跑快取與 cov_sha 都帶)
+_CHOICE_COV_BREAKER = 5              # 前幾支 Robolectric 測試的專案類別有紀錄數都是 0 就斷路(不足就是全部;〈範圍〉2 ③)
+_CHOICE_COV_RED_BREAKER = 3          # 連續幾支「掛覆蓋紅、不掛綠」就斷路(代碼審 code-選擇點存活回指條款第一段 r1 F3:掛覆蓋紅原本不進任何煞車,每支多跑一趟)
+_CHOICE_COV_OUT_MAX = 8 * 1048576    # 分析輸出 JSON 與單份覆蓋資料檔的讀取上限
+_CHOICE_COV_KEEP = 2                 # 續跑快取 choice-cov/ 只留最近幾個 at_sha(〈範圍〉2 工作目錄)
+# reach_why 字串表(〈範圍〉4);前七個是暫時性的,--reach-only 會重補
+_CHOICE_REACH_TEMP = ("沒開覆蓋", "覆蓋接不起來", "覆蓋資料沒產出", "分析失敗", "時間不夠", "基準不綠", "掛覆蓋才紅")
+_CHOICE_REACH_WHY = (*_CHOICE_REACH_TEMP, "覆蓋例外", "這一行沒有指令紀錄", "名稱檢查沒過")
+_CHOICE_COV_PROP_RE = re.compile(r"^\s*(?:(?:private|internal|public|protected|override|open|lateinit|const|@\w+)\s+)*va[lr]\b")
+_JACOCO_MAGIC, _JACOCO_VERSION = 0xC0C0, 0x1007   # org.jacoco.core.data.ExecutionDataWriter 的 MAGIC_NUMBER 與 FORMAT_VERSION
+
+
+def _choice_cov_exception(decl, line):
+    """覆蓋例外(〈用詞〉):壞法行在 inline fun 本體(外層宣告含 inline … fun)、在 const val、在頂層或 companion 的屬性初始值裡 → 「覆蓋例外」,否則空字串。
+    這幾種在 JaCoCo 的行號對不回原處(內聯到呼叫端、編譯期常數、靜態初始化),依覆蓋選測試會漏,一律記不明、跑全部守的測試。
+    decl 是 _choice_file_points 的外層宣告那一行(去頭尾空白);頂層的屬性沒有外層宣告,外層宣告就是它自己那一行。"""
+    d, ln = str(decl or "").strip(), str(line or "")
+    if re.search(r"\binline\b[^(]*\bfun\b", d) or re.search(r"\bconst\s+val\b", ln):
+        return "覆蓋例外"
+    if _CHOICE_COV_PROP_RE.match(ln) and (not d or d.startswith("companion object") or d == ln.strip()[:len(d)]):
+        return "覆蓋例外"
+    return ""
+
+
+def _choice_cov_exec_classes(data):
+    """JaCoCo 覆蓋資料檔(exec 二進位格式,org.jacoco.core.data.ExecutionDataWriter / ExecutionDataReader:區塊 0x01 header = magic 0xC0C0 + 版本 0x1007、
+    0x10 session = UTF 編號 + 兩個 long、0x11 執行資料 = long 類別編號 + UTF 類別名 + 探針陣列(varint 長度 + 每 8 個探針一個位元組,低位元先))
+    → [(類別名, 有沒有探針為真)…];格式不對(開頭不是 header、magic 或版本不對、區塊被截斷、不認得的區塊)回 None。只寫有探針為真的類別是寫端的規矩,
+    讀端照樣看位元組判。類別名照 Java 的 modified UTF-8 讀(一般類別名是 ASCII,其餘照 UTF-8 加 replace)。逐區塊交 _jacoco_block。"""
+    import struct
+    b, i, out = bytes(data or b""), 0, []
+    if not b or b[0] != 0x01:
+        return None
+    try:
+        while i < len(b):
+            i = _jacoco_block(b, i + 1, b[i], out)
+            if i is None or i > len(b):
+                return None
+    except (struct.error, IndexError):
+        return None
+    return out
+
+
+def _jacoco_block(b, i, t, out):
+    """exec 的一個區塊(型別 t,內容從 i 起)→ 下一個區塊的位置,或 None(magic 或版本不對、不認得的區塊、探針陣列被截斷);執行資料區塊把 (類別名, 有沒有探針為真) 接進 out。"""
+    import struct
+    if t == 0x01:
+        magic, ver = struct.unpack(">HH", b[i:i + 4])
+        return i + 4 if magic == _JACOCO_MAGIC and ver == _JACOCO_VERSION else None
+    if t == 0x10:
+        return i + 2 + struct.unpack(">H", b[i:i + 2])[0] + 16
+    if t != 0x11:
+        return None
+    i += 8
+    n = struct.unpack(">H", b[i:i + 2])[0]
+    name = b[i + 2:i + 2 + n].decode("utf-8", errors="replace")
+    cnt, i = _jacoco_varint(b, i + 2 + n)
+    if cnt is None or i + (cnt + 7) // 8 > len(b):
+        return None
+    nb = (cnt + 7) // 8
+    out.append((name, any(b[i:i + nb])))
+    return i + nb
+
+
+def _jacoco_varint(b, i):
+    """exec 的 varint(CompactDataOutput.writeVarInt:每位元組低 7 位、最高位表示還有下一個)→ (值, 下一個位置);超過 5 位元組 → (None, 位置)。"""
+    cnt, sh = 0, 0
+    while True:
+        c = b[i]
+        i += 1
+        cnt |= (c & 0x7F) << sh
+        sh += 7
+        if not c & 0x80:
+            return cnt, i
+        if sh > 35:
+            return None, i
+
+
+_CHOICE_COV_SRC_SKIP = frozenset(CODE_SKIP_DIRS | {".gradle"})   # 共用跳過清單再加 Gradle 自己的快取資料夾
+_CHOICE_COV_SRC_MAX = 20000          # 掃主程式套件最多看幾支 .kt、.java(超過就停,已收的照用並印一行提醒)
+_CHOICE_COV_SRC_ENTRIES = 200000     # 走訪最多看幾個檔(含非原始碼),超過一樣停
+_CHOICE_COV_SRC_HEAD = 8192          # 每支只讀開頭這麼多位元組找 package
+_CHOICE_COV_PKG_RE = re.compile(r"^[ \t\ufeff]*package[ \t]+([\w.`]+)", re.M)
+
+
+def _choice_cov_test_srcset(parent, name):
+    """src 底下的測試原始碼資料夾:test、androidTest 開頭(含變體 testDebug、androidTestFree、testFixtures)或 Test 結尾(多平台 jvmTest、commonTest)。
+    只在上一層叫 src 時算,主程式裡叫 test 的套件資料夾不跳。"""
+    return os.path.basename(parent) == "src" and (name.startswith(("test", "androidTest")) or name.endswith("Test"))
+
+
+def _choice_cov_src_pkgs(root):
+    """平台主程式的套件(〈用詞〉專案類別):root 底下 .kt、.java 檔的 package 宣告(斜線分隔;每支只讀開頭 _CHOICE_COV_SRC_HEAD;反引號與檔首 BOM 去掉)。
+    跳過共用的 CODE_SKIP_DIRS 加 .gradle、src 底下的測試原始碼資料夾(_choice_cov_test_srcset;測試自己的類別不算專案類別);不跟符號連結、只開一般檔。
+    看滿 _CHOICE_COV_SRC_MAX 支原始碼或 _CHOICE_COV_SRC_ENTRIES 個檔就停、印一行提醒(漏收的套件只會讓那幾支被判不明,方向是多跑)→ 套件集合。"""
+    out, seen, entries = set(), 0, 0
+    for d, subs, files in os.walk(str(root), followlinks=False):
+        subs[:] = [s for s in subs if s not in _CHOICE_COV_SRC_SKIP and not _choice_cov_test_srcset(d, s)]
+        for f in files:
+            entries += 1
+            if f.endswith((".kt", ".java")):
+                seen += 1
+            if seen > _CHOICE_COV_SRC_MAX or entries > _CHOICE_COV_SRC_ENTRIES:
+                print(f"⚠ 掃主程式套件看滿上限({_CHOICE_COV_SRC_MAX} 支原始碼或 {_CHOICE_COV_SRC_ENTRIES} 個檔),後面的套件沒收;只碰那些套件的測試會判成不明、照跑",
+                      file=sys.stderr)
+                return out
+            if not f.endswith((".kt", ".java")):
+                continue
+            fp = os.path.join(d, f)
+            try:
+                if os.path.islink(fp) or not os.path.isfile(fp):
+                    continue
+                with open(fp, "rb") as fh:
+                    head = fh.read(_CHOICE_COV_SRC_HEAD).decode("utf-8", "replace")
+            except OSError:
+                continue
+            m = _CHOICE_COV_PKG_RE.search(head)
+            out.add(m.group(1).replace("`", "").replace(".", "/") if m else "")
+    return out
+
+
+_CHOICE_COV_BASE_TAIL = 4000   # 快取的基準只留輸出尾巴這麼多字(guard-kill 只用尾巴的最後 200 字與失敗摘錄)
+_CHOICE_COV_BASE_MAX = 65536   # 基準檔的讀取上限
+
+
+def _choice_cov_base_path(exec_path):
+    """續跑快取裡一支測試的覆蓋資料檔 → 同名的基準檔路徑(.exec 換成 .base.json)。"""
+    return exec_path[:-len(".exec")] + ".base.json" if exec_path.endswith(".exec") else exec_path + ".base.json"
+
+
+def _choice_cov_base_read(exec_path):
+    """續跑快取裡那支測試的基準 → (rc, 輸出尾巴, 秒數, 逾時, 不確定) 或 None:檔不在、讀不出來、超過 64KB、不是 JSON 物件、欄位型別不對、
+    不是綠的(rc 不是 0 或逾時)都回 None(呼叫端刪掉、這支重量)。不確定一律 False:存的時候是同一個 at_sha 的乾淨量測。"""
+    import math
+    raw = _choice_cov_read(_choice_cov_base_path(exec_path))
+    if raw is None or len(raw) > _CHOICE_COV_BASE_MAX:
+        return None
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+        el = float(doc["el"]) if isinstance(doc, dict) and type(doc.get("el")) in (int, float) else None
+    except (ValueError, OverflowError):
+        return None
+    if (el is None or not math.isfinite(el) or el < 0 or type(doc.get("rc")) is not int or not isinstance(doc.get("tail"), str)
+            or type(doc.get("to")) is not bool or doc["rc"] != 0 or doc["to"]):
+        return None
+    return (0, doc["tail"], el, False, False)
+
+
+def _choice_cov_proj_hits(data, pkgs):
+    """專案類別有紀錄數(〈用詞〉):類別名所在的套件資料夾(類別名去掉最後一段)在 pkgs(平台原始碼的套件資料夾,斜線分隔)裡、而且有任一探針為真的類別數;
+    讀不成回 None。lumos 自己用 Python 讀,不經 Gradle(每支跑完當場算,設定沒生效時 Robolectric 測試是 0;2026-11-26 實測)。"""
+    cl = _choice_cov_exec_classes(data)
+    if cl is None:
+        return None
+    return sum(1 for name, hit in cl if hit and name.rpartition("/")[0] in pkgs)
+
+
+_CHOICE_COV_ROBO_ENV = ("org/robolectric/android/internal/AndroidTestEnvironment", "org/robolectric/internal/AndroidSandbox",
+                        "org/robolectric/internal/SdkEnvironment")   # 每支測試開跑前建 Android 環境的類別:4.6 起前者、4.5 起 AndroidSandbox、4.4 以前 SdkEnvironment
+
+
+def _choice_cov_exec_robo(data):
+    """這支測試是不是 Robolectric 測試(〈用詞〉覆蓋可信):它的覆蓋資料裡 Robolectric 建 Android 環境的類別(_CHOICE_COV_ROBO_ENV,含它們的內部類別)
+    有執行紀錄 → True;讀不成 → None。不看原始碼:@RunWith(AndroidJUnit4::class)、繼承帶 runner 的基底類別都不含 RobolectricTestRunner 字樣(代碼審 r1 F2)。
+    不能只看有沒有 org/robolectric/ 類別:專案用 Robolectric 時每支測試(含一般 JUnit 與只讀原始碼的架構測試)都載入 runner 類別,
+    2026-11-26 實驗專案 334 份全有,只有 284 份真的建了 Android 環境(第一段放行後實測)。"""
+    cl = _choice_cov_exec_classes(data)
+    if cl is None:
+        return None
+    return any(hit and name.split("$", 1)[0] in _CHOICE_COV_ROBO_ENV for name, hit in cl)
+
+
+def _choice_cov_sha(tests_sha, blob, new_sha):
+    """覆蓋指紋 cov_sha(〈用詞〉):(這次的守的測試雜湊, 壞法所在檔 blob, new_sha, 覆蓋初始化腳本版本) 的雜湊 16 碼;讀端不用跑覆蓋就算得出來。
+    守的測試雜湊或 blob 帶不明標記(_CHOICE_TESTS_UNKNOWN:所在檔查不完或找不到)、blob 取不到 → None(算不出來):帶過去與 reach 有效都判成不同,
+    跟舊路徑「雜湊帶不明標記就當成變了」(代碼審 code-改動選擇點 r2 H1)同一條規則(代碼審 code-選擇點存活回指條款第一段 r1 F1)。"""
+    if blob is None or _CHOICE_TESTS_UNKNOWN in str(tests_sha) or _CHOICE_TESTS_UNKNOWN in str(blob):
+        return None
+    return _choice_sha("\n".join((str(tests_sha), str(blob), str(new_sha), _CHOICE_COV_INIT_VER)), 16)
+
+
+def _choice_cov_sha_fn(rr, at_sha, guard, blobs, deadline=None):
+    """寫端(choice-kill)與讀端(choice-points)共用的覆蓋指紋算法 → 函式 (檔, new_sha) → cov_sha 或 None;守的測試雜湊照 _choice_tests_sha(含測試檔內容)、
+    blob 取被讀版本那支檔的物件編號(代碼審 r1 F7:原本兩端各算一份)。"""
+    tree = _choice_tree_oids(rr, at_sha, deadline=deadline)
+    oids = tree[1] if tree else {}
+    tsha = _choice_tests_sha(guard["tests"], blobs)
+    return lambda f, new_sha: _choice_cov_sha(tsha, oids.get(f), new_sha)
+
+
+def _choice_cov_exec_path(c, shape):
+    """AGP 固定位置的覆蓋資料檔 → (真實路徑, 變體名小寫開頭) 或 None:合併形狀的單元測試任務要是 test<變體>UnitTest(只有它會產 exec),
+    位置 <-p 的值>/<模組>/build/outputs/unit_test_code_coverage/<變體>UnitTest/test<變體>UnitTest.exec;不在工作樹裡(圍欄同 _choice_merge_results_dir)→ None。"""
+    if shape is None:
+        return None
+    m = re.fullmatch(r"test([A-Z][A-Za-z0-9]*)UnitTest", shape["task"])
+    if not m:
+        return None
+    v = m.group(1)
+    var = v[0].lower() + v[1:]
+    base = _under_root(c.run_dir, shape["pdir"]) if shape["pdir"] else Path(c.run_dir)
+    real = os.path.realpath(str(Path(base, *shape["parts"], "build", "outputs", "unit_test_code_coverage", f"{var}UnitTest", f"test{v}UnitTest.exec")))
+    return (real, var) if real.startswith(os.path.realpath(str(c.wt)) + os.sep) else None
+
+
+def _choice_cov_analyze_cmd(run_cmd, shape, init, manifest):
+    """分析那次 Gradle 呼叫的指令:run_cmd 拿掉 --tests 那一段、單元測試任務換成同模組的 lumosCovAnalyze,接上分析初始化腳本、清單路徑與變體
+    (-PlumosCovVariant:分析任務依賴那個變體的編譯任務,全部命中續跑快取、樹上還沒編過時先編;代碼審 r1 F4);
+    任務字樣在 --tests 之前找不到 → None(不做,全部算分析失敗)。"""
+    cmd = str(run_cmd)
+    head, tail = cmd[:shape["s"]], cmd[shape["e"]:]
+    if not shape["eq"]:
+        head = re.sub(r"--tests\s+$", "", head)
+    mod = ":".join(shape["parts"])
+    pat = re.compile(r"(?<!\S):?" + re.escape(mod) + ":" + re.escape(shape["task"]) + r"(?!\S)")
+    if not pat.search(head):
+        return None
+    head = pat.sub(lambda _m: f":{mod}:lumosCovAnalyze", head, count=1)
+    variant = shape["task"][len("test"):-len("UnitTest")]
+    return (_run_cmd_expand(head).rstrip() + " --init-script " + _cmd_arg_quote(str(init)) + " "
+            + _cmd_arg_quote("-PlumosCovManifest=" + str(manifest)) + " " + _cmd_arg_quote("-PlumosCovVariant=" + variant) + _run_cmd_expand(tail))
+
+
+def _choice_cov_dir(rr, at_sha):
+    """續跑快取資料夾 <工作目錄>/choice-cov/<at_sha>/(〈範圍〉2 續跑快取、工作目錄):擴充 _note_audit_work_dir 那套(符號連結拒用、自帶 .gitignore)到子資料夾。
+    拿不到 → 印一行原因到標準錯誤、回 None(這次不續跑;代碼審 r1 F13)。清舊的在 _choice_cov_prune(每次 choice-kill 開頭)。"""
+    wd, why = _note_audit_work_dir(rr)
+    d = None
+    if wd is not None and re.fullmatch(r"[0-9a-fA-F]{7,64}", str(at_sha)):
+        d, why = _note_audit_safe_dir(rr, f"{_NOTE_AUDIT_WORK_DIR}/choice-cov/{at_sha}")
+    elif wd is not None:
+        why = f"版本 {_kill_esc(str(at_sha))[:20]} 不是提交編號"
+    if d is None:
+        print(f"⚠ 覆蓋的續跑快取資料夾拿不到({_kill_esc(str(why))[:160]}),這次不續跑", file=sys.stderr)
+        return None
+    try:
+        os.utime(d)
+    except OSError:
+        pass
+    return d
+
+
+def _choice_cov_prune(rr, at_sha):
+    """清續跑快取(〈範圍〉2 工作目錄;每次 choice-kill 開頭,不論開不開覆蓋——代碼審 r1 F14):choice-cov/ 底下只留最近 _CHOICE_COV_KEEP 個 at_sha
+    (這次的 at_sha 一定留、其餘依修改時間留最新的幾個)。choice-cov/ 不在、或它或上層是符號連結(_repo_path_unsafe)就不動;符號連結本身不跟、不刪。"""
+    import shutil
+    rel = f"{_NOTE_AUDIT_WORK_DIR}/choice-cov"
+    top = Path(rr) / rel
+    try:
+        if not top.is_dir() or _repo_path_unsafe(rr, rel, dirs=True):
+            return
+        cur = str(at_sha)
+        subs = sorted((x for x in top.iterdir() if x.is_dir() and not x.is_symlink() and x.name != cur), key=lambda x: x.stat().st_mtime, reverse=True)
+    except OSError:
+        return
+    for x in subs[_CHOICE_COV_KEEP - 1:]:   # 這次的 at_sha 算保留的一個(還沒建也先留位子),清完連這次一共 _CHOICE_COV_KEEP 個(代碼審 r2 c3/b3)
+        shutil.rmtree(x, ignore_errors=True)
+
+
+def _choice_cov_req(rr, x, i):
+    """一個壞法行交給分析的那一筆 → {"i", "file", "pkg", "src", "first", "last", "exc"}:壞法改的行範圍(old 在檔裡的位置起、old 與 new 逐行比不同的那幾行)、
+    package 宣告(斜線分隔)、原始檔名、覆蓋例外(_choice_cov_exception)。檔讀不到或 old 對不到時範圍就是那一行。"""
+    ident = x["mutant"]["identity"]
+    try:
+        text = (Path(rr) / x["file"]).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        text = ""
+    first = last = int(x["line"])
+    at = text.find(ident["old"]) if text else -1
+    ol, nl = ident["old"].split("\n"), ident["new"].split("\n")
+    if at >= 0 and len(ol) == len(nl):
+        diff = [k for k, (a, b) in enumerate(zip(ol, nl)) if a != b]
+        if diff:
+            start = text.count("\n", 0, at) + 1
+            first, last = start + diff[0], start + diff[-1]
+    m = re.search(r"(?m)^\s*package\s+([\w.]+)", text)
+    lines = text.split("\n")
+    line = lines[x["line"] - 1] if 0 < x["line"] <= len(lines) else ""
+    return {"i": i, "file": x["file"], "pkg": m.group(1).replace(".", "/") if m else "", "src": x["file"].rsplit("/", 1)[-1],
+            "first": first, "last": last, "exc": _choice_cov_exception(x.get("decl"), line)}
+
+
+def _choice_cov_read(path):
+    """讀一份覆蓋資料檔或分析輸出(上限 _CHOICE_COV_OUT_MAX;不是一般檔、超過上限或讀不到 → None)。"""
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) > _CHOICE_COV_OUT_MAX:
+            return None
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+_CHOICE_REACH_TYPES = (("file", str), ("fp", str), ("new_sha", str), ("reach", str), ("reach_clauses", list), ("reach_why", str), ("cov_sha", str))
+
+
+def _choice_ledger_aux(evs):
+    """治理帳的選擇點附帶事件 → {(檔, 行指紋): {"reach": 同鍵最後一筆型別對的 reach 事件或 None, "layer": None, "invalid": []}}(〈範圍〉6;這一段只收 reach,
+    layer 與 invalid 是第二段的事)。_choice_ledger_index 照舊只收 kind choice-kill,兩邊各管各的。型別不對(含 reach 不是三類之一、reach_n 不是整數)略過。"""
+    out = {}
+    for e in evs or []:
+        if not isinstance(e, dict) or e.get("gate") != _CHOICE_KILL_GATE or e.get("kind") != "reach":
+            continue
+        if not all(isinstance(e.get(k), t) for k, t in _CHOICE_REACH_TYPES) or e["reach"] not in ("clause", "none", "unknown"):
+            continue
+        if "reach_n" in e and type(e["reach_n"]) is not int:
+            continue
+        out.setdefault((e["file"], e["fp"]), {"reach": None, "layer": None, "invalid": []})["reach"] = e
+    return out
+
+
+def _choice_reach_text(r):
+    """一筆 reach 的覆蓋分類字樣(〈範圍〉10):經過 計劃#S3、計劃#S5/沒有條款經過/覆蓋不明(原因)。"""
+    if r.get("reach") == "clause":
+        return "經過 " + "、".join(_kill_esc(str(x)) for x in r.get("reach_clauses") or []) + ("…" if r.get("reach_clauses_truncated") else "")
+    if r.get("reach") == "none":
+        return "沒有條款經過"
+    return f"覆蓋不明({_kill_esc(str(r.get('reach_why') or '?'))[:40]})"
+
+
+def _choice_reach_valid(r, cur):
+    """reach 有效(〈範圍〉6):最新一筆 reach 的 cov_sha 等於現在算出的值(unknown 也算有效)。"""
+    return r is not None and cur is not None and r.get("cov_sha") == cur
+
+
+def _choice_sort_clauses(keys):
+    """reach_clauses:(計劃路徑, 條款號) 依計劃路徑、條款號數字序排序後寫成「計劃(不帶 .md)#S<n>」,去重。"""
+    return [f"{p[:-3] if p.endswith('.md') else p}#S{n}" for p, n in sorted(set(keys))]
 
 
 class _ChoiceKillRun:
@@ -79198,6 +80062,10 @@ class _ChoiceKillRun:
         self.halted, self.interrupted, self.wrote_fail = False, False, 0
         self.out = sys.stdout
         self.node = sorted({p for t in guard["tests"] for p in t["plans"]})[0]
+        # 逐測試覆蓋(Projects/選擇點存活回指條款_計劃 範圍 2 到 4):prep 由 cmd_choice_kill 建(沒有開覆蓋的平台就不建,行為同原本);
+        # cov_sha_of(壞法行)→ 覆蓋指紋;reach_only 時只記 reach、不記壞法判定;cov_n 是 run 那筆的 cov_skipped、cov_selected、cov_full
+        self.prep, self.cov_sha_of, self.reach_only, self.reach_n = None, None, False, 0
+        self.cov_n = {"skipped": 0, "selected": 0, "full": 0}
 
     def add(self, x):
         """一行的壞法 → 每支守的測試一條臨時配方(invariant <定位>|<測試名>、platform 帶那支測試的平台、group <定位>);
@@ -79207,7 +80075,7 @@ class _ChoiceKillRun:
         if x["file"] not in self.orders:
             self.orders[x["file"]] = _choice_test_order(self.guard, x["file"])
         order = self.orders[x["file"]]
-        p = self.plan_of[loc] = {"x": x, "order": [(t["plat"], t["name"]) for t in order],
+        p = self.plan_of[loc] = {"x": x, "order": [(t["plat"], t["name"]) for t in order], "full_n": len(order), "cov": {},
                                  "tests": {(t["plat"], t["name"]): t for t in order}, "rows": {}, "done": False, "plats": set()}
         plats, ctx = self.guard["pdata"]["platforms"], {"tops": {}}
         for t in order:
@@ -79259,6 +80127,59 @@ class _ChoiceKillRun:
             print(wl, file=self.out)
         self.out.flush()
 
+    def on_prep(self, plat, lines):
+        """準備物件的回呼(範圍 2 ⑥):這個平台組每一行的覆蓋分類 → 用同一份資料把 order 改成子集(判定照子集判,沒跑的測試不會被判成缺結果);
+        這一行所有有配方的平台組都交了,就記 reach,沒有條款經過(none)的行直接記存活(via cov)。"""
+        for loc, li in lines.items():
+            p = self.plan_of.get(loc)
+            if p is None:
+                continue
+            p["cov"][plat] = li
+            p["order"] = [tk for tk in p["order"] if tk[0] != plat or tk[1] in li["keep"]]
+            if not p["done"] and set(p["cov"]) >= p["plats"]:
+                self.reach_done(loc)
+
+    def reach_done(self, loc):
+        """一行的覆蓋分類到齊:平台組有任一 unknown → unknown(原因取第一個);否則有測試經過 → clause(經過的條款 = 經過的守的測試綁的條款聯集);否則 none。
+        記一筆 reach;none 而且不是 --reach-only → 記壞法事件 survived、via cov、judged cov、tests_sha 帶 cov: 前綴(範圍 3)。"""
+        import secrets
+        p = self.plan_of[loc]
+        x = p["x"]
+        lis = [p["cov"][q] for q in sorted(p["cov"])]
+        unk = [li for li in lis if li["cls"] == "unknown"]
+        passing = [(q, n) for q in sorted(p["cov"]) for n in sorted(p["cov"][q]["pass"])]
+        cls = "unknown" if unk else ("clause" if passing else "none")
+        keys = [k for tk in passing for k in p["tests"][tk]["keys"]] if cls == "clause" else []
+        clauses = _choice_sort_clauses(keys)
+        cs = (self.cov_sha_of(x) if self.cov_sha_of is not None else None) or ""   # 算不出來(不明標記)記空字串,之後一定對不上
+        ident = x["mutant"]["identity"]
+        ex = {"file": x["file"], "fp": x["fp"], "new_sha": ident["new_sha"], "reach": cls, "reach_clauses": clauses, "reach_n": len(clauses),
+              "reach_why": unk[0]["why"] if unk else "", "cov_sha": cs, "run_id": self.run_id, "token": secrets.token_hex(8)}
+        note = f"選擇點覆蓋分類 {x['file']} {x['mutant']['row']} {cls}"
+        if not _choice_gate_event(self.rr, "reach", note, f"{_kill_esc(loc)} 的覆蓋分類", list_key="reach_clauses", hard=False, head_sha=self.head,
+                                  nodes=[], extra=ex):
+            self.wrote_fail += 1
+        self.reach_n += 1
+        self.cov_n["full"] += p["full_n"]
+        self.cov_n["selected"] += len([tk for tk in p["order"] if tk in p["tests"]]) if cls != "none" else 0
+        if cls != "none" or self.reach_only:
+            return
+        self.cov_n["skipped"] += 1
+        self.judged["cov"] = self.judged.get("cov", 0) + 1   # merged + single + cov = 這次判定的壞法數(代碼審 r1 F8)
+        p["done"] = True
+        key = (x["file"], x["fp"])
+        self.attempts[key] = self.attempts.get(key, 0) + 1
+        self.stats["survived"] += 1
+        extra = _choice_event_extra(ident, "survived", "", [], [q[:-3] for q in self.guard["live"]], "cov:" + self.tests_sha, "", "cov",
+                                    self.attempts[key], self.run_id, judged="cov")
+        extra["cov_sha"] = cs
+        self.wrote_fail += 0 if _choice_record(self.rr, self.head, extra) else 1
+        print(f"  {_kill_esc(loc)}  {x['mutant']['row']}  存活:沒有條款綁的測試經過這一行(依覆蓋判,沒跑壞法)", file=self.out)
+        wl = _choice_why_line(x["mutant"].get("why"))
+        if wl:
+            print(wl, file=self.out)
+        self.out.flush()
+
     def on_row(self, row):
         """cmd_guard_kill 每條配方結束交出的列:依 (recipe_id, 平台) 對回壞法;有決定性的結果(強 killed、編不過、逾時)就當場判——同組其餘配方
         一定略過,不等它們的列(總時限在中間停時也記得到);每支測試都有列了也判。"""
@@ -79297,17 +80218,36 @@ class _ChoiceKillRun:
                                      force_msg="強制結束(第二個終止訊號):測試的程序群組已收掉;沒判完的壞法沒記帳",
                                      # 第一個訊號當場收掉合併快篩與合併基準(〈做法〉4);建 st 時就交進去(處理器裝上之前就在 st 上),
                                      # 不留「處理器已裝、回呼還沒設」的空窗——那段收到訊號會漏設 mg.interrupted、記成時限到(代碼審 code-選擇點變異加速第二段 r3 c1)
-                                     on_first=self.merge.on_signal if self.merge is not None else None) as st:
+                                     # 準備物件(逐測試覆蓋)的覆蓋基準與分析呼叫同樣當場收(S7);沒有準備物件時照原本只交合併快篩那一支
+                                     on_first=self._on_first()) as st:
             st.defer = True
             for loc in [q for q, p in self.plan_of.items() if len(p["rows"]) >= len(p["order"])]:
-                self.finish(loc)
+                if not self.reach_only:
+                    self.finish(loc)
             if self.recipes:
                 with contextlib.redirect_stdout(io.StringIO()):
                     cmd_guard_kill(self.env, self.node[:-3], recipes_override=self.recipes, source=_CHOICE_KILL_GATE,
-                                   stop_group_on=_CHOICE_STOP_ON, on_row=self.on_row, should_stop=lambda: self.stop(st), merge=self.merge)
+                                   stop_group_on=_CHOICE_STOP_ON, on_row=self.on_row, should_stop=lambda: self.stop(st), merge=self.merge,
+                                   prep=self.prep, prep_only=self.reach_only)
             self.interrupted = bool(st.got)
-        for loc in [q for q, p in self.plan_of.items() if not self.halted and not p["done"] and p["rows"]]:
+        for loc in [q for q, p in self.plan_of.items() if not self.halted and not self.reach_only and not p["done"] and p["rows"]]:
             self.finish(loc)
+
+    def _on_first(self):
+        """第一個訊號的回呼:合併快篩的 on_signal;有準備物件時兩支都叫。"""
+        fns = [f for f in (self.merge.on_signal if self.merge is not None else None, self.prep.on_signal if self.prep is not None else None) if f]
+        if len(fns) <= 1:
+            return fns[0] if fns else None
+        return lambda: [f() for f in fns]
+
+    def cov_fields(self):
+        """run 那筆的覆蓋欄位(範圍 4):cov on|off|tripped(任一平台斷路就是 tripped)、cov_secs(無條件進位)、cov_skipped、cov_selected、cov_full。"""
+        import math
+        pr = self.prep
+        st = set((pr.state or {}).values()) if pr is not None else set()
+        cov = "tripped" if "tripped" in st else ("on" if pr is not None and (pr.cov or "on" in st) else "off")
+        return {"cov": cov, "cov_secs": math.ceil(pr.secs) if pr is not None and pr.secs > 0 else 0, "cov_skipped": self.cov_n["skipped"],
+                "cov_selected": self.cov_n["selected"], "cov_full": self.cov_n["full"]}
 
 
 def _choice_kill_report(kr, res, rr, at_sha, carried, nu, left, done, max_mutants, max_seconds):
@@ -79323,7 +80263,7 @@ def _choice_kill_report(kr, res, rr, at_sha, carried, nu, left, done, max_mutant
           "interrupted": kr.interrupted, "tests_sha": kr.tests_sha, "token": secrets.token_hex(8)}
     # 判法統計(Projects/選擇點變異加速_計劃 做法 5):merged + single = 這次判定的壞法數;base_secs 量了基準就無條件進位(沒量是 0)
     mg, jd = getattr(kr, "merge", None), getattr(kr, "judged", None) or {}
-    rx.update(merged=int(jd.get("merged", 0)), single=int(jd.get("single", 0)), merge_tripped=bool(mg is not None and mg.tripped),
+    rx.update(merged=int(jd.get("merged", 0)), single=int(jd.get("single", 0)), cov_judged=int(jd.get("cov", 0)), merge_tripped=bool(mg is not None and mg.tripped),
               base_secs=math.ceil(mg.base_secs) if mg is not None and mg.base_secs > 0 else 0)
     # 沒跑乾淨的原因分平台計數、這次不合併的平台組與原因(Projects/選擇點變異加速第二段_計劃 做法 3、4;沒有就空字典,使用者自己關掉合併也是空的)
     rx.update(merge_unclean={q: dict(v) for q, v in (getattr(mg, "unclean", None) or {}).items()},
@@ -79333,6 +80273,9 @@ def _choice_kill_report(kr, res, rr, at_sha, carried, nu, left, done, max_mutant
               merge_reopen={q: n for q, n in (getattr(mg, "reopen", None) or {}).items() if n},
               # 第四段計劃做法 1:帶事件腳本的合併基準不通過、不帶重試通過的平台與原因
               merge_init_off=dict(getattr(mg, "init_off", None) or {}))
+    # 逐測試覆蓋(Projects/選擇點存活回指條款_計劃 範圍 4);沒有 cov_fields 的呼叫端(測試的假批次)記 off
+    cf = getattr(kr, "cov_fields", None)
+    rx.update(cf() if cf is not None else {"cov": "off", "cov_secs": 0, "cov_skipped": 0, "cov_selected": 0, "cov_full": 0})
     st = kr.stats
     note = f"choice-kill 跑了 {rx['ran']} 個壞法(殺掉 {st['killed']}、存活 {st['survived']}、跑不出結果 {st['no_result']})"
     if not _choice_gate_event(rr, "run", note, "這次呼叫的 run 那筆", list_key="tests", hard=False, head_sha=kr.head, nodes=[], extra=rx):
@@ -79358,18 +80301,28 @@ def _choice_kill_report(kr, res, rr, at_sha, carried, nu, left, done, max_mutant
     return 2 if (nores or nu or unrun or kr.interrupted or kr.wrote_fail or res.get("unverified")) else (1 if surv else 0)
 
 
-def cmd_choice_kill(env, diff=None, branch=None, only=None, max_mutants=_CHOICE_MAX_MUTANTS, max_seconds=_CHOICE_MAX_SECONDS, no_merge=False):
+def cmd_choice_kill(env, diff=None, branch=None, only=None, max_mutants=None, max_seconds=_CHOICE_MAX_SECONDS, no_merge=False, no_cov=False, reach_only=False):
     """lumos choice-kill(〈範圍〉2):對還沒有有效處置的行,把挑到的壞法批次交 cmd_guard_kill 跑碰到的進行中計劃綁的測試、逐筆記治理帳。
     跑之前(_choice_kill_base、_choice_kill_scan、_choice_kill_guard):參數、範圍右端是 HEAD、工作目錄乾淨、ast-grep 在、碰到進行中計劃、
     有可守的測試、run_cmd 有 {method}、Android 的 run_cmd 跑得了單支(同人裁那一道)。挑哪些行(_choice_kill_pick):沒紀錄或過期的先,
     survived 只在守的測試雜湊變了(或帶不明標記)才重跑、no_result 一律重跑,--only 不受這條限制;--max-mutants 截。
     rc 取最大:全部有效處置 0;有存活 1;有 no_result、不唯一、沒跑完或中斷、有檔算不出選擇點(那幾支這次不跑)2;跑之前的檢查不過 2(不跑)。
     合併快篩預設開(Projects/選擇點變異加速_計劃):no_merge(--no-merge)或環境變數 LUMOS_SKIP_CHOICE_MERGE 恰好是 1 時關,回到逐支流程。
-    --only 指到已放行的行:多印一行說不會重跑、要先撤放行(不改「放行過的行算有效處置」的規則)。不寫計劃、不改程式。"""
+    --only 指到已放行的行:多印一行說不會重跑、要先撤放行(不改「放行過的行算有效處置」的規則)。不寫計劃、不改程式。
+    逐測試覆蓋(Projects/選擇點存活回指條款_計劃 範圍 1 到 3):守的測試所在平台設定 coverage: true、沒帶 no_cov(--no-cov)時建準備物件交給 guard-kill,
+    每個壞法只跑經過那一行的條款測試、沒有條款經過的行直接記存活;沒有開覆蓋的平台就不建,行為同原本。
+    reach_only(--reach-only,範圍 7):只對帳上存活、沒有有效 reach(或 reach 是暫時性 unknown)的行補 reach,不跑壞法、不寫判定,記一筆 reach-run;
+    跟 --no-cov、--only、--max-mutants、--no-merge 同給 rc 2。max_mutants 不給是 _CHOICE_MAX_MUTANTS(給了才算「同給」)。"""
+    clash = _choice_reach_only_clash(reach_only, only, max_mutants, no_cov, no_merge)
+    if clash is not None:
+        return clash
+    if max_mutants is None:
+        max_mutants = _CHOICE_MAX_MUTANTS
     base = _choice_kill_base(env, diff, branch, only, max_mutants, max_seconds)
     if isinstance(base, int):
         return base
     rr, rng, at_sha, only = base
+    _choice_cov_prune(rr, at_sha)   # 續跑快取只留最近幾個 at_sha:每次 choice-kill 開頭清,不論開不開覆蓋(〈範圍〉2 工作目錄)
     res = _choice_kill_scan(rr, rng, at_sha, only)
     if isinstance(res, int):
         return res
@@ -79378,15 +80331,61 @@ def cmd_choice_kill(env, diff=None, branch=None, only=None, max_mutants=_CHOICE_
         return guard
     # 守的測試所在檔的物件編號:算進守的測試雜湊、也是 run 那筆的 tests;算進這次呼叫的總時限(從這裡起算,代碼審 code-改動選擇點 r1 r4)
     t0 = time.monotonic()
-    blobs, complete = _choice_test_blobs(rr, at_sha, guard["tests"], guard["pdata"]["platforms"], deadline=t0 + max_seconds)
+    blobs = _choice_kill_blobs(rr, at_sha, guard, t0 + max_seconds)
+    cov_plats, cov_sha_of = _choice_kill_cov(rr, at_sha, guard, blobs, no_cov, t0 + max_seconds)
+    got = _choice_kill_ledger(rr, res, guard, only, blobs, cov_sha_of=cov_sha_of)
+    if isinstance(got, int):
+        return got
+    idx, tests_sha, (todo, carried, done, nu), waived, aux = got
+    if reach_only:
+        return _choice_reach_only(env, rr, at_sha, res, guard, idx, waived, aux, tests_sha, blobs, cov_plats, cov_sha_of, max_seconds, t0)
+    bad = _choice_kill_precheck(rr, res, guard, only, waived, todo)
+    if bad is not None:
+        return bad
+    merge = not no_merge and os.environ.get("LUMOS_SKIP_CHOICE_MERGE") != "1"   # 只認 1,其他值與沒設一樣
+    kr = _ChoiceKillRun(env, rr, at_sha, guard, idx, tests_sha, max_seconds, t0=t0, blobs=blobs, merge=merge)
+    for x in todo[:max_mutants]:
+        kr.add(x)
+    _choice_prep_attach(kr, rr, at_sha, cov_plats, cov_sha_of, blobs, max_seconds, t0)
+    floor = _kill_timeout_floor()
+    print(f"choice-kill:{len(kr.plan_of)} 個壞法 × 最多 {len(guard['tests'])} 支測試(基準每條測試指令只跑一次、最長 {int(max(600.0, floor))} 秒;"
+          f"壞法最長基準耗時的 5 倍、至少 {int(floor)} 秒;總時限 {int(max_seconds)} 秒,到了就停在配方之間)")
+    sys.stdout.flush()
+    kr.run()
+    return _choice_kill_report(kr, res, rr, at_sha, carried, nu, len(todo) - len(kr.plan_of), done, max_mutants, max_seconds)
+
+
+def _choice_reach_only_clash(reach_only, only, max_mutants, no_cov, no_merge):
+    """--reach-only 跟 --no-cov、--only、--max-mutants、--no-merge 同給 → rc 2(已印);其餘 None。"""
+    if not reach_only:
+        return None
+    clash = [f for f, on in (("--no-cov", no_cov), ("--only", only is not None), ("--max-mutants", max_mutants is not None), ("--no-merge", no_merge)) if on]
+    if not clash:
+        return None
+    return _situation_rule_say(f"--reach-only 不能跟 {'、'.join(clash)} 同給(它只補存活行的覆蓋分類、不跑壞法)")
+
+
+def _choice_kill_blobs(rr, at_sha, guard, deadline):
+    """守的測試所在檔的物件編號(_choice_test_blobs);查不完或找不到的印一行提醒(守的測試雜湊標成不明,上次存活的行這次一律重跑)。"""
+    blobs, complete = _choice_test_blobs(rr, at_sha, guard["tests"], guard["pdata"]["platforms"], deadline=deadline)
     lost = [f"{p}:{n}" for p, n, s in blobs if s == _CHOICE_TESTS_UNKNOWN]
     if lost:
         print(f"⚠ 守的測試 {'、'.join(_kill_esc(x) for x in lost[:5])}{f' 等 {len(lost)} 支' if len(lost) > 5 else ''} "
               f"{'時限內沒查完所在檔' if not complete else '在測試路徑裡找不到所在檔'},守的測試雜湊標成不明:上次存活的行這次一律重跑", file=sys.stderr)
-    got = _choice_kill_ledger(rr, res, guard, only, blobs)
-    if isinstance(got, int):
-        return got
-    idx, tests_sha, (todo, carried, done, nu), waived = got
+    return blobs
+
+
+def _choice_kill_cov(rr, at_sha, guard, blobs, no_cov, deadline):
+    """這次開覆蓋的平台(守的測試所在平台設定 coverage: true、沒帶 --no-cov)與 cov_sha_of(壞法行 → 覆蓋指紋,_choice_cov_sha_fn;沒開覆蓋是 None)。"""
+    cov_plats = set() if no_cov else {q for q in {t["plat"] for t in guard["tests"]} if guard["pdata"]["platforms"][q].get("coverage")}
+    if not cov_plats:   # 沒開覆蓋:不算樹的物件編號(行為同原本;代碼審 r1 F7)
+        return cov_plats, None
+    fn = _choice_cov_sha_fn(rr, at_sha, guard, blobs, deadline=deadline)
+    return cov_plats, lambda x: fn(x["file"], x["mutant"]["identity"]["new_sha"])
+
+
+def _choice_kill_precheck(rr, res, guard, only, waived, todo):
+    """跑之前:--only 指到已放行的行印一行;有要跑的壞法時 Android 的 run_cmd 跑得了單支(同人裁那一道),不行 → rc 2(已印),其餘 None。"""
     hit = [x for x in res["lines"] if only is not None and (x["file"], x["line"]) == only and (x["file"], x["fp"]) in waived]
     if hit:
         print(f"  {_kill_esc(only[0])}:{only[1]}  這一行已放行,--only 不會重跑;要重判先撤放行(改 {_LINT_NEW_WAIVERS_REL} 拿掉那一筆)再跑")
@@ -79394,16 +80393,58 @@ def cmd_choice_kill(env, diff=None, branch=None, only=None, max_mutants=_CHOICE_
         why = _situation_rule_android_cmd_problem(dict(guard["pdata"], default_platform=plat), os.path.join(os.path.realpath(str(rr)), todo[0]["file"]))
         if why:
             return _situation_rule_say(why)
-    merge = not no_merge and os.environ.get("LUMOS_SKIP_CHOICE_MERGE") != "1"   # 只認 1,其他值與沒設一樣
-    kr = _ChoiceKillRun(env, rr, at_sha, guard, idx, tests_sha, max_seconds, t0=t0, blobs=blobs, merge=merge)
-    for x in todo[:max_mutants]:
+    return None
+
+
+def _choice_prep_attach(kr, rr, at_sha, cov_plats, cov_sha_of, blobs, max_seconds, t0):
+    """有開覆蓋的平台、而且有壞法要跑時,建準備物件(_KillPrep)掛到 kr:每個壞法行一筆分析用的資料(_choice_cov_req)、續跑快取資料夾(_choice_cov_dir)、
+    回呼 kr.on_prep;沒有就不建(cmd_guard_kill 的 prep 沒人傳就是原行為)。"""
+    if not cov_plats or not kr.plan_of:
+        return
+    kr.cov_sha_of = cov_sha_of
+    req = {loc: _choice_cov_req(rr, p["x"], i) for i, (loc, p) in enumerate(kr.plan_of.items())}
+    kr.prep = _KillPrep(t0 + max_seconds, cov_plats, req, kr.on_prep, cache=_choice_cov_dir(rr, at_sha), blob_of={(p, n): s for p, n, s in blobs})
+
+
+def _choice_reach_only(env, rr, at_sha, res, guard, idx, waived, aux, tests_sha, blobs, cov_plats, cov_sha_of, max_seconds, t0):
+    """choice-kill --reach-only(Projects/選擇點存活回指條款_計劃 範圍 7):帳上目前是存活、沒有有效 reach(或最新一筆 reach 是暫時性 unknown)的行,照常挑壞法、
+    交配方與準備物件給 guard-kill(prep_only=True:準備物件做完就結束、不跑任何配方),只補 reach、不寫壞法事件;記一筆 kind reach-run 帶 cov_secs。
+    → rc:補完 0;沒有開覆蓋的平台 2;中斷或寫帳失敗 2。"""
+    import math
+    import secrets
+    if not cov_plats:
+        return _situation_rule_say("--reach-only:守的測試所在平台都沒開 coverage(平台設定 coverage: true 才做逐測試覆蓋),補不了覆蓋分類")
+    want = []
+    for x in res["lines"]:
+        key = (x["file"], x["fp"])
+        if x["status"] != "mutant" or _choice_disposition(idx.get(key) or [], key in waived, guard["bound"]) != "survived":
+            continue
+        r = (aux.get(key) or {}).get("reach")
+        if _choice_reach_valid(r, cov_sha_of(x)) and not (r["reach"] == "unknown" and r.get("reach_why") in _CHOICE_REACH_TEMP):
+            continue
+        want.append(x)
+    if not want:
+        print("--reach-only:帳上的存活都已有有效的覆蓋分類,沒有要補的")
+        return 0
+    kr = _ChoiceKillRun(env, rr, at_sha, guard, idx, tests_sha, max_seconds, t0=t0, blobs=blobs, merge=False)
+    kr.reach_only = True
+    for x in want:
         kr.add(x)
-    floor = _kill_timeout_floor()
-    print(f"choice-kill:{len(kr.plan_of)} 個壞法 × 最多 {len(guard['tests'])} 支測試(基準每條測試指令只跑一次、最長 {int(max(600.0, floor))} 秒;"
-          f"壞法最長基準耗時的 5 倍、至少 {int(floor)} 秒;總時限 {int(max_seconds)} 秒,到了就停在配方之間)")
+    _choice_prep_attach(kr, rr, at_sha, cov_plats, cov_sha_of, blobs, max_seconds, t0)
+    print(f"choice-kill --reach-only:{len(kr.plan_of)} 行存活補覆蓋分類(只量覆蓋基準與分析,不跑壞法)")
     sys.stdout.flush()
     kr.run()
-    return _choice_kill_report(kr, res, rr, at_sha, carried, nu, len(todo) - len(kr.plan_of), done, max_mutants, max_seconds)
+    secs = math.ceil(kr.prep.secs) if kr.prep is not None and kr.prep.secs > 0 else 0
+    rx = {"run_id": kr.run_id, "lines": len(kr.plan_of), "reached": kr.reach_n, "cov_secs": secs, "interrupted": kr.interrupted,
+          "tests_sha": tests_sha, "token": secrets.token_hex(8), **{k: v for k, v in kr.cov_fields().items() if k == "cov"}}
+    if not _choice_gate_event(rr, "reach-run", f"choice-kill --reach-only 補了 {kr.reach_n} 行的覆蓋分類", "這次 --reach-only 的 reach-run 那筆",
+                              hard=False, head_sha=at_sha, nodes=[], extra=rx):
+        kr.wrote_fail += 1
+    if kr.interrupted:
+        print(f"中斷:已補 {kr.reach_n} 行(rc 2)", file=sys.stderr)
+    print(f"統計:要補 {len(kr.plan_of)} 行、補了 {kr.reach_n} 行、覆蓋耗時 {secs} 秒")
+    print(f"下一步:提交治理帳({GOV_LOG_REL})")
+    return 2 if kr.interrupted or kr.wrote_fail or kr.reach_n < len(kr.plan_of) else 0
 
 
 def _kill_timeout_floor():
@@ -80030,7 +81071,7 @@ def _main_choice_cmds(env, args):
     """main 的分派:人裁寫回規格(situation-rule,含選擇點的 --point)與改動選擇點的 choice-kill 放同一處(都要載圖譜)。"""
     if args.cmd == "choice-kill":
         return cmd_choice_kill(env, diff=args.ck_diff, branch=args.ck_branch, only=args.ck_only, max_mutants=args.ck_max_mutants,
-                               max_seconds=args.ck_max_seconds, no_merge=args.ck_no_merge)
+                               max_seconds=args.ck_max_seconds, no_merge=args.ck_no_merge, no_cov=args.ck_no_cov, reach_only=args.ck_reach_only)
     return cmd_situation_rule(env, args.sr_seg, args.sr_row, args.sr_plan, args.sr_clause, args.sr_test, args.sr_file,
                               args.sr_old, args.sr_new, consent=args.sr_consent, branch=args.sr_branch,
                               imports=args.sr_imports, diff=args.sr_diff, point=args.sr_point)
@@ -82103,7 +83144,7 @@ HELP_WHEN = {
     "spec-gate": "設計寫完先過這道:條款句式合不合一條文法、每條綁了 [test:]/[manual:] 沒、回退節夠不夠;綁的測試真跑一次:風險低時紅綠是放行條件(不符就擋)、風險高只印不擋,相依功能的合約測試紅一律擋;風險高、有新行為條款的計劃要寫「## 預期值表」(格式不合就擋)。",
     "spec-trace": "計劃的驗收條款每條綁了測試沒(綁了/靠人/未標/懸空);舊制「驗證紀錄認領」欄照印當對照。",
     "signoff": "業務方點頭了,留簽核痕跡(規則還符不符合業務,測試買不到,要人確認);--expected 簽計劃的預期值表(風險高計劃推送前要簽,綁整張表的指紋)。",
-    "choice-kill": "選擇點有沒有需求守著:還沒處置的改到的行,把挑到的壞法批次跑碰到的進行中計劃綁的測試(殺掉、編不過、逾時就停),判殺掉、存活或跑不出結果並逐筆記治理帳;存活要人處置(situation-rule --point、補測試、lint-waive choice:)。",
+    "choice-kill": "選擇點有沒有需求守著:還沒處置的改到的行,把挑到的壞法批次跑碰到的進行中計劃綁的測試(殺掉、編不過、逾時就停),判殺掉、存活或跑不出結果並逐筆記治理帳;存活要人處置(situation-rule --point、補測試、lint-waive choice:)。平台設定 coverage: true 時先逐測試掛 JaCoCo 量基準,每個壞法只跑經過那一行的條款測試、沒有測試經過的行直接記存活並記覆蓋分類(--no-cov 關;--reach-only 只補存活行的覆蓋分類)。",
     "choice-points": "看這次改動的選擇點:改到的每一行用語法樹(ast-grep)找出換一種寫法照樣編得過、行為卻不同的地方,每行最多挑一個壞法(照 Google 差異式變異測試論文 4.1),列出挑到什麼與帳上狀態;唯讀。",
     "situation-rule": "情境題答適用卻引不到規格、人在對話裡裁定之後:當場證明「把這段換成同一列另一種寫法,綁的測試會紅」,再把條款寫回計劃〈驗收條款〉、記治理帳;沒有終端要帶 --consent 使用者原話。",
     "sync-verified-by": "驗證紀錄建了但功能筆記沒反向登記,幫你補 verified_by(紀錄寫了 system_refs 就只看它列的)。預設 dry-run,--apply 才寫。",
@@ -82896,10 +83937,15 @@ def main():
     p.add_argument("--diff", dest="ck_diff", help="範圍 A..B(B 要是 HEAD;不給:跟推送前那一道同一套)")
     p.add_argument("--branch", dest="ck_branch", help="用哪個分支的頂端算範圍(不給:目前分支)")
     p.add_argument("--only", dest="ck_only", help="只跑這一行 <檔>:<行>(不受「守的測試沒變不重跑」限制)")
-    p.add_argument("--max-mutants", dest="ck_max_mutants", type=int, default=_CHOICE_MAX_MUTANTS, help="這次最多跑幾個壞法(預設 30)")
+    p.add_argument("--max-mutants", dest="ck_max_mutants", type=int, default=None,
+                   help="這次最多跑幾個壞法(不給就是 30;預設寫成 None 是為了分得出有沒有明給,--reach-only 同給時要擋)")
     p.add_argument("--max-seconds", dest="ck_max_seconds", type=float, default=_CHOICE_MAX_SECONDS, help="這次的總時限秒數(預設 1800)")
     p.add_argument("--no-merge", dest="ck_no_merge", action="store_true",
                    help="不跑合併快篩,每支測試各叫一次(現在的逐支流程);全域關閉設 LUMOS_SKIP_CHOICE_MERGE=1")
+    p.add_argument("--no-cov", dest="ck_no_cov", action="store_true",
+                   help="這次不做逐測試覆蓋(平台設定 coverage: true 才會做;關掉時每個壞法跑全部守的測試,run 那筆記 cov off)")
+    p.add_argument("--reach-only", dest="ck_reach_only", action="store_true",
+                   help="只對帳上存活、還沒有有效覆蓋分類的行補覆蓋分類(量覆蓋基準與分析,不跑壞法、不寫判定);不能跟 --no-cov、--only、--max-mutants、--no-merge 同給")
 
     p = sub.add_parser("sync-verified-by", help="補 Check 3 漏寫的 verified_by(dry-run 預設)")
     p.add_argument("--apply", action="store_true", help="真寫入(否則 dry-run 只列)")

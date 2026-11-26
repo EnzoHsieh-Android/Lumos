@@ -1,0 +1,522 @@
+diff --git a/docs/lumos-toolchain-knowledge/Issues/選擇點存活回指第一段末輪小問題第二段先修.md b/docs/lumos-toolchain-knowledge/Issues/選擇點存活回指第一段末輪小問題第二段先修.md
+index 8933ee916..43c74abd7 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/選擇點存活回指第一段末輪小問題第二段先修.md
++++ b/docs/lumos-toolchain-knowledge/Issues/選擇點存活回指第一段末輪小問題第二段先修.md
+@@ -1,25 +1,25 @@
+ ---
+ type: issue
+ status: open
+ created: 2026-11-26
+-updated: 2026-11-26
++updated: 2026-11-27
+ aliases: []
+ about_code:
+   - scripts/lumos
+   - scripts/test_lumos.py
+ tags:
+   - type/issue
+   - status/open
+   - scope/guards-gates
+ summary: |-
+-  PITFALL:掛覆蓋跑滿單支上限就在不掛重跑之前當場斷路,本來就會逾時的慢測試會讓整個平台組這次全部不掛覆蓋、原因誤記成覆蓋讓測試卡住 [出處:代碼審 code-選擇點存活回指條款第一段 r3 正確性 #1、資源 #1、邊界 #1、通才 #2] [根因:r2 為了少等連續 3 支,把斷路放在重跑確認之前] [repro:t_choice_cov_rerun_edges 加一案:掛覆蓋與不掛都逾時 → 現在 tripped 為真] [修法:不掛重跑綠才斷路]
++  PITFALL:掛覆蓋跑滿單支上限就在不掛重跑之前當場斷路,本來就會逾時的慢測試會讓整個平台組這次全部不掛覆蓋、原因誤記成覆蓋讓測試卡住 [出處:代碼審 code-選擇點存活回指條款第一段 r3 正確性 #1、資源 #1、邊界 #1、通才 #2] [根因:r2 為了少等連續 3 支,把斷路放在重跑確認之前] [test:t_choice_cov_rerun_edges] [修法:不掛重跑綠才斷路;2026-11-27 第一段補修已修,剩第 5、7、8 條見進度節]
+ ---
+ # 選擇點存活回指第一段末輪小問題第二段先修
+ 
+ ## 症狀
+ 
+ 選擇點存活回指第一段代碼審跑滿三輪,第三輪七席只報小問題、資安判乾淨;這些小問題在上限內不再改程式(改了就沒人審),放到第二段開工先修,第二段本身也走完整代碼審。
+ 
+ 1. **逾時斷路太早**(r3 正確性 #1、資源 #1、邊界 #1、通才 #2):掛覆蓋跑滿單支上限,在不掛重跑之前就斷路。測試本身不掛也逾時時,誤把整個平台組的覆蓋關掉。只變慢、不判錯。
+ 2. **跨套件續跑會刪掉有效快取**(r3 正確性 #2):快取鍵不含這次的專案套件,但「Robolectric 專案類別 0」用這次的套件算;同一個提交先跑 A 檔、再 `--only` 跑 B 檔時,對 A 有效的快取被當成設定沒生效刪掉重量。只變慢。
+ 3. **說明文字過時**(r3 通才 #1、架構對齊 #1):`red_rerun` 的說明還寫回傳 5 項,實際固定 6 項。
+@@ -34,14 +34,16 @@ summary: |-
+ 
+ ## 現在怎麼繞
+ 
+ 都不影響判定結果。第 1、2 條遇到時會比預期慢:`--no-cov` 可整段關覆蓋。
+ 
+ ## 進度
+ 
+ - 2026-11-27 第一段放行後實測補修時一併修掉第 1、2、3、4、6 條:斷路移到不掛重跑綠之後(t_choice_cov_rerun_edges 加慢測試案例);專案類別改看平台主程式全部套件,第 2 條的跨套件誤刪不再發生;說明文字改成 6 項;計劃〈範圍〉2 斷路器那行與 guard-kill PITFALL 補齊;樣板改走真建構子。這些跟著補修那輪代碼審一起過審。
+ - 還剩第 5 條(沒有 Gradle 快取的機器只做靜態檢查)、第 7 條(測試唯讀真的 Gradle 快取),留給第二段開工。
+ - 第 8 條(補修後實測新冒出):分帳實驗 40 個壞法冷快取跑 1902 秒(每個約 48 秒,舊版 276 秒、主線同類約 79 秒),但合併快篩有 4 次「逾時(跑到測試後掛住)」退回逐支跑,40 個只有 5 個走合併;第二段查合併那批為什麼跑到測試後還掛著(多半是某支壞法讓背景協程不收尾、整批等到逾時),修到合併比例回升。
++- 第 9 條(補修代碼審 r1 正確性 c3 放行):Robolectric 判定改看建 Android 環境的類別後,`includeNoLocationClasses` 沒生效時這些類別可能也記不到,Robolectric 測試的 0 會被當真;第二段在實驗專案關掉那個設定實測一次,記不到就把「有 runner 類別、環境類別一個都沒有」改判不明。
++- 第 10 條(補修代碼審 r1 架構對齊 a2 放行):空殼結果檔判定 `_choice_merge_ghost_suite` 自己用 ElementTree 再剖一次,跟 test_quality 的 junit 讀法是兩套;第二段改成讓 junit 讀法回傳空殼旗標、刪掉這份重剖。
+ 
+ ## 什麼條件算修好
+ 
+-第二段實作開工的第一個提交把 1–7 條修掉,各補一案先紅後綠的測試(第 5 條改成不靠本機 Gradle 快取的驗法,或寫明 CI 不驗的理由),跟第二段一起過代碼審。
++第 1、2、3、4、6 條已在第一段補修修掉(見進度節)。第二段實作開工的第一個提交把剩下的第 5、7、8、9、10 條修掉,各補一案先紅後綠的測試(第 5 條改成不靠本機 Gradle 快取的驗法,或寫明 CI 不驗的理由),跟第二段一起過代碼審。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/選擇點存活回指條款_計劃.md b/docs/lumos-toolchain-knowledge/Projects/選擇點存活回指條款_計劃.md
+index 1444c9cb3..b3823d15e 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/選擇點存活回指條款_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/選擇點存活回指條款_計劃.md
+@@ -1,15 +1,15 @@
+ ---
+ type: project
+ status: todo
+ created: 2026-11-23
+-updated: 2026-11-24
++updated: 2026-11-27
+ tags:
+   - type/project
+   - status/todo
+   - scope/guards-gates
+ lands_in:
+   - Systems/guard-kill
+   - Systems/規格閘
+ related:
+   - "[[Projects/選擇點對應需求路線_計劃]]"
+   - "[[Projects/改動選擇點都要有需求守住_計劃]]"
+@@ -74,21 +74,21 @@ REVISIT:2027-03-15 跟路線總圖同一天:第 3 步上線後,人裁存活時
+ 
+ - **守的測試**:choice-kill 已收集的守衛測試清單(只收進行中計劃、profile 是 kotlin-junit 的平台、已扣掉 `[manual:]` 與 `[keeps]` 的條款),每支帶 `keys`:它屬於哪幾條條款,值是 `(計劃路徑, 條款號)`。
+ - **準備物件**:choice-kill 交給 `cmd_guard_kill` 的選用物件 `_KillPrep`(每個平台組一份,交法同 `_KillMerge`)。guard-kill 建好隔離工作樹、跑任何配方之前,對每個平台組呼叫它一次——這個呼叫點跟合併快篩開不開、能不能合併無關(`--no-merge`、`LUMOS_SKIP_CHOICE_MERGE=1`、合併道不足 2 支都照樣呼叫);它用 guard-kill 那棵樹、guard-kill 的 `_kill_run`、基準快取與 `mstate`。
+ - **量齊基準**:把合併快篩現有的 `_kill_merge_singles`(每支量完用實測平均重估剩下支數 × 平均 × 1.5、不夠就收手、第一支冷編譯不拿來估、被時限截斷的那支不寫進基準)抽成共用的 `_kill_measure_singles(c, wrap=None)`;合併快篩照舊用它,準備物件也用它,`wrap` 給逐支指令加覆蓋用的 init script。不另寫量基準的迴圈。
+ - **合批編譯檢查**:準備物件先編一次沒套壞法的原樹(對照組);原樹紅、逾時或被中斷,這次整段跳過、記 run 事件 `compile: "env"`、不記任何無效。原樹綠才把這一批壞法同時套上(泛化 `_kill_merge_apply`/`_kill_merge_restore` 成多檔版,沿用 `_kill_wait_new_second` 與 `mstate` 錯開,包在 try/finally 裡、還原後比對檔內容等於原版,對不上就整個準備物件中止、照現在跑)跑一次編譯任務,依錯誤的檔與行列出「嫌疑壞法」(壞法改的行範圍含那一行);每個嫌疑壞法再單獨套上編一次確認,單獨也紅才算無效;錯誤對不回任何壞法、輸出被截斷(`_kill_cap` 砍過中段)、或單獨編也綠,都不記無效。換了候選的行再一批,最多 3 批。
+ - **編譯預算**:合批編譯檢查(含對照組、確認、換候選)用掉的時間不超過 `--max-seconds` 的四分之一;超過就停在批與批之間,還沒確認的壞法照現在交給測試階段(編不過時照現在記 `no_result`),run 事件 `compile: "budget"`。
+ - **無效壞法**:合批編譯檢查確認編不過的壞法,身分 `(檔, 行指紋, new_sha)`;記一筆 `invalid` 事件(帶這次 run 的 `at_sha` 與那支檔的 blob)。
+ - **跳過集合(skip)**:某一行在帳上所有 `invalid` 事件裡、`blob` 等於那支檔現在 blob 的 `new_sha`;累積,不只看最近一次 run。choice-points、推送前掃描、`situation-rule --point`、判讀材料與準備物件都用同一個定義,所以挑到同一個候選。檔內容變了(blob 不同)就重新從第一個候選驗;檔沒變但別支檔改了(`at_sha` 跟 invalid 記的不同)時,準備物件把那些舊的無效候選放進這次合批編譯當探針(不跑測試),能編了就記一筆 `invalid` 的補償(`kind: "invalid"`、`cleared: true`),從跳過集合拿掉,下一次挑回它。
+ - **沒有可用壞法**:同一行全部候選都在跳過集合裡;挑壞法時那一行的狀態是 `exhausted`(跟乾節點 `arid` 同一層級的行狀態,不是處置判定),不擋、不跑;檔內容變了就重驗。
+ - **覆蓋基準**:準備物件用 `_kill_measure_singles` 加覆蓋 init script(開 `enableUnitTestCoverage`、jacoco 外掛套上後設 `includeNoLocationClasses = true` 與排除 `jdk.internal.*`;init script 寫進 `wt.scratch`,同 `_choice_merge_init_write`)把每支守的測試各跑一次;每支開跑前刪掉 AGP 固定位置的覆蓋資料檔,跑完沒有新檔就記「覆蓋資料沒產出」,有就複製到續跑快取。模組與變體從那支測試的指令(`run_cmd` 代換後的 `:<模組>:test<變體>UnitTest`)推出。
+-- **專案類別有紀錄數**:lumos 自己用 Python 讀 JaCoCo 覆蓋資料檔(JaCoCo 公開的 exec 二進位格式:區塊型別、類別編號、類別名、探針陣列),數「類別名所在套件是平台主程式的 package 宣告(平台根底下 .kt、.java 檔,跳過 build 與 test、androidTest、testFixtures 這類測試資料夾;沒有宣告就是預設套件)、而且有任一探針為真」的類別數(代碼審 r1 改:原本照資料夾猜套件,預設套件與資料夾跟 package 不符時對不上;第一段放行後 2026-11-26 實測再改:原本只看改到的檔的套件,Robolectric 測試只碰別的套件時數到 0、前 5 支就誤斷路,覆蓋在實務上等於沒作用);每支跑完當場算。
++- **專案類別有紀錄數**:lumos 自己用 Python 讀 JaCoCo 覆蓋資料檔(JaCoCo 公開的 exec 二進位格式:區塊型別、類別編號、類別名、探針陣列),數「類別名所在套件是平台主程式的 package 宣告(平台根底下 .kt、.java 檔,跳過共用的跳過清單加 .gradle,以及 src 底下 test、androidTest 開頭或 Test 結尾的測試資料夾(含變體 testDebug、多平台 jvmTest;Android 官方〈Advanced test setup〉);符號連結與非一般檔不開;沒有宣告就是預設套件)、而且有任一探針為真」的類別數(代碼審 r1 改:原本照資料夾猜套件,預設套件與資料夾跟 package 不符時對不上;第一段放行後 2026-11-26 實測再改:原本只看改到的檔的套件,Robolectric 測試只碰別的套件時數到 0、前 5 支就誤斷路,覆蓋在實務上等於沒作用);每支跑完當場算。
+ - **覆蓋可信**:某支測試的專案類別有紀錄數大於 0;或這支測試不是 Robolectric 測試(看那支測試的覆蓋資料:Robolectric 建 Android 環境的類別(`AndroidTestEnvironment`,4.5 起還有 `AndroidSandbox`、4.4 以前 `SdkEnvironment`)有執行紀錄才算 Robolectric 測試——第一段放行後 2026-11-26 實測:專案用 Robolectric 時每支測試的覆蓋資料都有 `org/robolectric/` 的 runner 類別(334 份全有),只有 284 份真的建了 Android 環境,原本「有任一 `org/robolectric/` 類別就算」會把只讀原始碼的架構測試的 0 當成設定沒生效;不看原始碼,`@RunWith(AndroidJUnit4::class)` 與繼承帶 runner 的基底類別都沒有 runner 字樣——代碼審 r1 改)——`includeNoLocationClasses` 只影響 Robolectric 載入的類別,一般 JUnit 測試的 0 就是真的沒碰專案類別。不可信的那支測試對所有行都算「不明」。
+ - **經過**:用 JaCoCo 分析 API 讀某支測試的覆蓋資料,壞法改的行範圍裡至少一行的指令覆蓋計數大於 0。某條條款經過 = 那條條款綁的守的測試裡至少一支經過。
+ - **覆蓋分類**:每個壞法行一個:`clause`(列出經過的條款)、`none`(每支守的測試都可信而且都沒經過)、`unknown`(有任一支不明,或這一行在覆蓋例外裡,附原因)。
+ - **覆蓋例外**:壞法行在 `inline fun` 本體裡、在 `const val`、在頂層或 companion 的屬性初始值裡,或分析時那幾行沒有任何指令紀錄,一律記 `unknown`、跑全部守的測試。
+ - **依覆蓋選測試**:`clause` 的行只跑經過的守的測試;`none` 的行不跑、直接記存活;`unknown` 的行跑全部守的測試。
+ - **覆蓋指紋 `cov_sha`**:`(這次的 tests_sha, 壞法所在檔 blob, new_sha, 覆蓋 init script 版本)` 的雜湊;全部是讀端不用跑覆蓋就算得出的值。
+ - **層**:存活的最終分類,1 規格沒寫、2 正文寫了條款沒收、3 條款寫了測試沒驗到、4 建議等價(定義見〈白話〉)。都是判讀代理給的。
+ - **計劃正文**:碰到的進行中計劃裡,frontmatter、〈驗收條款〉、〈預期值表〉、〈審計修正紀錄〉以外的段落;段名是從二級標題到最近標題的路徑(`〈範圍〉/〈1. 覆蓋〉`),同名再加 `#2`;第一個標題前的文字段名 `〈前言〉`。
+ - **判讀材料**:每個存活一段,含選擇點位置、包住那一行的宣告(取法同 `_kt_sit_material`,取不到時改附前後各 20 行)、壞法的改動(原文 → 改壞後)、覆蓋分類與經過的條款原文;每份材料對它涉及的每份計劃附一次全部條款、預期值表與分段正文;作答格式;不含任何已記的層、處置提示或放行理由。
+ - **判讀依據**:一筆判讀寫下的 `basis`,每項 `{plan, where, quote}`:`where` 是條款號(`S3`)或段名,`quote` 是從那條條款或那一段逐字引的句子。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+index c1030d87e..fe91d5bec 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
++++ b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: done
+ created: 2026-07-10
+-updated: 2026-11-26
++updated: 2026-11-27
+ self_audit: gpt-5.6-sol/2026-10-07
+ about_code_stamp: batch-2026-08-23/2026-08-23/2faf3eec082c
+ responsibility: guard kill 殺傷力驗證:合約配方(kill-add/kill-rm)、隔離工作樹裡套宣告式壞法跑綁定測試的八態判定、殺傷力帳本與背書讀者;也是人裁(situation-rule)與改動選擇點(choice-kill)臨時配方的唯一判法(它們只用選用參數接上);choice-kill 準備物件在每個平台組建樹後、跑配方前的呼叫點(prep、prep_only)與合併快篩共用的量齊單支基準(_kill_measure_singles)。不負責:挑哪些行產生壞法(規格閘的選擇點那段)、治理帳的判定紀錄
+ tags:
+   - type/system
+   - status/done
+   - risk/守衛面
+   - scope/guards-gates
+ summary: |-
+   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]建、收隔離工作樹那段抽成共用的 `_isolated_worktree`(with 區塊,寫法照 _vault_write_lock;修正關卡也用);guard kill 照舊在平台根下 `git -C` 建樹、測試在樹裡的平台根跑(2026-11-13 起;原本在樹的最上層)、建樹失敗記 error 繼續下一個平台、--keep-worktree 的「現場保留」由 guard kill 自己印(--json 時印到標準錯誤),行為不變 [test:t_isolated_worktree_shared]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/規格閘.md b/docs/lumos-toolchain-knowledge/Systems/規格閘.md
+index dc68cb7fd..f9a4eae9e 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/規格閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/規格閘.md
+@@ -93,24 +93,24 @@ summary: |-
+   PITFALL:按檔各開一個 ast-grep 後,推送前 30 秒在上千支小檔時用完,掃完的檔也被丟成「挑壞法超過時限」、整道閘只提醒 [出處:code-改動選擇點 r2 r1] [根因:每支檔約 23 毫秒啟動成本;挑壞法與掃描共用同一個截止點] [修法:_choice_scan 先整批一次、整批失敗才逐檔(整批最多用掃描時限一半);推送前挑壞法另給 _CHOICE_PICK_BUDGET 從掃描結束起算] [test:t_choice_scan_batch_budget] [test:t_choice_scan_batch_share]
+   PITFALL:守的測試綁成 `類別.方法`(FooTest.bar)時所在檔永遠查不到、記成不明,存活的行每次都重跑 [出處:code-改動選擇點 r3 a1] [根因:_choice_test_blobs 拿整串名字 git grep -w -F,沒照專案綁定寫法 `類別.方法` 取最後一段的既有慣例(_dotted_ident,同 _classify_test_refs)] [修法:點號兩邊都是識別字才取最後一段找、句子名照整串;雜湊鍵仍是 (平台, 原測試名)] [test:t_choice_test_blobs_name_shape]
+   PITFALL:暫存目錄落在 .gitignore 寫 *.kt 的 repo 底下時,整批語法樹掃描靜默零命中、每支檔被判成沒有選擇點(逐檔點名不會) [出處:code-改動選擇點 r3 c1 b1] [根因:ast-grep scan 掃目錄時預設套上層 .gitignore/.ignore/全域忽略,rc 0 輸出空,不會退回逐檔] [修法:_choice_scan_batch 帶全部六種 --no-ignore(_CHOICE_SG_NO_IGNORE),跟逐檔點名看到同一批檔] [test:t_choice_scan_batch_no_ignore]
+   PITFALL:choice-kill 對不唯一的行印給人照貼的 lint-waive 指令,檔名含 $(…) 或空白時貼進 shell 會執行檔名裡的指令或把參數切開 [出處:code-改動選擇點 r4 s1] [根因:照貼指令組檔名沒走 _sh_quote,只過 _kill_esc(只跳脫控制字元,不管 shell 特殊字元)] [修法:整個 choice:<檔>:<行> 參數交 _sh_quote(同 situation-rule --point 那處),外層仍過 _kill_esc;同族掃過選擇點區段,真實檔名組進照貼指令的只有這一處] [test:t_choice_kill_waive_hint_shell_quote]
+   WHY:choice-kill 的合併快篩預設開,`--no-merge` 或環境變數 `LUMOS_SKIP_CHOICE_MERGE` 恰好是 1(其他值與沒設一樣)時關、回到逐支流程;choice-kill 建 _KillMerge 傳給 cmd_guard_kill,並把它的 on_signal 掛成第一個訊號的回呼;每個壞法那筆帳多 judged(每個有配方的平台組都由快篩判全部存活 → merged,否則 single;缺 judged 的舊帳與人裁那筆讀成 single),run 那筆多 merged、single(加上依覆蓋判存活的 cov_judged 相加等於這次判定數;依覆蓋判的那筆 judged 是 cov,見 [[Projects/選擇點存活回指條款_計劃]] 代碼審 r1 F8)、merge_tripped、base_secs(量了就無條件進位,沒量是 0),gov 的 ck 子字典帶出這些與 ran;choice-points 對最新一筆是合併判存活的行印「存活(合併快篩判)」;`--only` 指到已放行的行多印一行「不會重跑、要先撤放行」,跳過規則不改 [出處:[[Projects/選擇點變異加速_計劃]] 做法 5、〈回退〉] [因:合併只會多記存活不會記殺掉,存活在推送閘要人處置;人要找得出哪幾行先用 --no-merge --only 驗,RETIRE-IF 要讀判法與秒數] [不選:合併判法另開版本欄 merge_ver 與作廢(第二輪後的形狀用不著)] [test:t_choice_kill_merge_ledger_counts]
+   WHY:choice-kill 每個壞法那筆帳多 merge_kind({平台: pass|fail|compile|unclean|none},沒跑快篩記 none)與 single_runs(壞法階段逐支呼叫次數;開頭量基準、合併判存活交的列、略過與基準不綠不算:cmd_guard_kill 在選用參數下給逐支跑出的列標 _ran_solo、on_row 交 ran_solo),run 那筆多 merge_unclean({平台: {原因: 次數}})與 merge_off({平台: 不合併的原因},由 _KillMerge.plats 裡沒啟用、原因不是斷路器的平台組算出),沒有就空字典;型別登記進 _GOV_FIELD_TYPES,gov 的 ck 子字典帶出,缺欄的舊帳讀成空字典(每個平台都當 none)與 0 [出處:[[Projects/選擇點變異加速第二段_計劃]] 做法 1、3、4] [因:RETIRE-IF 要量先紅順序省了多少、斷路器為什麼跳、哪些平台組不合併] [test:t_choice_kill_merge_event_fields] [test:t_choice_kill_merge_unclean_reasons] [test:t_choice_kill_merge_off_reasons]
+   WHY:choice-kill 每個壞法那筆帳多 merge_why({平台: 快篩沒跑乾淨的原因},只列沒跑乾淨的平台、沒有就不帶),run 那筆多 merge_trips、merge_reopen({平台: 斷路器跳開次數、試探恢復次數},都是 0 的平台不記);gov 讀帳 merge_why 放壞法那筆的 ck、另兩欄放 run 那筆的 ck,缺欄讀成空字典 [出處:[[Projects/選擇點變異加速第三段_計劃]] 做法 2、4] [因:2026-11-25 完整跑法中途停掉,run 那筆沒寫出來、沒跑乾淨的原因整個不見;壞法那筆每個壞法跑完就寫] [test:t_choice_kill_merge_unclean_code]
+   WHY:choice-kill run 那筆多 merge_init_off({平台: 帶事件初始化腳本的合併基準不通過的原因},不帶重試通過才記;沒有就空字典),merge_why 與 merge_unclean 多一種值「逾時(跑到測試後掛住)」;gov 讀帳 merge_init_off 放 run 那筆的 ck、缺欄讀成空字典 [出處:[[Projects/選擇點變異加速第四段_計劃]] 做法 1、3] [因:腳本被 Gradle 拒收時要留得下原因,RETIRE-IF ③ 靠它判腳本寫法有沒有問題] [test:t_choice_kill_merge_events_cmd]
+   WHY:choice-kill 判存活與 choice-points 讀帳是存活時,那一行底下多印型錄那一列「為什麼行為不同」欄(空、「—」、「(無)」不印);第三批起這一欄寫成業務問題,人看到存活就知道要拍板什麼;只換輸出、不改判定與擋不擋 [出處:[[Projects/選擇點對應需求路線_計劃]]〈優先序調整〉低成本第一件] [因:存活那行原本只印列號、類別與壞法,人得自己翻型錄] [不選:等第 1 步的覆蓋與判讀做完才一起印(使用者裁低成本兩件不等第 1 步)] [test:t_choice_survivor_why]
+   WHY:choice-kill 在守的測試所在平台設定 coverage: true(load_platforms 帶進平台資料,舊單平台 test 節同樣讀,不是布林丟 ValueError)、沒帶 --no-cov 時建準備物件交給 guard-kill:逐測試掛 JaCoCo 量覆蓋基準、一次 Gradle 呼叫在 Gradle 程序裡用 JaCoCo 分析 API 讀全部覆蓋資料檔、只輸出壞法那幾行被哪些測試經過;每個壞法行記一筆 reach(clause 列經過的條款/none/unknown 附原因),clause 只跑經過的條款測試、none 不跑直接記存活 via cov、unknown 跑全部守的測試 [出處:[[Projects/選擇點存活回指條款_計劃]] 範圍 1–4;PIT https://pitest.org/quickstart/basic_concepts ;論文 https://arxiv.org/pdf/2102.11378] [因:沒有測試經過的行壞法殺不掉,跑了白跑;經過的條款也是存活往哪條補的線索] [不選:覆蓋分類當存活的最終分類;條款經過用全部測試的覆蓋算] [test:t_choice_cov_reach_clause] [test:t_choice_cov_none_skips]
+-  WHY:覆蓋可信看專案類別有紀錄數:lumos 自己用 Python 讀 JaCoCo exec 二進位格式(_choice_cov_exec_classes),數類別名所在套件是改到的原始檔 package 宣告(沒有宣告是預設套件)而且有探針為真的類別;是不是 Robolectric 測試看那支的覆蓋資料有沒有 org/robolectric/ 開頭的類別(不看原始碼:AndroidJUnit4 與繼承基底類別的寫法沒有 runner 字樣,代碼審 r1 F2),Robolectric 測試的 0 不可信、一般 JUnit 的 0 是真的沒碰;前 5 支 Robolectric 測試(不足就全部,量完才判)都是 0 就斷路、連續 3 支掛覆蓋紅不掛綠也斷路(r1 F3)、run 那筆 cov tripped、壞法跑全部;inline fun、const val、頂層與 companion 屬性初始值、分析時沒有指令紀錄的行一律不明 [出處:[[Projects/選擇點存活回指條款_計劃]]〈用詞〉覆蓋可信、覆蓋例外、範圍 2 ③;2026-11-26 實驗專案實測設定失效 0、正確 345] [因:設定沒生效時不報錯,不擋就會把全部行當成沒有條款經過而直接記存活] [test:t_choice_cov_unknown] [test:t_choice_cov_breaker]
++  WHY:覆蓋可信看專案類別有紀錄數:lumos 自己用 Python 讀 JaCoCo exec 二進位格式(_choice_cov_exec_classes),數類別名所在套件是平台主程式的 package 宣告(平台根底下 .kt、.java,跳過共用跳過清單與 src 底下的測試資料夾;沒有宣告是預設套件)而且有探針為真的類別;是不是 Robolectric 測試看那支的覆蓋資料裡建 Android 環境的類別(AndroidTestEnvironment、AndroidSandbox、SdkEnvironment)有沒有執行紀錄(不看原始碼:AndroidJUnit4 與繼承基底類別的寫法沒有 runner 字樣,代碼審 r1 F2;不看任一 org/robolectric/ 類別:runner 類別每支測試都載入,第一段放行後實測),Robolectric 測試的 0 不可信、一般 JUnit 的 0 是真的沒碰;前 5 支 Robolectric 測試(不足就全部,量完才判)都是 0 就斷路、連續 3 支掛覆蓋紅不掛綠也斷路(r1 F3)、run 那筆 cov tripped、壞法跑全部;inline fun、const val、頂層與 companion 屬性初始值、分析時沒有指令紀錄的行一律不明 [出處:[[Projects/選擇點存活回指條款_計劃]]〈用詞〉覆蓋可信、覆蓋例外、範圍 2 ③;2026-11-26 實驗專案實測設定失效 0、正確 345] [因:設定沒生效時不報錯,不擋就會把全部行當成沒有條款經過而直接記存活] [test:t_choice_cov_unknown] [test:t_choice_cov_breaker]
+   WHY:依覆蓋判的存活 tests_sha 寫成 cov: 加守的測試雜湊、另帶 cov_sha(守的測試雜湊、那支檔 blob、new_sha、覆蓋初始化腳本版本的雜湊,讀端不跑覆蓋就算得出);帶過去只在這次也開覆蓋而且 cov_sha 相同,舊判法照 tests_sha 比一定對不上、一定重跑 [出處:[[Projects/選擇點存活回指條款_計劃]] 範圍 3、6;設計審 r3 回滾席] [因:回退或關覆蓋後不能留下沒跑過壞法的存活] [test:t_choice_cov_carry]
+   WHY:reach、reach-run 是 choice-kill 閘的新 kind:_choice_ledger_index 照舊只收 kind choice-kill,另由 _choice_ledger_aux 收(先只收 reach,同鍵取最後一筆型別對的);choice-points 存活列後面印覆蓋分類加未判讀(最新一筆 reach 的 cov_sha 等於現在算的)或未分類;gov 選擇點段多一行依覆蓋判存活與依覆蓋判存活後改跑,不算進第一次判定;LOOP_NOT_CLOSE_EVENTS 與 _GOV_FIELD_TYPES 登記新 kind 與欄位 [出處:[[Projects/選擇點存活回指條款_計劃]] 範圍 4、6、10] [因:舊讀者讀到新 kind 不受影響,新讀者讀舊帳印未分類] [test:t_choice_aux_readers] [test:t_choice_reach_points]
+-  WHY:覆蓋的續跑快取存每支測試的覆蓋資料檔(不是分析結果),放 .lumos/note-audit/choice-cov/<at_sha>/,鍵含平台、測試名、測試所在檔 blob、初始化腳本版本,只留最近 2 個 at_sha;--reach-only 只對存活而沒有有效 reach(或暫時性 unknown)的行補 reach、不寫判定、記 reach-run,跟 --no-cov、--only、--max-mutants、--no-merge 同給 rc 2 [出處:[[Projects/選擇點存活回指條款_計劃]] 範圍 2 續跑快取、範圍 7] [因:中斷後同一個 at_sha 接著跑不重量;分析每次對當下這批壞法重做,換一行也分析得到] [test:t_choice_cov_resume] [test:t_choice_reach_only]
++  WHY:覆蓋的續跑快取存每支測試的覆蓋資料檔(不是分析結果)與綠基準(同名 .base.json;兩個都在才取用,舊快取只有覆蓋資料檔就刪掉重量),放 .lumos/note-audit/choice-cov/<at_sha>/,鍵含平台、測試名、測試所在檔 blob、初始化腳本版本,只留最近 2 個 at_sha;--reach-only 只對存活而沒有有效 reach(或暫時性 unknown)的行補 reach、不寫判定、記 reach-run,跟 --no-cov、--only、--max-mutants、--no-merge 同給 rc 2 [出處:[[Projects/選擇點存活回指條款_計劃]] 範圍 2 續跑快取、範圍 7] [因:中斷後同一個 at_sha 接著跑不重量;分析每次對當下這批壞法重做,換一行也分析得到] [test:t_choice_cov_resume] [test:t_choice_cov_resume_old_cache] [test:t_choice_reach_only]
+   WHY:覆蓋指紋 cov_sha 寫端(choice-kill)與讀端(choice-points)走同一支 _choice_cov_sha_fn;守的測試雜湊或那支檔 blob 帶不明標記時算不出來(None),帶過去與 reach 有效都判成不同,跟舊路徑雜湊帶不明標記就重跑同一條規則;沒開覆蓋的 choice-kill 與沒有存活行的 choice-points 不算 [出處:代碼審 code-選擇點存活回指條款第一段 r1 F1、F7(正確性 c2、邊界 b2、合約 k1、通才 g1、資源 s4)] [因:不明照樣雜湊時兩次都是同一個值,補了測試也被帶過去] [test:t_choice_cov_carry]
+   PITFALL:合併快篩的結果資料夾偶爾多一個沒有案例的空殼 JUnit 檔(tests="0"、時間戳 1970、只有 system-err 的背景輸出,例 Robolectric 的 CloseGuard 警告),原本整次判「結果檔讀不出來(zero_cases)」、整個平台組關掉合併改逐支,實驗專案 40 個壞法因此拖到 3 小時 [出處:選擇點存活回指第一段放行後 2026-11-26 實驗專案現場] [根因:Gradle 把測試類別跑完之後背景執行緒印的輸出歸到一個空 testsuite] [修法:_choice_merge_ghost_suite 認得的空殼(宣告與元素都沒有案例、錯誤、失敗)略過,全部都是空殼才算 zero_cases;每支目標測試照樣要恰好對到一筆] [test:t_choice_merge_stray_empty_suite]
+   PITFALL:choice-kill 開了覆蓋時,覆蓋可信檢查原本只拿改到的檔的套件當專案類別、又把覆蓋資料裡有任一 org/robolectric/ 類別的測試都當 Robolectric,實驗專案一跑前 5 支就斷路或整行判覆蓋接不起來,覆蓋選測試等於沒作用 [出處:選擇點存活回指第一段放行後 2026-11-26 實驗專案實測(漏網帳已記)] [根因:專案用 Robolectric 時每支測試都載入 runner 類別;Robolectric 測試常只碰別的套件] [修法:專案類別改看平台主程式全部 package(_choice_cov_src_pkgs);Robolectric 改看建 Android 環境的類別有執行紀錄] [test:t_choice_cov_proj_pkgs]
+   PITFALL:續跑快取只存覆蓋資料時,取快取的測試沒有基準,合併快篩把它們逐支重量(實驗專案 169 支 689 秒),快取省不到時間 [出處:選擇點存活回指第一段放行後 2026-11-26 實測] [根因:基準只在這次量的那幾支寫進基準快取] [修法:綠基準跟覆蓋資料一起存成 .base.json,取用時一起放回] [test:t_choice_cov_resume]
+ related:
+   - "[[Projects/規格閘不把不做節的詞算進風險_計劃]]"
+ verified_by:
+   - "[[Verification/2026-11-15_改動選擇點真實Android端到端驗收]]"
+   - "[[Verification/2026-11-17_選擇點第二批上線前實測]]"
+ ---
+diff --git a/scripts/lumos b/scripts/lumos
+index 66633cc79..fc985e12d 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -29080,20 +29080,21 @@ class _KillPrep:
+     建好隔離工作樹、跑任何配方之前呼叫 run(現場) 一次(跟合併快篩開不開無關)。這一段做 ② 覆蓋基準(_kill_measure_singles 加覆蓋初始化腳本,結果進
+     guard-kill 的基準快取;每支的步驟在 _KillCovBase)、③ 斷路器、④ 一次 Gradle 呼叫的分析、⑥ 回傳依覆蓋選過的配方並呼叫 on_done(平台, {group: 那一行在這個平台組的分類});
+     ① 合批編譯檢查與 ⑤ 抽查是第二段的事,這裡沒有(_lines 之前與之後是它們的位置)。
+     帶進去:deadline(總時限的期限,monotonic)、cov(開了覆蓋的平台集合)、req({group: _choice_cov_req 那一筆})、on_done、cache(續跑快取資料夾或 None)、
+     blob_of({(平台, 測試名): 測試所在檔物件編號},續跑快取的鍵)。帶出來:state({平台: on|tripped|off})、secs(花的秒數)、interrupted(第一個訊號來過)。"""
+ 
+     def __init__(self, deadline, cov, req, on_done, cache=None, blob_of=None):
+         self.deadline, self.cov, self.req, self.on_done = deadline, set(cov), dict(req), on_done
+         self.cache, self.blob_of = cache, dict(blob_of or {})
+         self.state, self.secs, self.interrupted = {}, 0.0, False
++        self._src_pkgs = {}   # 平台根 → 主程式套件集合(_measure 每個平台組都用,只掃一次)
+ 
+     def remaining(self):
+         return self.deadline - time.monotonic()
+ 
+     def on_signal(self):
+         """第一個終止訊號:當場收掉覆蓋基準、不掛重跑、分析這幾種帶標記的呼叫(_kill_signal_marked)。"""
+         _kill_signal_marked(self)
+ 
+     def run(self, c):
+         """一個平台組 → 這組要跑的配方(依覆蓋選過);途中收到訊號丟 _KillHalt(guard-kill 照現在停,不寫 reach)。"""
+@@ -29132,21 +29133,24 @@ class _KillPrep:
+             return None
+         return os.path.join(str(self.cache), _choice_sha(f"{plat}\n{name}\n{sig}\n{_CHOICE_COV_INIT_VER}", 24) + ".exec")
+ 
+     def _measure(self, c, names, groups):
+         """覆蓋基準與分析 → (每支測試不明的原因 {名: 原因或空字串}, {名: 經過的 group 集合}, 沒有指令紀錄的 group 集合)。
+         步驟:接得起來嗎(_KillCovBase.start)→ 續跑快取(cached)→ 量覆蓋基準(_kill_measure_singles 帶 wrap、after)→ 收尾補原因(settle)→ 分析(_analyze)。"""
+         if c.plat not in self.cov:
+             self.state.setdefault(c.plat, "off")
+             return {n: "沒開覆蓋" for n in names}, {}, set()
+         self.state[c.plat] = "on"
+-        pkgs = {self.req[g]["pkg"] for g in groups} | _choice_cov_src_pkgs(c.pentry["root"])   # 平台主程式全部的套件,不只這次改到的(第一段放行後實測)
++        root = str(c.pentry["root"])
++        if root not in self._src_pkgs:   # 一個平台根只掃一次(補修代碼審 r1 資源 r1)
++            self._src_pkgs[root] = _choice_cov_src_pkgs(root)
++        pkgs = {self.req[g]["pkg"] for g in groups} | self._src_pkgs[root]   # 平台主程式全部的套件,不只這次改到的(第一段放行後實測)
+         cb = _KillCovBase.start(self, c, names, pkgs)
+         if cb is None:
+             print(f"⚠ {_kill_esc(c.plat)}:這次接不起逐測試覆蓋(run_cmd 要是帶模組的 test<變體>UnitTest 任務),壞法跑全部守的測試", file=sys.stderr)
+             return {n: "覆蓋接不起來" for n in names}, {}, set()
+         todo = cb.cached()
+         _kill_measure_singles(c, todo, cb.cmd_of(todo), self.remaining, wrap=cb.wrap, after=cb.after)
+         cand = cb.settle()
+         if not cand:
+             return cb.why, {}, set()
+         hits, nolines, bad = self._analyze(c, cb.shape, cb.variant, cand, cb.got, groups)
+@@ -29229,21 +29233,21 @@ class _KillCovBase:
+ 
+     def breaker(self, cnt, robo, final=False):
+         """③ 斷路器:前 _CHOICE_COV_BREAKER 支 Robolectric 測試(看覆蓋資料認;不足 _CHOICE_COV_BREAKER 支就是全部,量完才判)的專案類別有紀錄數都是 0 → 斷路。"""
+         if cnt is not None and robo and not self.tripped:
+             self.seen.append(cnt)
+         need = len(self.seen) if final else _CHOICE_COV_BREAKER
+         if not self.tripped and self.seen and len(self.seen) >= need and not any(self.seen[:need]):
+             self.trip("覆蓋接不起來", f"前 {need} 支 Robolectric 測試的覆蓋資料裡專案類別有紀錄數都是 0(覆蓋設定沒生效)")
+ 
+     def take(self, n, data, dst):
+-        """一份覆蓋資料檔已經在 dst(或 dst 是 None:存不下來):記 got、數專案類別、看是不是 Robolectric(覆蓋資料有 org/robolectric/ 類別);
++        """一份覆蓋資料檔已經在 dst(或 dst 是 None:存不下來):記 got、數專案類別、看是不是 Robolectric(_choice_cov_exec_robo:建 Android 環境的類別有執行紀錄);
+         Robolectric 的 0 是設定沒生效,不是沒碰專案類別(非 Robolectric 的 0 是真的)→ (專案類別有紀錄數或 None, 是不是 Robolectric)。"""
+         cnt = _choice_cov_proj_hits(data, self.pkgs) if data is not None else None
+         robo = bool(_choice_cov_exec_robo(data)) if cnt is not None else False
+         if dst is None or cnt is None:
+             self.why[n] = "覆蓋資料沒產出"
+             return None, False
+         self.got[n] = dst
+         self.any_proj = self.any_proj or cnt > 0
+         if cnt == 0 and robo:
+             self.why[n] = "覆蓋接不起來"
+@@ -29309,25 +29313,28 @@ class _KillCovBase:
+     def robo_zero(self, data):
+         """這份覆蓋資料是 Robolectric、專案類別有紀錄數 0(設定沒生效的樣子)→ 真;讀不出來算假(take 另記沒產出)。"""
+         return _choice_cov_proj_hits(data, self.pkgs) == 0 and bool(_choice_cov_exec_robo(data))
+ 
+     def store(self, n, data, keep=True, base=None):
+         """覆蓋資料檔存進續跑快取(沒有快取、或 keep 為假就放 scratch;原子寫入走 _write_bytes_atomic,代碼審 r2 架構對齊 a2)→ 路徑或 None。
+         keep 為假:Robolectric 的專案類別有紀錄數 0(設定沒生效)不進快取,免得下次續跑讀回同一份壞資料、重補永遠補不回來(r2 邊界 b4)。"""
+         dst = (self.prep._cache_path(self.c.plat, n) if keep else None) or os.path.join(self.c.scratch, f"lumos-cov-{len(self.got)}.exec")
+         try:
+             _write_bytes_atomic(Path(dst), data)
+-            if keep and base is not None and dst.endswith(".exec"):   # 連這支的綠基準一起存,續跑取用時不必再量(_choice_cov_base_read)
+-                _write_bytes_atomic(Path(_choice_cov_base_path(dst)), json.dumps(
+-                    {"rc": base[0], "tail": base[1][-_CHOICE_COV_BASE_TAIL:], "el": base[2], "to": bool(base[3])}).encode("utf-8"))
+         except OSError:
+             return None
++        if keep and base is not None and dst.endswith(".exec"):   # 連這支的綠基準一起存,續跑取用時不必再量(_choice_cov_base_read)
++            try:   # 基準存不下只是下次續跑要重量,這次的覆蓋資料照用(補修代碼審 r1 邊界 b3)
++                _write_bytes_atomic(Path(_choice_cov_base_path(dst)), json.dumps(
++                    {"rc": base[0], "tail": base[1][-_CHOICE_COV_BASE_TAIL:], "el": base[2], "to": bool(base[3])}).encode("utf-8"))
++            except OSError:
++                pass
+         return dst
+ 
+     def red_rerun(self, n, res, cap):
+         """掛覆蓋紅:被剩下時限截斷就記時間不夠、照回;否則不掛再跑一次(帶當場收的標記、上限照剩下的總時限重算),綠就用這次當基準、覆蓋算不明(掛覆蓋才紅),
+         紅記基準不綠;連續 _CHOICE_COV_RED_BREAKER 支掛覆蓋才紅就斷路(代碼審 r1 F3),掛覆蓋跑滿單支上限而不掛綠當場斷路。
+         回傳 6 項:(rc, 輸出, 秒, 逾時, 兩趟加起來的秒數(_kill_measure_singles 估剩下的用), 被剩下時限截斷)。"""
+         if res[3] and cap < self.full:
+             self.why[n] = "時間不夠"
+             return (*res, res[2], True)
+         pcap = min(self.full, max(self.prep.remaining(), 1.0))
+@@ -79778,71 +79785,88 @@ def _jacoco_varint(b, i):
+         c = b[i]
+         i += 1
+         cnt |= (c & 0x7F) << sh
+         sh += 7
+         if not c & 0x80:
+             return cnt, i
+         if sh > 35:
+             return None, i
+ 
+ 
+-_CHOICE_COV_SRC_SKIP = frozenset(("build", ".gradle", ".git", ".idea", "node_modules", "test", "androidTest", "testFixtures"))
+-_CHOICE_COV_SRC_MAX = 20000          # 掃主程式套件最多看幾支檔(超過就停在那裡,已收的照用)
+-_CHOICE_COV_PKG_RE = re.compile(r"^[ \t]*package[ \t]+([\w.]+)", re.M)
++_CHOICE_COV_SRC_SKIP = frozenset(CODE_SKIP_DIRS | {".gradle"})   # 共用跳過清單再加 Gradle 自己的快取資料夾
++_CHOICE_COV_SRC_MAX = 20000          # 掃主程式套件最多看幾支 .kt、.java(超過就停,已收的照用並印一行提醒)
++_CHOICE_COV_SRC_ENTRIES = 200000     # 走訪最多看幾個檔(含非原始碼),超過一樣停
++_CHOICE_COV_SRC_HEAD = 8192          # 每支只讀開頭這麼多位元組找 package
++_CHOICE_COV_PKG_RE = re.compile(r"^[ \t\ufeff]*package[ \t]+([\w.`]+)", re.M)
++
++
++def _choice_cov_test_srcset(parent, name):
++    """src 底下的測試原始碼資料夾:test、androidTest 開頭(含變體 testDebug、androidTestFree、testFixtures)或 Test 結尾(多平台 jvmTest、commonTest)。
++    只在上一層叫 src 時算,主程式裡叫 test 的套件資料夾不跳。"""
++    return os.path.basename(parent) == "src" and (name.startswith(("test", "androidTest")) or name.endswith("Test"))
+ 
+ 
+ def _choice_cov_src_pkgs(root):
+-    """平台主程式的套件(〈用詞〉專案類別):root 底下 .kt、.java 檔的 package 宣告(斜線分隔;每支只讀開頭 8KB);跳過 build、.gradle、版控與 IDE 資料夾,
+-    也跳過 test、androidTest、testFixtures 這類測試原始碼資料夾(測試自己的類別不算專案類別);符號連結的資料夾不跟。最多看 _CHOICE_COV_SRC_MAX 支,
+-    讀不到的檔略過 → 套件集合。"""
+-    out, seen = set(), 0
+-    for d, subs, files in os.walk(str(root)):
+-        subs[:] = [s for s in subs if s not in _CHOICE_COV_SRC_SKIP and not os.path.islink(os.path.join(d, s))]
++    """平台主程式的套件(〈用詞〉專案類別):root 底下 .kt、.java 檔的 package 宣告(斜線分隔;每支只讀開頭 _CHOICE_COV_SRC_HEAD;反引號與檔首 BOM 去掉)。
++    跳過共用的 CODE_SKIP_DIRS 加 .gradle、src 底下的測試原始碼資料夾(_choice_cov_test_srcset;測試自己的類別不算專案類別);不跟符號連結、只開一般檔。
++    看滿 _CHOICE_COV_SRC_MAX 支原始碼或 _CHOICE_COV_SRC_ENTRIES 個檔就停、印一行提醒(漏收的套件只會讓那幾支被判不明,方向是多跑)→ 套件集合。"""
++    out, seen, entries = set(), 0, 0
++    for d, subs, files in os.walk(str(root), followlinks=False):
++        subs[:] = [s for s in subs if s not in _CHOICE_COV_SRC_SKIP and not _choice_cov_test_srcset(d, s)]
+         for f in files:
++            entries += 1
++            if f.endswith((".kt", ".java")):
++                seen += 1
++            if seen > _CHOICE_COV_SRC_MAX or entries > _CHOICE_COV_SRC_ENTRIES:
++                print(f"⚠ 掃主程式套件看滿上限({_CHOICE_COV_SRC_MAX} 支原始碼或 {_CHOICE_COV_SRC_ENTRIES} 個檔),後面的套件沒收;只碰那些套件的測試會判成不明、照跑",
++                      file=sys.stderr)
++                return out
+             if not f.endswith((".kt", ".java")):
+                 continue
+-            seen += 1
+-            if seen > _CHOICE_COV_SRC_MAX:
+-                return out
++            fp = os.path.join(d, f)
+             try:
+-                with open(os.path.join(d, f), "rb") as fh:
+-                    head = fh.read(8192).decode("utf-8", "replace")
++                if os.path.islink(fp) or not os.path.isfile(fp):
++                    continue
++                with open(fp, "rb") as fh:
++                    head = fh.read(_CHOICE_COV_SRC_HEAD).decode("utf-8", "replace")
+             except OSError:
+                 continue
+             m = _CHOICE_COV_PKG_RE.search(head)
+-            out.add(m.group(1).replace(".", "/") if m else "")
++            out.add(m.group(1).replace("`", "").replace(".", "/") if m else "")
+     return out
+ 
+ 
+ _CHOICE_COV_BASE_TAIL = 4000   # 快取的基準只留輸出尾巴這麼多字(guard-kill 只用尾巴的最後 200 字與失敗摘錄)
++_CHOICE_COV_BASE_MAX = 65536   # 基準檔的讀取上限
+ 
+ 
+ def _choice_cov_base_path(exec_path):
+     """續跑快取裡一支測試的覆蓋資料檔 → 同名的基準檔路徑(.exec 換成 .base.json)。"""
+     return exec_path[:-len(".exec")] + ".base.json" if exec_path.endswith(".exec") else exec_path + ".base.json"
+ 
+ 
+ def _choice_cov_base_read(exec_path):
+     """續跑快取裡那支測試的基準 → (rc, 輸出尾巴, 秒數, 逾時, 不確定) 或 None:檔不在、讀不出來、超過 64KB、不是 JSON 物件、欄位型別不對、
+     不是綠的(rc 不是 0 或逾時)都回 None(呼叫端刪掉、這支重量)。不確定一律 False:存的時候是同一個 at_sha 的乾淨量測。"""
+-    p = _choice_cov_base_path(exec_path)
++    import math
++    raw = _choice_cov_read(_choice_cov_base_path(exec_path))
++    if raw is None or len(raw) > _CHOICE_COV_BASE_MAX:
++        return None
+     try:
+-        if not os.path.isfile(p) or os.path.getsize(p) > 65536:
+-            return None
+-        with open(p, encoding="utf-8") as fh:
+-            doc = json.load(fh)
+-    except (OSError, ValueError):
++        doc = json.loads(raw.decode("utf-8"))
++        el = float(doc["el"]) if isinstance(doc, dict) and type(doc.get("el")) in (int, float) else None
++    except (ValueError, OverflowError):
+         return None
+-    if (not isinstance(doc, dict) or type(doc.get("rc")) is not int or not isinstance(doc.get("tail"), str)
+-            or type(doc.get("el")) not in (int, float) or type(doc.get("to")) is not bool or doc["rc"] != 0 or doc["to"]):
++    if (el is None or not math.isfinite(el) or el < 0 or type(doc.get("rc")) is not int or not isinstance(doc.get("tail"), str)
++            or type(doc.get("to")) is not bool or doc["rc"] != 0 or doc["to"]):
+         return None
+-    return (0, doc["tail"], float(doc["el"]), False, False)
++    return (0, doc["tail"], el, False, False)
+ 
+ 
+ def _choice_cov_proj_hits(data, pkgs):
+     """專案類別有紀錄數(〈用詞〉):類別名所在的套件資料夾(類別名去掉最後一段)在 pkgs(平台原始碼的套件資料夾,斜線分隔)裡、而且有任一探針為真的類別數;
+     讀不成回 None。lumos 自己用 Python 讀,不經 Gradle(每支跑完當場算,設定沒生效時 Robolectric 測試是 0;2026-11-26 實測)。"""
+     cl = _choice_cov_exec_classes(data)
+     if cl is None:
+         return None
+     return sum(1 for name, hit in cl if hit and name.rpartition("/")[0] in pkgs)
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b4c0c56eb..b159a4983 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -150156,25 +150156,27 @@ def t_choice_cov_robo_exec():
+         _ck_cleanup(*roots, tmp)
+     m = _load_lumos_inproc()
+     ns = {}
+     exec(_CKC_JX, ns)
+     p = Path(tempfile.gettempdir()) / f"gctl-ckc-robo-{_os_mod.getpid()}.exec"
+     try:
+         ns["_jx_write"](str(p), "a", [("x/Vm", [True]), ("org/robolectric/android/internal/AndroidTestEnvironment", [True])])
+         a = m._choice_cov_exec_robo(p.read_bytes())
+         ns["_jx_write"](str(p), "a", [("x/Vm", [True]), ("org/robolectric/internal/AndroidSandbox$1", [True])])
+         a2 = m._choice_cov_exec_robo(p.read_bytes())
++        ns["_jx_write"](str(p), "a", [("x/Vm", [True]), ("org/robolectric/internal/SdkEnvironment", [True])])
++        a3 = m._choice_cov_exec_robo(p.read_bytes())
+         ns["_jx_write"](str(p), "a", [("x/Vm", [True]), ("org/robolectric/internal/SandboxTestRunner", [True]), ("org/robolectric/RobolectricTestRunner", [True]),
+                                        ("org/robolectric/android/internal/AndroidTestEnvironment", [False])])
+         b = m._choice_cov_exec_robo(p.read_bytes())
+-        check("F2/實測 建立 Android 環境的類別(AndroidTestEnvironment、AndroidSandbox)有執行紀錄才算 Robolectric;只有 runner 類別或環境類別沒執行不算",
+-              (a, a2, b) == (True, True, False), f"{a} {a2} {b}")
++        check("F2/實測 建立 Android 環境的類別(AndroidTestEnvironment、AndroidSandbox、SdkEnvironment)有執行紀錄才算 Robolectric;只有 runner 類別或環境類別沒執行不算",
++              (a, a2, a3, b) == (True, True, True, False), f"{a} {a2} {a3} {b}")
+     finally:
+         p.unlink(missing_ok=True)
+ 
+ 
+ def t_choice_cov_red_breaker():
+     """[選擇點存活回指 代碼審 r1 F3(資源 s1、s2、邊界 b6)] 連續 3 支「掛覆蓋紅、不掛綠」就斷路:第 4 支起不帶覆蓋初始化腳本、run cov tripped、
+     原因掛覆蓋才紅;壞法照跑(存活不是跑不出結果)。中間有一支掛覆蓋綠就重算。
+     翻紅釘:掛覆蓋紅不算進任何煞車 → 第 4 支也帶覆蓋而紅;連續數不歸零 → 第二案斷路而紅。"""
+     tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+     roots = []
+@@ -150399,20 +150401,121 @@ def t_choice_cov_proj_pkgs():
+         reach = _ckc_reach(root)
+         check("實測 Robolectric 只碰沒改的主程式套件 → 不斷路、6 支都掛覆蓋、reach clause", run_ev.get("cov") == "on" and len(_ckc_cov(log)) == 6
+               and len(reach) == 1 and reach[0].get("reach") == "clause", f"{run_ev.get('cov')} {_ckc_cov(log)} {reach}\n{r.stderr[-500:]}")
+         m = _load_lumos_inproc()
+         got = m._choice_cov_src_pkgs(root)
+         check("實測 主程式套件收 x 與 y、不收測試目錄的 z", {"x", "y"} <= got and "z" not in got, str(got))
+     finally:
+         _ck_cleanup(*roots, tmp)
+ 
+ 
++def t_choice_cov_src_pkgs_edges():
++    """[選擇點存活回指 補修代碼審 r1 架構 a1、邊界 b1 b2、資源 r2 r3] 掃主程式套件的邊界:主程式裡叫 test 的套件資料夾照收;src 底下的變體測試資料夾
++    (testDebug、androidTestFree、jvmTest)與共用跳過清單(build、vendor)不收;檔首 BOM 與反引號套件名照收;符號連結檔與具名管道不開;看滿上限就停並提醒。
++    判準來源:Android 官方〈Advanced test setup〉變體測試資料夾放 src/test<變體>、src/androidTest<變體>;計劃〈用詞〉專案類別。
++    翻紅釘:跳過清單在任何深度比對字面 test → com/a/test 漏收而紅;不去 BOM → bom 套件變預設套件而紅;不檢查一般檔 → 開具名管道卡住。"""
++    import shutil
++    import io, contextlib
++    m = _load_lumos_inproc()
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-pkgs-"))
++    outside = Path(tempfile.mkdtemp(prefix="gctl-ckc-pkgs-out-"))
++    try:
++        files = {"app/src/main/java/com/a/test/T.kt": "package com.a.test\n", "app/src/main/java/bom/B.kt": "\ufeffpackage bom.x\n",
++                 "app/src/main/java/bt/C.kt": "// 授權\n@file:JvmName(\"C\")\npackage `bt`.y\n",
++                 "app/src/testDebug/java/td/D.kt": "package td\n", "app/src/androidTestFree/java/af/E.kt": "package af\n",
++                 "lib/src/jvmTest/kotlin/jt/F.kt": "package jt\n", "app/build/gen/G.kt": "package gen\n", "vendor/v/H.java": "package v;\n"}
++        for rel, txt in files.items():
++            (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
++            (tmp / rel).write_text(txt, encoding="utf-8")
++        real = outside / "S.kt"
++        real.write_text("package outside.sym\n", encoding="utf-8")
++        (tmp / "app/src/main/java/sym.kt").symlink_to(real)
++        (tmp / "app/src/main/java/symdir").symlink_to(outside, target_is_directory=True)
++        if hasattr(_os_mod, "mkfifo"):
++            _os_mod.mkfifo(tmp / "app/src/main/java/pipe.kt")
++        got = m._choice_cov_src_pkgs(tmp)
++        want_in, want_out = {"com/a/test", "bom/x", "bt/y"}, {"td", "af", "jt", "gen", "v", "outside/sym"}
++        check("補修 主程式 test 套件、BOM、反引號照收;變體測試資料夾、多平台測試、build、vendor、符號連結(檔與資料夾)不收", want_in <= got and not (got & want_out),
++              str(got))
++        old = m._CHOICE_COV_SRC_MAX
++        m._CHOICE_COV_SRC_MAX = 1
++        try:
++            buf = io.StringIO()
++            with contextlib.redirect_stderr(buf):
++                cut = m._choice_cov_src_pkgs(tmp)
++        finally:
++            m._CHOICE_COV_SRC_MAX = old
++        check("補修 看滿上限就停、印一行提醒", len(cut) <= 1 and "上限" in buf.getvalue(), f"{cut} {buf.getvalue()!r}")
++    finally:
++        shutil.rmtree(tmp, ignore_errors=True)
++        shutil.rmtree(outside, ignore_errors=True)
++
++
++def t_choice_cov_base_read_rejects():
++    """[選擇點存活回指 補修代碼審 r1 通才 g1、邊界 b3、架構 a3] 續跑快取的基準檔:只收 rc 0、沒逾時、秒數是有限非負數、輸出尾巴是字串的 JSON 物件;
++    缺檔、壞 JSON、陣列、rc 1、逾時、rc 是 True、秒數是字串、超大整數、NaN、負數、超過上限都回 None(呼叫端刪掉重量,不崩、不把壞基準當綠)。
++    基準檔寫不下(路徑被資料夾佔住)時覆蓋資料照用。翻紅釘:拿掉 rc 與逾時檢查 → rc 1 那案回成綠基準而紅;不接 OverflowError → 超大整數那案丟例外。"""
++    import json, shutil
++    m = _load_lumos_inproc()
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-base-"))
++    try:
++        ex = str(tmp / "a.exec")
++        bp = Path(m._choice_cov_base_path(ex))
++        check("補修 沒有基準檔 → None", m._choice_cov_base_read(ex) is None)
++        good = {"rc": 0, "tail": "ok", "el": 1.5, "to": False}
++        bp.write_text(json.dumps(good), encoding="utf-8")
++        check("補修 綠基準 → (0, 尾巴, 秒, False, False)", m._choice_cov_base_read(ex) == (0, "ok", 1.5, False, False), str(m._choice_cov_base_read(ex)))
++        bad = {"rc 1": dict(good, rc=1), "逾時": dict(good, to=True), "rc True": dict(good, rc=True), "秒數字串": dict(good, el="1"),
++               "負秒數": dict(good, el=-1), "尾巴不是字串": dict(good, tail=None)}
++        raw_bad = {"壞 JSON": "{", "陣列": "[]", "超大整數": '{"rc": 0, "tail": "", "el": ' + "9" * 400 + ', "to": false}',
++                   "NaN": '{"rc": 0, "tail": "", "el": NaN, "to": false}', "超過上限": json.dumps(dict(good, tail="x" * 70000))}
++        got = {}
++        for k, v in list(bad.items()) + list(raw_bad.items()):
++            bp.write_text(v if isinstance(v, str) else json.dumps(v), encoding="utf-8")
++            try:
++                got[k] = m._choice_cov_base_read(ex)
++            except Exception as e:  # noqa: BLE001
++                got[k] = f"例外 {type(e).__name__}"
++        check("補修 不合格的基準檔一律 None、不丟例外", all(v is None for v in got.values()), str(got))
++        bp.unlink()
++        cb = _ckc_cb_stub(m, ["alphaCase"], {"alphaCase": "alphaCase"})
++        cb.prep._cache_path = lambda plat, n: str(tmp / "b.exec")
++        Path(m._choice_cov_base_path(str(tmp / "b.exec"))).mkdir()
++        dst = cb.store("alphaCase", b"x", keep=True, base=(0, "t", 1.0, False, False))
++        check("補修 基準檔寫不下 → 覆蓋資料照存、回傳路徑", dst == str(tmp / "b.exec") and (tmp / "b.exec").read_bytes() == b"x", str(dst))
++    finally:
++        shutil.rmtree(tmp, ignore_errors=True)
++
++
++def t_choice_cov_resume_old_cache():
++    """[選擇點存活回指 補修代碼審 r1 正確性 c1] 舊版留下的續跑快取只有覆蓋資料檔、沒有基準檔 → 那幾支刪掉重量,照常跑完、不崩。
++    判準來源:計劃〈範圍〉續跑快取(要覆蓋資料檔與基準檔都在才取用)。翻紅釘:取快取不看基準檔在不在 → 把 None 當基準放進去、合併快篩讀基準時崩潰而紅。"""
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
++    roots = []
++    try:
++        log = tmp / "a.log"
++        root, fake = _ckc_repo(2, {"__cov__": {"pass": {"alphaCase": [2]}}}, tests=_CKM_TESTS)
++        roots += [root, fake]
++        _ck_run(root, fake, "--only", _ck_loc(1))
++        bases = list((Path(root) / ".lumos" / "note-audit" / "choice-cov").glob("*/*.base.json"))
++        for b in bases:
++            b.unlink()
++        r = _ck_run(root, fake, "--only", _ck_loc(2), runlog=log)
++        again = [n for n, _w in _ckc_cov(log)]
++        reach = _ckc_reach(root, _ck_fp(2, 2))
++        check("補修 舊快取沒有基準檔 → 每支都重量覆蓋、不崩、新那一行照覆蓋判", len(bases) == len(_CKM_TESTS) and "Traceback" not in r.stderr
++              and again == list(_CKM_TESTS) and len(reach) == 1 and reach[0].get("reach") == "clause",
++              f"bases={len(bases)} rc={r.returncode} {again} {reach}\n{r.stderr[-800:]}")
++    finally:
++        _ck_cleanup(*roots, tmp)
++
++
+ def t_choice_cov_all_zero_trip():
+     """[選擇點存活回指 第一段放行後網路調研 2026-11-27] 沒有 Robolectric 的專案,JaCoCo 插不了樁(例:agent 版本不支援這個 JDK 的類別檔,
+     「Unsupported class file major version」)時每支測試的專案類別有紀錄數都是 0;只有 Robolectric 才有的斷路器擋不到,一般 JUnit 的 0 會被當成真的沒經過、
+     整行不跑就記存活。量完全部、一支都沒記到專案類別 → 斷路、全部不明、壞法跑全部守的測試。翻紅釘:沒有這道 → reach none、via cov 存活而紅。"""
+     tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-"))
+     roots = []
+     try:
+         root, fake = _ckc_repo(1, {"__cov__": {"zero": ["alphaCase", "bravoCase"]}})
+         roots += [root, fake]
+         r = _ck_run(root, fake, "--no-merge")
