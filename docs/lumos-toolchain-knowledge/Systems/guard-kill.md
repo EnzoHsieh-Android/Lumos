@@ -98,6 +98,7 @@ verified_by:
   - "[[Verification/2026-09-22_預告合約首個真專案]]"
   - "[[Verification/2026-10-07_合併前最新主線整合]]"
   - "[[Verification/2026-11-15_改動選擇點真實Android端到端驗收]]"
+  - "[[Verification/2026-11-26_選擇點變異加速第四段實驗專案實測]]"
 about_code:
   - scripts/lumos
 ---
