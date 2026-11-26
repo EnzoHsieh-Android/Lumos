@@ -146287,6 +146287,16 @@ def note(tag):
 
 
 note("start")
+has_init = "--init-script" in args
+if has_init:
+    note("init")   # 帶事件初始化腳本的那幾次(選擇點變異加速第四段:逐支不帶、合併帶)
+if merged and has_init:   # 第四段 __events__:照順序印 Gradle 測試事件行,先 flush(逾時被 SIGKILL 收掉時緩衝會丟)
+    for ev_name, ev in (beh.get("__events__") or {}).get(state, []):
+        print(f"x.VmTest > {ev_name} {ev}", flush=True)
+    if beh.get("__init_reject__"):   # 第四段:Gradle 拒收初始化腳本 → rc 1、不寫結果檔
+        print("FAILURE: Build failed with an exception (init script)", flush=True)
+        note("end")
+        sys.exit(1)
 if mut is None and len(names) == 1:
     time.sleep(beh.get("__base_sleep__", 0) + (beh.get("__base_sleep_by__") or {}).get(names[0], 0))   # 單支基準的耗時(量基準時限那幾案)
 if merged:
@@ -147722,6 +147732,277 @@ def t_choice_kill_merge_half_open():
             check(f"{label}:每個壞法都判殺掉", (last.get("counts") or {}).get("killed") == n, str(last.get("counts")))
     finally:
         _ck_cleanup(*roots, tmp)
+
+def t_choice_kill_merge_events_cmd():
+    """[選擇點變異加速第四段 S1、S6] 合併指令帶事件初始化腳本:現場有 scratch → `--tests` 段之後插 ` --init-script <scratch>/lumos-merge-events.init.gradle`
+    (shlex.quote)、寫出的內容等於 _CHOICE_MERGE_INIT;沒有 scratch → 不帶;寫不進去 → 印「事件初始化腳本寫不進去」、不帶;`--tests` 段後還有參數 →
+    插在那些參數之前;Windows 上路徑含 % → 不帶。真跑(假 Gradle):逐支呼叫都不帶、合併呼叫都帶;帶腳本的合併基準被拒收(rc 1、沒有結果檔)而不帶通過 →
+    印「帶事件初始化腳本的合併基準不通過」、之後快篩不帶、照常合併、run 的 merge_init_off {kotlin: 找不到 JUnit 結果檔};兩次都不通過 → 不合併、
+    merge_init_off 空;合併基準本身 rc 1(結果檔有寫)→ 不重試、只跑一次合併基準。判準來源:第四段計劃預期值表 S1、S6。翻紅釘:插錯位置 → 「其他參數之前」紅;不判 Windows 特殊字元 → % 那案紅;
+    逐支也帶 → 真跑那條紅;不重試 → S6 第一案不合併而紅;重試後快篩仍帶 → 「之後快篩不帶」紅。"""
+    import contextlib
+    import io
+    import shlex as _shlex_mod
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    try:
+        sh = m._choice_merge_shape(_CKM_CMD)
+        init = str(tmp / "sp ace" / m._CHOICE_MERGE_INIT_NAME)
+        got = m._choice_merge_cmd(_CKM_CMD, sh, ["bCase", "aCase"], "ident", init=init)
+        check("S1 --tests 段之後插 --init-script <路徑>(shlex.quote)",
+              got == "gradlew :app:testDebugUnitTest --tests '*aCase' --tests '*bCase' --init-script " + _shlex_mod.quote(init), got)
+        check("S1 ★對照★ 不給 init → 跟現在相同", m._choice_merge_cmd(_CKM_CMD, sh, ["bCase", "aCase"], "ident")
+              == "gradlew :app:testDebugUnitTest --tests '*aCase' --tests '*bCase'")
+        for meta in ("&& echo", "; echo", "| tee x"):
+            bad = "./gradlew :app:testDebugUnitTest --tests {method}" + meta
+            check(f"S1 `{{method}}` 後面直接接殼層元字元 {meta.split()[0]!r} → 形狀不支援、不合併", m._choice_merge_shape(bad) is None, str(m._choice_merge_shape(bad)))
+        check("S1 ★對照★ `{method}` 後面空一格再接 && → 照樣合併", m._choice_merge_shape("./gradlew :app:testDebugUnitTest --tests '*{method}' && echo") is not None)
+        check("合併基準逾時而且跑到測試時印的原因帶「合併基準」字樣",
+              m._CHOICE_MERGE_BASE_WHY.get(m._CHOICE_MERGE_HANG_WHY, "").startswith("合併基準"), str(m._CHOICE_MERGE_BASE_WHY))
+        tail_cmd = "./gradlew :app:testDebugUnitTest --tests '*{method}' --info"
+        got = m._choice_merge_cmd(tail_cmd, m._choice_merge_shape(tail_cmd), ["aCase", "bCase"], "ident", init="/s/x.gradle")
+        check("S1 --tests 段後還有參數 → --init-script 插在那些參數之前", got.endswith("--tests '*bCase' --init-script /s/x.gradle --info"), got)
+        names = ["aCase", "bCase"]
+        mg = m._KillMerge(_ckm_time.monotonic() + 1800)
+        with contextlib.redirect_stderr(io.StringIO()):
+            r1 = m._kill_merge_ready(mg, _ckm_ready_ctx(tmp, scratch=str(tmp)), names)
+            r0 = m._kill_merge_ready(m._KillMerge(_ckm_time.monotonic() + 1800), _ckm_ready_ctx(tmp), names)
+        check("S1 現場有 scratch → sh 的 init 是 <scratch>/lumos-merge-events.init.gradle、還沒寫檔",
+              r1 is not None and r1.get("init") == str(tmp / m._CHOICE_MERGE_INIT_NAME) and not (tmp / m._CHOICE_MERGE_INIT_NAME).exists(), str(r1))
+        check("S1 ★對照★ 現場沒有 scratch → init 是 None", r0 is not None and r0.get("init") is None, str(r0))
+        saved = m._IS_WIN
+        try:
+            m._IS_WIN = True
+            with contextlib.redirect_stderr(io.StringIO()):
+                rw = m._kill_merge_ready(m._KillMerge(_ckm_time.monotonic() + 1800), _ckm_ready_ctx(tmp, scratch=str(tmp / "a%TEMP%b")), names)
+        finally:
+            m._IS_WIN = saved
+        check("S1 Windows 上路徑含 % → 不帶", rw is not None and rw.get("init") is None, str(rw))
+        import types
+        c = types.SimpleNamespace(plat="kotlin")
+        sh_ok = {"init": str(tmp / m._CHOICE_MERGE_INIT_NAME)}
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            m._choice_merge_init_write(mg, c, sh_ok)
+        check("S1 寫出的內容等於 _CHOICE_MERGE_INIT、含四種事件", Path(sh_ok["init"]).read_text(encoding="utf-8") == m._CHOICE_MERGE_INIT
+              and 'events "started", "passed", "failed", "skipped"' in m._CHOICE_MERGE_INIT and err.getvalue() == "", err.getvalue())
+        sh_bad = {"init": str(tmp / "nope" / "deeper" / m._CHOICE_MERGE_INIT_NAME)}
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            m._choice_merge_init_write(mg, c, sh_bad)
+        check("S1 寫不進去 → 印一行、init 改 None", sh_bad["init"] is None and "事件初始化腳本寫不進去" in err.getvalue(), err.getvalue())
+        plain = m._choice_merge_cmd(_CKM_CMD, sh, names, "ident")
+        check("S1 不帶腳本時(沒有 scratch、寫不進去)照常合併:組出的合併指令跟不帶 init 一樣",
+              m._choice_merge_cmd(_CKM_CMD, sh, names, "ident", init=sh_bad["init"]) == plain
+              and m._choice_merge_cmd(_CKM_CMD, sh, names, "ident", init=r0.get("init")) == plain and "--init-script" not in plain, plain)
+        # S6 重試的上限照剩下的總時限重算:兩支各 40 秒 → 基準上限 min(160, 剩 100) = 100;第一次花掉 70 → 重試上限要 ≤ 30
+        caps, state = [], {"rem": 100.0}
+        saved_run = m._kill_run
+
+        def fake_run(cmd, cwd, timeout, keep_re=None, started=None, merge=None):
+            caps.append((timeout, "--init-script" in cmd))
+            state["rem"] -= 70.0
+            return 1, "BUILD FAILED", 70.0, False
+        cmd_of = {n: m._run_cmd_expand(_CKM_CMD, n, name_filter="ident") for n in names}
+        mg2 = m._KillMerge(_ckm_time.monotonic() + 600)
+        mg2.remaining = lambda: state["rem"]
+        cx = types.SimpleNamespace(plat="kotlin", run_cmd=_CKM_CMD, baselines={cmd_of[n]: (0, "", 40.0, False, False) for n in names},
+                                   hk=types.SimpleNamespace(between=lambda: None, should_stop=None), floor=2.0, run_dir=str(tmp),
+                                   mstate={"r": 0, "unsure": set()}, merge_need=None)
+        rdir = tmp / "rd"
+        shx = dict(sh, rdir=str(rdir), tq=m._secev_tq(), init=str(tmp / m._CHOICE_MERGE_INIT_NAME))
+        try:
+            m._kill_run = fake_run
+            with contextlib.redirect_stderr(io.StringIO()):
+                m._kill_merge_base(mg2, cx, names, "ident", shx)
+        finally:
+            m._kill_run = saved_run
+        check("S6 重試的上限照剩下的總時限重算(第一次 100、重試 ≤ 30、重試不帶腳本)",
+              len(caps) == 2 and caps[0] == (100.0, True) and caps[1][0] <= 30.0 and caps[1][1] is False, str(caps))
+        # 真跑:逐支不帶、合併帶;S6 拒收重試
+        cfg = {"platforms": {"kotlin": {"profile": "kotlin-junit", "root": ".", "run_cmd": _CKM_CMD}}, "default_platform": "kotlin"}
+        cases = (("一般", {"alphaCase": {"kill": [1]}}), ("S6 拒收、不帶通過", {"__init_reject__": True, "alphaCase": {"kill": [1]}}),
+                 ("S6 兩次都不通過", {"__init_reject__": True, "__merge__": {"base": "rc1"}, "alphaCase": {"kill": [1]}}),
+                 ("S6 合併基準本身 rc 1 → 不重試", {"__merge__": {"base": "rc1"}, "alphaCase": {"kill": [1]}}))
+        jobs = []
+        for i, (_l, beh) in enumerate(cases):
+            root, fake = _ckm_repo(2, beh, config=cfg)
+            roots += [root, fake]
+            jobs.append((root, fake, (), tmp / f"c{i}.log", "2", {}))
+        rs = _ckm_run_many(jobs)
+        for (label, _b), job, r in zip(cases, jobs, rs):
+            rows = _ck_log(job[3])
+            starts = [x for x in rows if len(x) > 2 and x[2] == "start"]
+            inits = [x for x in rows if len(x) > 2 and x[2] == "init"]
+            runs = _ck_gov(job[0], kind="run")
+            last = runs[-1] if runs else {}
+            if label == "一般":
+                check("S1 真跑:逐支呼叫都不帶 --init-script、合併呼叫都帶", inits and all("," in x[0] for x in inits)
+                      and len(inits) == sum(1 for x in starts if "," in x[0]), f"{rows}\n{r.stderr[-400:]}")
+                check("S1 真跑:merge_init_off 空", last.get("merge_init_off") == {}, str(last)[-300:])
+            elif label == "S6 拒收、不帶通過":
+                merged_starts = [x for x in starts if "," in x[0]]
+                check("S6 印「帶事件初始化腳本的合併基準不通過」", "帶事件初始化腳本的合併基準不通過" in r.stderr, r.stderr[-500:])
+                check("S6 只有第一次合併基準帶腳本、之後的合併(基準重試與快篩)都不帶", len(inits) == 1 and len(merged_starts) >= 3, f"{rows}")
+                check("S6 照常合併:merge_off 沒有 kotlin、merge_init_off {kotlin: 找不到 JUnit 結果檔}",
+                      "kotlin" not in (last.get("merge_off") or {}) and last.get("merge_init_off") == {"kotlin": "找不到 JUnit 結果檔"}
+                      and last.get("merged", 0) >= 1, str(last)[-500:])
+                # gov 讀帳:新帳 run 那筆的 ck 帶 merge_init_off;拿掉這欄的舊帳讀成空字典
+                import json as _j
+                with open(Path(job[0]) / "docs" / ".governance-log.jsonl", "a", encoding="utf-8") as fh:
+                    old = dict(last, token="2" * 16, run_id="oldrun4")
+                    old.pop("merge_init_off", None)
+                    fh.write(_j.dumps(old, ensure_ascii=False) + "\n")
+                rck = {(rw.get("ck") or {}).get("run_id") or rw.get("run_id"): rw.get("ck") or {} for rw in _ckm_gov_ck(m, job[0]) if rw.get("kind") == "run"}
+                check("S6 gov 讀帳:新帳 run 那筆 ck 帶 merge_init_off、缺欄的舊帳讀成空字典",
+                      rck.get(last.get("run_id"), {}).get("merge_init_off") == {"kotlin": "找不到 JUnit 結果檔"} and rck.get("oldrun4", {}).get("merge_init_off") == {},
+                      str({k: v.get("merge_init_off") for k, v in rck.items()}))
+            elif label == "S6 合併基準本身 rc 1 → 不重試":
+                check("S6 合併基準本身 rc 1(結果檔有寫)→ 只跑一次合併基準、不合併", sum(1 for x in starts if "," in x[0]) == 1
+                      and "kotlin" in (last.get("merge_off") or {}) and "帶事件初始化腳本" not in r.stderr, f"{rows}\n{r.stderr[-300:]}")
+            else:
+                check("S6 兩次都不通過 → 不合併、merge_init_off 空", "kotlin" in (last.get("merge_off") or {}) and last.get("merge_init_off") == {},
+                      f"{str(last)[-500:]}\n{r.stderr[-300:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_kill_merge_events_order():
+    """[選擇點變異加速第四段 S2] 快篩沒跑乾淨時照事件行排逐支:紅層 → 未知層 → 掛住層 → 通過層(各層內照原排序)。解析(直接呼叫 _choice_merge_events):
+    a PASSED、b FAILED、c STARTED 沒結束、d 沒出現 → failed [b]、hung [c]、passed [a];`b[1] FAILED` 對到 b;名字含 ` > ` 對到那支;行首空白不算;
+    有截斷標記時 c 不進掛住層;沒有事件行 → 三層都空。真跑(假 Gradle,守 a、b、c、d):快篩逾時帶上面那組事件、單支都不殺 → 逐支 b、d、c、a;
+    單支 b 殺 → 只跑 b、killed by b;快篩結果檔零案例帶 b FAILED → 先跑 b;快篩逾時沒有事件行 → 原順序;套不上壞法提早回 single → 兩份名單都清空;
+    快篩有失敗(結果檔說 c 紅、事件行說 a 紅、d 開始沒結束)→ 只跑 c(照結果檔名單,事件行不用);STARTED 接 SKIPPED → 通過層;長行一秒內解完、行尾 \r 認得。
+    判準來源:第四段計劃預期值表 S2。翻紅釘:掛住層排在通過層後 → 「b、d、c、a」紅;不判截斷 → 截斷那條紅;不清 merge_back → 清空那條紅;
+    不頂格比對 → 行首空白那條紅。"""
+    import types
+    m = _load_lumos_inproc()
+    ev = lambda *xs: "\n".join(f"x.VmTest > {n} {e}" for n, e in xs)
+    a, b, c, d = _CKM_T4
+    names = list(_CKM_T4)
+    got = m._choice_merge_events(ev((a, "STARTED"), (a, "PASSED"), (b, "STARTED"), (b, "FAILED"), (c, "STARTED")), names)
+    check("S2 解析:failed [b]、hung [c]、passed [a]、started 真", (got["failed"], got["hung"], got["passed"], got["started"]) == ([b], [c], [a], True), str(got))
+    got = m._choice_merge_events(ev((b + "[1]", "FAILED")), names)
+    check("S2 解析:`b[1] FAILED` 對到 b", got["failed"] == [b], str(got))
+    got = m._choice_merge_events(ev((b + "[1]", "FAILED"), (b + "[2]", "STARTED"), (b + "[2]", "PASSED")), names)
+    check("S2 解析:參數化 b[1] 紅、b[2] 之後通過 → b 照樣是紅層", got["failed"] == [b] and got["passed"] == [], str(got))
+    got = m._choice_merge_events("x.VmTest > odd > name FAILED", ["odd > name"])
+    check("S2 解析:測試名含 ` > ` 對到那支", got["failed"] == ["odd > name"], str(got))
+    got = m._choice_merge_events("    x.VmTest > " + b + " FAILED\n  x.VmTest > " + c + " STARTED", names)
+    check("S2 解析:行首有空白的不算事件行", got == {"failed": [], "hung": [], "passed": [], "started": False}, str(got))
+    got = m._choice_merge_events(ev((c, "STARTED")) + "\n...[truncated 100 bytes]...\n" + ev((b, "FAILED")), names)
+    check("S2 解析:有截斷標記 → 開始了沒看到結束的不進掛住層", got["hung"] == [] and got["failed"] == [b], str(got))
+    t0 = _ckm_time.monotonic()
+    got = m._choice_merge_events("a > " * 60000 + "x\n" + "b > " * 60000 + "FAILED", names)
+    check("S2 解析:含六萬個 ` > ` 的長行一秒內解完(不回溯)", _ckm_time.monotonic() - t0 < 1.0 and got["failed"] == [], f"{_ckm_time.monotonic() - t0:.2f}s {got}")
+    got = m._choice_merge_events(ev((a, "STARTED"), (a, "SKIPPED")), names)
+    check("S2 解析:STARTED 接 SKIPPED → 通過層、不是掛住層", got["passed"] == [a] and got["hung"] == [], str(got))
+    got = m._choice_merge_events("x.VmTest > " + b + " FAILED\r", names)
+    check("S2 解析:行尾 \\r 照樣認得", got["failed"] == [b], str(got))
+    got = m._choice_merge_events("> Task :app:testDebugUnitTest\nBUILD FAILED", names)
+    check("S2 解析:沒有事件行 → 三層都空", got == {"failed": [], "hung": [], "passed": [], "started": False}, str(got))
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    try:
+        cx = types.SimpleNamespace(merge_failed=["x"], merge_back=["y"], wt=str(tmp), wt_real=_os_mod.path.realpath(str(tmp)), plat="kotlin")
+        how = m._kill_merge_screen(m._KillMerge(_ckm_time.monotonic() + 60), cx, [{"file": "nope/Missing.kt", "old": "x", "new": "y"}], names, "", 1.0, "ident")
+        check("S2 套不上壞法提早回 single → merge_failed、merge_back 都清空", how == "single" and cx.merge_failed == [] and cx.merge_back == [], str(vars(cx)))
+        four = ",".join(_CKM_T4)
+        evs1 = [[a, "STARTED"], [a, "PASSED"], [b, "STARTED"], [b, "FAILED"], [c, "STARTED"]]
+        cases = (("單支都不殺 → b、d、c、a", {"__merge__": {"1": "hang"}, "__events__": {"1": evs1}}, [four, b, d, c, a]),
+                 ("單支 b 殺 → 只跑 b", {"__merge__": {"1": "hang"}, "__events__": {"1": evs1}, b: {"kill": [1]}}, [four, b]),
+                 ("零案例帶 b FAILED → 先跑 b", {"__merge__": {"1": "zero"}, "__events__": {"1": [[b, "FAILED"]]}, b: {"kill": [1]}}, [four, b]),
+                 ("逾時沒有事件行 → 原順序", {"__merge__": {"1": "hang"}}, [four, a, b, c, d]),
+                 ("快篩有失敗 → 照結果檔名單、不照事件行", {"__mfail__": {"1": [c]}, "__events__": {"1": [[a, "FAILED"], [d, "STARTED"]]}, c: {"kill": [1]}},
+                  [four, c]))
+        jobs = []
+        for i, (_l, beh, _w) in enumerate(cases):
+            root, fake = _ckm_repo(1, beh, tests=_CKM_T4)
+            roots += [root, fake]
+            jobs.append((root, fake, (), tmp / f"o{i}.log", "2", {}))
+        rs = _ckm_run_many(jobs)
+        for (label, _beh, want), job, r in zip(cases, jobs, rs):
+            ph = _ckm_phase(_ckm_calls(job[3]))
+            check(f"S2 真跑 {label}:呼叫依序 {want}", ph.get("1") == want, f"{ph}\n{r.stderr[-400:]}")
+        e = _ck_by_file(_ck_gov(jobs[1][0], kind="choice-kill")).get(_ck_fp(1, 1), {})
+        check("S2 真跑單支 b 殺:killed by b", (e.get("verdict"), e.get("killing_test")) == ("killed", f"kotlin-junit:{b}"), str(e)[:400])
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_kill_merge_hang_breaker():
+    """[選擇點變異加速第四段 S3] 跑到測試後逾時另外數:連續 5 個快篩逾時、都有 STARTED 事件行 → 不跳開、merge_tripped 假、merge_unclean
+    {kotlin: {逾時(跑到測試後掛住): 5}}、每個壞法 merge_why 是這個字樣;連續 15 個 → 跳開、印「合併連續 15 次沒跑乾淨(最後一次:逾時(跑到測試後掛住))」;
+    4 個沒事件行的逾時、1 個有、1 個沒有 → 第 6 個跳開(中間那個不計也不歸零);斷路器停用中試探快篩逾時有事件行 → 不恢復;
+    10 個跑到測試後逾時、1 個快篩有失敗、再 10 個 → 不跳開(有失敗歸零這個計數);15 次跳開、試探通過恢復、再 1 次 → 不跳開(恢復後從頭數);
+    原本的計數跳開前先有 3 次跑到測試後逾時、恢復後 14 次 → 不跳開;門檻經 _KillMerge(hang_breaker=3) 帶入 → 第 3 次跳開。
+    判準來源:第四段計劃預期值表 S3。翻紅釘:跑到測試的逾時照舊計數 → 第一案跳開而紅;完全不計 → 15 那案不跳開而紅;中間那個歸零 streak → 第三案不跳開而紅;
+    當成恢復 → 第四案恢復而紅;有失敗不歸零 → 第五案(直接呼叫斷路器)跳開而紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckm-"))
+    roots = []
+    one = "alphaCase,bravoCase,charlieCase"
+    hw = "逾時(跑到測試後掛住)"
+    cfg = {"platforms": {"kotlin": {"profile": "kotlin-junit", "root": ".", "run_cmd": _CKM_CMD}}, "default_platform": "kotlin"}
+    st = [["alphaCase", "STARTED"]]
+    try:
+        cases = (("5 個跑到測試後逾時 → 不跳開", 5, range(1, 6), range(1, 6), list(range(1, 6)), 0, 0, {hw: 5}),
+                 ("4 無、1 有、1 無 → 第 6 個跳開", 7, range(1, 7), [5], list(range(1, 7)), 1, 0, {"逾時": 5, hw: 1}))
+        jobs = []
+        for i, (_l, n, hangs, with_ev, *_r) in enumerate(cases):
+            beh = {"__merge__": {str(k): "hang" for k in hangs}, "__events__": {str(k): st for k in with_ev}, "alphaCase": {"kill": list(range(1, n + 1))}}
+            root, fake = _ckm_repo(n, beh, config=cfg)
+            roots += [root, fake]
+            jobs.append((root, fake, ("--max-mutants", "40"), tmp / f"h{i}.log", "2", {}))
+        rs = _ckm_run_many(jobs)
+        for (label, n, _h, with_ev, merged, n_trip, n_reopen, unclean), job, r in zip(cases, jobs, rs):
+            ph = _ckm_phase(_ckm_calls(job[3]))
+            had = [i for i in range(1, n + 1) if (ph.get(str(i)) or [""])[0] == one]
+            runs = _ck_gov(job[0], kind="run")
+            last = runs[-1] if runs else {}
+            check(f"{label}:跑合併的壞法是 {merged}", had == merged, f"{had}\n{r.stderr[-500:]}")
+            check(f"{label}:跳開 {n_trip} 次、恢復 {n_reopen} 次", r.stderr.count("這次剩下的改逐支") == n_trip
+                  and r.stderr.count("恢復合併") == n_reopen and last.get("merge_tripped") is bool(n_trip), r.stderr[-500:])
+            check(f"{label}:merge_unclean {{kotlin: {unclean}}}", last.get("merge_unclean") == {"kotlin": unclean}, str(last.get("merge_unclean")))
+            check(f"{label}:每個壞法都判殺掉", (last.get("counts") or {}).get("killed") == n, str(last.get("counts")))
+            evs = _ck_by_file(_ck_gov(job[0], kind="choice-kill"))
+            for k in with_ev:
+                e = evs.get(_ck_fp(k, n), {})
+                check(f"{label}:壞法 {k} 的 merge_why 是 {hw}", e.get("merge_why") == {"kotlin": hw}, str(e.get("merge_why")))
+        # 其餘各案直接呼叫 _kill_merge_breaker(真跑要十幾個壞法,單支測試時限放不下):連續 15 次 → 跳開、印的原因是這個字樣;14 次 → 不跳開;
+        # 10 次、1 次有失敗、再 10 次 → 不跳開;斷路器停用中試探逾時有事件行 → 不恢復;15 次跳開、恢復、再 1 次 → 不跳開;
+        # 3 次後原本的計數跳開、恢復、14 次 → 不跳開;門檻帶 3 → 第 3 次跳開
+        import contextlib
+        import io
+        m = _load_lumos_inproc()
+        for label, seq, pre_trip, want_on, want_msg in (
+                ("連續 15 次 → 跳開", [hw] * 15, False, False, f"合併連續 15 次沒跑乾淨(最後一次:{hw})"),
+                ("★對照★ 連續 14 次 → 不跳開", [hw] * 14, False, True, ""),
+                ("10、有失敗、10 → 有失敗歸零、不跳開", [hw] * 10 + ["有失敗"] + [hw] * 10, False, True, ""),
+                ("停用中試探逾時有事件行 → 不恢復", [hw], True, False, ""),
+                ("15 次跳開、試探通過恢復、再 1 次 → 不再跳開(恢復後從頭數)", [hw] * 15 + ["pass"] + [hw], False, True, ""),
+                ("原本的計數跳開前先有 3 次掛住、恢復後 14 次 → 不跳開", [hw] * 3 + ["逾時"] * 5 + ["pass"] + [hw] * 14, False, True, "")):
+            mg = m._KillMerge(_ckm_time.monotonic() + 600)
+            mg.plats["kotlin"] = (False, m._CHOICE_MERGE_TRIPPED) if pre_trip else (True, "")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                for w in seq:
+                    kind = {"有失敗": "fail", "pass": "pass"}.get(w, "unclean")
+                    m._kill_merge_breaker(mg, "kotlin", kind, w == "逾時", "" if kind == "pass" else w)
+            recovered = "pass" in seq
+            e = err.getvalue()
+            check(f"S3 {label}", mg.plats["kotlin"][0] is want_on and (want_msg in e)
+                  and (want_msg or e.count("這次剩下的改逐支") == (1 if recovered else 0)) and e.count("恢復合併") == (1 if recovered else 0),
+                  f"{mg.plats} {mg.hang_streak} {mg.streak} {e}")
+        mg = m._KillMerge(_ckm_time.monotonic() + 600, hang_breaker=3)
+        mg.plats["kotlin"] = (True, "")
+        with contextlib.redirect_stderr(io.StringIO()):
+            for _ in range(3):
+                m._kill_merge_breaker(mg, "kotlin", "unclean", False, hw)
+        check("S3 門檻經 _KillMerge(hang_breaker=…) 帶入:設 3 → 第 3 次跳開", mg.plats["kotlin"][0] is False, str(mg.plats))
+    finally:
+        _ck_cleanup(*roots, tmp)
+
 
 def _ckm_ready_ctx(tmp, **kw):
     import types
