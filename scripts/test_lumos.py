@@ -149425,5 +149425,43 @@ def _ckp_catalog_change_push():
         _ck_cleanup(root, fake)
 
 
+def t_choice_survivor_why():
+    """[選擇點路線 低成本一] 存活那一行底下多印型錄那一列「為什麼行為不同」欄:choice-kill 判完存活時印、choice-points 讀帳是存活時印;
+    殺掉與沒跑的行不印;欄位是空、「—」或「(無)」時不印。判準來源:Projects/選擇點對應需求路線_計劃〈優先序調整〉先做的低成本兩件第一件。
+    翻紅釘:不印 → choice-kill 那條與 choice-points 那條紅;只認完全等於「存活」→ 合併快篩判那條紅;殺掉也印 → 殺掉那條紅;佔位字也印 → 佔位那條紅。"""
+    m = _load_lumos_inproc()
+    check("為什麼欄:有內容 → 一行縮排的「為什麼行為不同:…」", m._choice_why_line("相等與不相等對調") == "      為什麼行為不同:相等與不相等對調",
+          repr(m._choice_why_line("相等與不相等對調")))
+    check("為什麼欄:空、「—」、「(無)」、None → 不印", all(m._choice_why_line(w) == "" for w in ("", " ", "—", "(無)", None)))
+    x = {"file": "a.kt", "line": 3, "fp": "f", "decl": "", "status": "mutant",
+         "mutant": {"row": "C-7", "category": "ROR", "identity": None, "template": "t", "why": "相等與不相等對調"}}
+    rows = {st: m._choice_points_lines(x, {("a.kt", "f"): st}) for st in ("存活", "存活(合併快篩判)", "已放行", "跑不出結果")}
+    check("choice-points 帳上是「存活(合併快篩判)」(合併快篩預設開時的存活)也印為什麼欄;已放行、跑不出結果不印",
+          [len(rows[k]) for k in ("存活", "存活(合併快篩判)", "已放行", "跑不出結果")] == [2, 2, 1, 1]
+          and rows["存活(合併快篩判)"][1] == "      為什麼行為不同:相等與不相等對調", str(rows))
+    root = fake = None
+    try:
+        root, fake = _ck_repo(2, {"alphaCase": {"kill": [1]}})
+        r = _ck_run(root, fake)
+        why = "      為什麼行為不同:相等與不相等對調,判斷結果整個反過來"
+        lines = r.stdout.splitlines()
+        at = {ln.split()[0]: i for i, ln in enumerate(lines) if ln.startswith("  " + _CHOICE_MAIN)}
+        i2, i1 = at.get(_ck_loc(2)), at.get(_ck_loc(1))
+        check("choice-kill 存活那一行的下一行印型錄的為什麼欄", i2 is not None and "存活" in lines[i2] and i2 + 1 < len(lines) and lines[i2 + 1] == why,
+              r.stdout[-800:])
+        check("choice-kill 殺掉那一行底下不印", i1 is not None and "殺掉" in lines[i1] and (i1 + 1 >= len(lines) or "為什麼行為不同" not in lines[i1 + 1]),
+              r.stdout[-800:])
+        cp = subprocess.run([sys.executable, GRAPHCTL, "choice-points", "--diff", "main..HEAD", "--repo", str(root)], cwd=root, capture_output=True,
+                            text=True, env=_ck_env(fake), stdin=subprocess.DEVNULL)
+        cl = cp.stdout.splitlines()
+        cat = {ln.split()[0]: i for i, ln in enumerate(cl) if ln.startswith("  " + _CHOICE_MAIN)}
+        j2, j1 = cat.get(_ck_loc(2)), cat.get(_ck_loc(1))
+        check("choice-points 帳上存活那一行的下一行印為什麼欄", j2 is not None and cl[j2].endswith("存活") and j2 + 1 < len(cl) and cl[j2 + 1] == why,
+              cp.stdout[-800:] + cp.stderr[-300:])
+        check("choice-points 殺掉那一行底下不印", j1 is not None and (j1 + 1 >= len(cl) or "為什麼行為不同" not in cl[j1 + 1]), cp.stdout[-800:])
+    finally:
+        _ck_cleanup(root, fake)
+
+
 if __name__ == "__main__":
     sys.exit(main())
