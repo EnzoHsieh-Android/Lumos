@@ -150517,6 +150517,7 @@ def t_choice_cov_src_pkgs_edges():
             (jroot / rel).write_text(txt, encoding="utf-8")
         jgot = m._choice_cov_src_pkgs(jroot)
         check("第二段 平台根本身叫 src(傳統 Java 版面)→ 根底下的 testapp 照收", jgot == {"testapp", "org/b"}, str(jgot))
+        got = m._choice_cov_src_pkgs(tmp)   # 上面在同一個根底下多建了 j/src,看滿上限的子集要跟建完之後的全量比(原本比舊的全量,Linux 先走到 j 就紅)
         old = m._CHOICE_COV_SRC_MAX
         m._CHOICE_COV_SRC_MAX = 1
         try:
@@ -150535,6 +150536,43 @@ def t_choice_cov_src_pkgs_edges():
         finally:
             m._CHOICE_COV_SRC_ENTRIES = old
         check("第二段 總檔數上限(含非原始碼)看滿也停、印提醒", len(cut2) <= 2 and cut2 <= got and "上限" in buf.getvalue(), f"{cut2} {buf.getvalue()!r}")
+        real_walk = _os_mod.walk
+        def _rev_walk(top, *a, **k):
+            for d, subs, files in real_walk(top, *a, **k):
+                subs.reverse()
+                files.reverse()
+                yield d, subs, files
+        def _cut_at(k, walk):
+            old = m._CHOICE_COV_SRC_MAX
+            m._CHOICE_COV_SRC_MAX = k
+            _os_mod.walk = walk
+            try:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    return m._choice_cov_src_pkgs(tmp)
+            finally:
+                _os_mod.walk = real_walk
+                m._CHOICE_COV_SRC_MAX = old
+        # 上限 1 時第一個資料夾就有兩支原始碼、一個套件都還沒收就停(兩邊都是空集合,比了等於沒比):取最小的、收得到東西又還沒收全的上限
+        k_part = next((k for k in range(1, 60) if _cut_at(k, real_walk) and _cut_at(k, real_walk) != got), None)
+        part = _cut_at(k_part, real_walk) if k_part else set()
+        check("★前置★ 有一個上限收到的是全量裡非空的一部分", bool(part) and part < got, f"{k_part} {part}")
+        part_rev = _cut_at(k_part, _rev_walk) if k_part else set()
+        check("看滿上限收到的套件跟檔案系統給的順序無關(資料夾倒過來給也收到同一批)", part_rev == part, f"{part_rev} {part}")
+        froot = tmp / "f" / "src"   # 同一個資料夾兩支不同套件:檔案層的排序也要守(上面的樹裡同資料夾兩支都是被跳過的檔,碰不到;代碼審 r2 正確性)
+        froot.mkdir(parents=True, exist_ok=True)
+        (froot / "A.kt").write_text("package fa\n", encoding="utf-8")
+        (froot / "B.kt").write_text("package fb\n", encoding="utf-8")
+        old = m._CHOICE_COV_SRC_MAX
+        m._CHOICE_COV_SRC_MAX = 1
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                f_fwd = m._choice_cov_src_pkgs(froot)
+                _os_mod.walk = _rev_walk
+                f_rev = m._choice_cov_src_pkgs(froot)
+        finally:
+            _os_mod.walk = real_walk
+            m._CHOICE_COV_SRC_MAX = old
+        check("同一個資料夾的檔案照名字收:上限 1 收到 A.kt 的套件,檔案倒過來給也一樣", f_fwd == {"fa"} and f_rev == {"fa"}, f"{f_fwd} {f_rev}")
         calls = []
         real_scan = m._choice_cov_src_pkgs
         m._choice_cov_src_pkgs = lambda r: calls.append(r) or real_scan(r)
