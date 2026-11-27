@@ -146273,7 +146273,7 @@ while not os.path.exists(os.path.join(top, "tests", "beh.json")):
     top = os.path.dirname(top)
 src = open(os.path.join(top, "app/src/main/java/x/Vm.kt"), encoding="utf-8").read()
 beh = json.load(open(os.path.join(top, "tests", "beh.json"), encoding="utf-8"))
-muts = [int(x) for x in re.findall(r"a(\d+) !== b\1", src)]
+muts = [int(x) for x in re.findall(r"a(\d+) (?:!==|==|!=) b\1", src)]   # 壞法:=== 換成 !==(型錄 C-7);合批編譯那幾案的改版型錄另有 == 與 !=
 mut = muts[0] if muts else None
 merged = len(names) > 1
 state = "base" if mut is None else str(mut)
@@ -146284,6 +146284,46 @@ def note(tag):
     if log:
         with open(log, "a", encoding="utf-8") as fh:
             fh.write(",".join(names) + "\t" + state + "\t" + tag + "\n")
+
+
+# 編譯任務(選擇點存活回指第二段:合批編譯檢查 :app:compileDebugUnitTestKotlin):讀樹上套了哪些壞法,照 CK_COMPILE 指的 JSON(沒有就 beh.json 的 __compile__)
+# 印 Kotlin 形狀的編譯錯誤 `e: file:///<絕對路徑>:<行>:<欄> <訊息>`:bad 列的字樣出現在哪一行就報那一行;base_red 原樹本身紅;stray 有壞法時報第 1 行(沒有壞法的行);
+# batch_only 同時套了兩個以上壞法才報 batch_only 列的壞法編號那一行(單獨編是綠的);trunc 先印 300KB 雜訊(輸出被截斷);mark 有壞法時寫標記檔後睡著等訊號;
+# sleep 每次編譯睡幾秒(編譯預算那案)。記一筆 compile 紀錄:第四欄是這次樹上 k<i> 的運算子(i:op 逗號串,沒有壞法是空的)。
+if any(re.fullmatch(r":?(?:[\w.-]+:)*compile[A-Z]\w*UnitTestKotlin", a) for a in args):
+    cc = beh.get("__compile__") or {}
+    if os.environ.get("CK_COMPILE") and os.path.isfile(os.environ["CK_COMPILE"]):
+        cc = json.load(open(os.environ["CK_COMPILE"], encoding="utf-8"))
+    vm = os.path.join(top, "app/src/main/java/x/Vm.kt")
+    ops = ",".join(f"{i}:{o}" for i, o in re.findall(r"a(\d+) (\S+) b\1", src) if o != "===")
+    if log:
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write("\t" + state + "\tcompile\t" + ops + "\n")
+    if muts and cc.get("mark") and os.environ.get("CK_MARK"):
+        open(os.environ["CK_MARK"], "w").close()
+        time.sleep(60)
+    time.sleep(cc.get("sleep", 0))
+    errs = []
+    if cc.get("base_red"):
+        errs.append(f"e: file://{vm}:1:1 Unresolved reference: 環境壞了")
+    lines = src.split("\n")
+    for no, line in enumerate(lines, 1):
+        for pat in cc.get("bad", []):
+            if pat in line:
+                errs.append(f"e: file://{vm}:{no}:{line.index(pat) + 1} Unresolved reference: {pat}")
+    if cc.get("stray") and muts:
+        errs.append(f"e: file://{vm}:1:1 Unresolved reference: 跟壞法無關")
+    if len(muts) >= 2:
+        for k in cc.get("batch_only", []):
+            no = next((j for j, ln in enumerate(lines, 1) if re.search(r"a%d (?:!==|==|!=) b%d" % (k, k), ln)), None)
+            if no:
+                errs.append(f"e: file://{vm}:{no}:9 Type mismatch: 只在合批時")
+    if cc.get("trunc") and errs:
+        print("w: 雜訊 " + "x" * 200 + "\n" * 1, end="")
+        print(("w: 雜訊 " + "x" * 200 + "\n") * 1500, end="")
+    for e in errs:
+        print(e)
+    sys.exit(1 if errs else 0)
 
 
 note("start")
@@ -146606,7 +146646,7 @@ def t_choice_kill_merge_weak_skips():
         root, fake = _ckm_repo(2, {})
         m._kill_after_write = patched(1)
         try:
-            rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_choice_kill(mm.Env(Path(root) / _KSP_V), diff="main..HEAD"), log=log)
+            rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_choice_kill(mm.Env(Path(root) / _KSP_V), diff="main..HEAD", no_compile_check=True), log=log)
         finally:
             m._kill_after_write = orig
         ph = _ckm_phase(_ckm_calls(log))
@@ -146629,7 +146669,7 @@ def t_choice_kill_merge_weak_skips():
         root, fake = _ckm_repo(2, {})
         m._kill_after_write = patched(2)
         try:
-            rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_choice_kill(mm.Env(Path(root) / _KSP_V), diff="main..HEAD"), log=log)
+            rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_choice_kill(mm.Env(Path(root) / _KSP_V), diff="main..HEAD", no_compile_check=True), log=log)
         finally:
             m._kill_after_write = orig
         ph = _ckm_phase(_ckm_calls(log))
@@ -146776,7 +146816,7 @@ def t_choice_kill_merge_interrupt():
         check("S9 快篩那案:run interrupted、rc 2", rc == 2 and len(runs) == 1 and runs[0].get("interrupted") is True, f"rc={rc} {runs}")
         root, rc, secs, rows, err = go({"__mark__": {"names": one, "state": "base", "sleep": 60}}, _sig.SIGHUP)
         runs = _ck_gov(root, kind="run")
-        check("S9 合併基準中送 SIGHUP → 當場收掉、不合併(沒有壞法呼叫)、run interrupted、rc 2", secs < 30 and not [x for x in rows if x[1] != "base"]
+        check("S9 合併基準中送 SIGHUP → 當場收掉、不合併(沒有壞法呼叫)、run interrupted、rc 2", secs < 30 and not [x for x in rows if x[1] != "base" and x[2:3] != ["compile"]]   # 合批編譯的編譯紀錄不是壞法呼叫(選擇點存活回指第二段)
               and rc == 2 and len(runs) == 1 and runs[0].get("interrupted") is True, f"{secs:.1f}s rc={rc} {rows} {runs}\n{err[-300:]}")
         check("代碼審 code-選擇點變異加速第二段 r1 c1 合併基準被中斷 → run 的 merge_off {kotlin-junit: 中斷}、不印「這次不合併」",
               runs and runs[0].get("merge_off") == {"kotlin-junit": "中斷"} and "這次不合併(中斷)" not in err, f"{runs}\n{err[-300:]}")
@@ -149649,6 +149689,11 @@ def _ckc_names(calls):
     return {n for c in calls for n in c.split(",") if n}
 
 
+
+def _ckc_run(root, fake, *args, **kw):
+    """第一段覆蓋測試的 choice-kill:帶 --cov-audit 0(第二段起預設抽 2 行 none、1 行 clause 照跑全部,會改掉第一段預期的「none 不跑、clause 只跑子集」;抽查本身在 t_choice_cov_audit 驗)。"""
+    return _ck_run(root, fake, "--cov-audit", "0", *args, **kw)
+
 def _ckc_reach(root, fp=None):
     return [e for e in _ck_gov(root, kind="reach") if fp is None or e.get("fp") == fp]
 
@@ -149663,7 +149708,7 @@ def t_choice_cov_reach_clause():
         log = tmp / "a.log"
         root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}}}, ids=[3, 5])
         roots += [root, fake]
-        r = _ck_run(root, fake, runlog=log)
+        r = _ckc_run(root, fake, runlog=log)
         reach = _ckc_reach(root)
         ev = (_ck_gov(root, kind="choice-kill") or [{}])[-1]
         ph = _ckm_phase(_ckm_calls(log))
@@ -149675,7 +149720,7 @@ def t_choice_cov_reach_clause():
         log.unlink(missing_ok=True)
         root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1], "bravoCase": [1]}}}, ids=[10, 3])
         roots += [root, fake]
-        r = _ck_run(root, fake, runlog=log)
+        r = _ckc_run(root, fake, runlog=log)
         reach = _ckc_reach(root)
         check("S1 兩條都經過 → 兩條都列、條款號數字序(S3 在 S10 前)",
               len(reach) == 1 and reach[0].get("reach_clauses") == ["Projects/選擇_計劃#S3", "Projects/選擇_計劃#S10"] and reach[0].get("reach_n") == 2,
@@ -149694,7 +149739,7 @@ def t_choice_cov_none_skips():
         log = tmp / "a.log"
         root, fake = _ckc_repo(1, {"__cov__": {"pass": {"zuluCase": [1]}}}, unbound=("zuluCase",))
         roots += [root, fake]
-        r = _ck_run(root, fake, runlog=log)
+        r = _ckc_run(root, fake, runlog=log)
         reach = _ckc_reach(root)
         evs = _ck_gov(root, kind="choice-kill")
         run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
@@ -149726,7 +149771,7 @@ def t_choice_cov_unknown():
         log.unlink(missing_ok=True)
         root, fake = _ckc_repo(1, beh, **kw)
         roots.extend([root, fake])
-        r = _ck_run(root, fake, runlog=log)
+        r = _ckc_run(root, fake, runlog=log)
         return r, _ckc_reach(root), _ckm_phase(_ckm_calls(log)), log
     try:
         r, reach, ph, _l = go({"__cov__": {"pass": {"alphaCase": [1]}, "zero": ["bravoCase"]}}, robo=("bravoCase",))
@@ -149928,7 +149973,7 @@ def t_choice_reach_points():
     try:
         root, fake = _ckc_repo(2, {"alphaCase": {"kill": [1]}, "__cov__": {"pass": {"alphaCase": [1]}}})
         roots += [root, fake]
-        r = _ck_run(root, fake)
+        r = _ckc_run(root, fake)
         cp, at = _ckc_points(root, fake)
         l2, l1 = at.get(_ck_loc(2), ""), at.get(_ck_loc(1), "")
         check("S8 有效 reach none、沒有 layer → 存活後面印「沒有條款經過 未判讀」", l2.endswith("存活  沒有條款經過 未判讀"), f"{cp.stdout[-600:]}\n{r.stderr[-300:]}")
@@ -149940,7 +149985,7 @@ def t_choice_reach_points():
               cp2.stdout[-600:])
         root, fake = _ckc_repo(2, {"alphaCase": {"kill": [1]}}, cov=False)
         roots += [root, fake]
-        r = _ck_run(root, fake)
+        r = _ckc_run(root, fake)
         cp3, at3 = _ckc_points(root, fake)
         check("S8 沒有 reach 事件(沒開覆蓋)→ 存活後面印未分類;帳上沒有 reach 事件", "存活" in at3.get(_ck_loc(2), "") and at3.get(_ck_loc(2), "").endswith("  未分類") and not _ckc_reach(root),
               cp3.stdout[-600:])
@@ -150028,13 +150073,13 @@ def t_choice_cov_carry():
         log = tmp / "a.log"
         root, fake = _ckc_repo(1, {"__cov__": {"pass": {}}})
         roots += [root, fake]
-        _ck_run(root, fake)
+        _ckc_run(root, fake)
         ev = (_ck_gov(root, kind="choice-kill") or [{}])[-1]
-        r = _ck_run(root, fake, runlog=log)
+        r = _ckc_run(root, fake, runlog=log)
         check("S21 同樣開覆蓋、cov_sha 相同 → 帶過去(沒有新事件)", len(_ck_gov(root, kind="choice-kill")) == 1 and "這次不重跑" in r.stdout,
               f"{r.stdout[-400:]}{r.stderr[-300:]}")
         log.unlink(missing_ok=True)
-        r = _ck_run(root, fake, "--no-cov", runlog=log)
+        r = _ckc_run(root, fake, "--no-cov", runlog=log)
         evs = _ck_gov(root, kind="choice-kill")
         run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
         check("S21 --no-cov 再跑 → 那一行重跑壞法、記 via run、run cov off", len(evs) == 2 and evs[-1].get("via") == "run" and _ckm_phase(_ckm_calls(log))
@@ -150078,7 +150123,7 @@ def t_choice_cov_subset_judge():
         log = tmp / "a.log"
         root, fake = _ckc_repo(2, {"__cov__": {"pass": {"alphaCase": [1, 2], "bravoCase": [2]}}})
         roots += [root, fake]
-        r = _ck_run(root, fake, runlog=log)
+        r = _ckc_run(root, fake, runlog=log)
         ev = _ck_by_file(_ck_gov(root, kind="choice-kill")).get(_ck_fp(1, 2), {})
         ph = _ckm_phase(_ckm_calls(log))
         check("S23 子集存活 → survived(不是缺結果)、合併判", ev.get("verdict") == "survived" and ev.get("judged") == "merged", f"{ev}\n{r.stderr[-500:]}")
@@ -150086,7 +150131,7 @@ def t_choice_cov_subset_judge():
         log.unlink(missing_ok=True)
         root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}}})
         roots += [root, fake]
-        r = _ck_run(root, fake, "--no-merge", runlog=log)
+        r = _ckc_run(root, fake, "--no-merge", runlog=log)
         ev = (_ck_gov(root, kind="choice-kill") or [{}])[-1]
         check("S23 --no-merge 子集存活 → survived、只逐支跑甲", ev.get("verdict") == "survived" and _ckm_phase(_ckm_calls(log)).get("1") == ["alphaCase"],
               f"{ev}\n{r.stderr[-500:]}")
@@ -150256,9 +150301,10 @@ def t_choice_cov_init_scripts():
 
 def t_choice_cov_groovy_dep():
     """[選擇點存活回指 代碼審 r2 正確性 c1、邊界 b1、通才 g4] 分析任務依賴變體編譯任務:Groovy 的 GString 跟 String 用 in 比永遠不等,
-    任務名清單裡有 "${v}" 的字串要先 toString。假 Gradle 不執行腳本,所以這裡①靜態擋「in [ … ${ … ]」這種寫法 ②本機找得到 Gradle 附的 Groovy 就真跑
-    那一行選任務的比對(找不到就只做①並印一行說沒真跑)。翻紅釘:拿掉 *.toString() → ①與②都紅。"""
-    import glob
+    任務名清單裡有 "${v}" 的字串要先 toString。假 Gradle 不執行腳本,所以這裡①靜態擋「in [ … ${ … ]」這種寫法、要求 def want 那行轉字串清單
+    ②環境變數 LUMOS_TEST_GROOVY_JAR 指到一份 Groovy jar 時真跑那一行選任務的比對。CI 只做①:CI 沒有 Gradle 也沒有 Groovy,測試也不去讀使用者
+    真家目錄的 Gradle 快取(測試的 HOME 是隔離的,第一段末輪架構對齊 #3);②是改分析腳本時在本機手動打開的驗法(第一段末輪邊界 #2)。
+    翻紅釘:拿掉 *.toString() → ①紅(設了環境變數時②也紅)。"""
     import re as _re
     m = _load_lumos_inproc()
     ana = m._CHOICE_COV_ANALYZE
@@ -150266,13 +150312,12 @@ def t_choice_cov_groovy_dep():
     check("r2 c1 分析腳本沒有拿 GString 清單做 in 比對", not bad, str(bad))
     line = next((ln.strip() for ln in ana.splitlines() if ln.strip().startswith("def want =")), "")
     check("r2 c1 分析腳本先把要依賴的編譯任務名轉成字串清單(def want = …)", "*.toString()" in line and "compile${v}Kotlin" in line, ana[:600])
-    import pwd
-    gh = Path(_os_mod.environ.get("GRADLE_USER_HOME") or Path(pwd.getpwuid(_os_mod.getuid()).pw_dir) / ".gradle")   # 跑測試時 HOME 是假的;這裡只讀真的 Gradle 快取
-    jars = sorted(glob.glob(str(gh / "wrapper" / "dists" / "gradle-*" / "*" / "gradle-*" / "lib" / "groovy-[0-9]*.jar")))
+    jar = _os_mod.environ.get("LUMOS_TEST_GROOVY_JAR", "")
     java = _ksp_sh.which("java")
-    if not (jars and java and line):
-        print("    (本機沒有 Gradle 附的 Groovy 或 java,r2 c1 只做靜態檢查)")
+    if not (jar and Path(jar).is_file() and java and line):
+        print("    (沒設 LUMOS_TEST_GROOVY_JAR 或沒有 java,r2 c1 只做靜態檢查)")
         return
+    jars = [jar]
     tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-groovy-"))
     try:
         (tmp / "t.groovy").write_text("def v = 'Debug'\n" + line.split("//")[0] + "\nprintln(['compileDebugKotlin', 'compileDebugJavaWithJavac', 'compileReleaseKotlin'].findAll { it in want })\n",
@@ -150433,7 +150478,6 @@ def t_choice_cov_src_pkgs_edges():
     (testDebug、androidTestFree、jvmTest)與共用跳過清單(build、vendor)不收;檔首 BOM 與反引號套件名照收;符號連結檔與具名管道不開;看滿上限就停並提醒。
     判準來源:Android 官方〈Advanced test setup〉變體測試資料夾放 src/test<變體>、src/androidTest<變體>;計劃〈用詞〉專案類別。
     翻紅釘:跳過清單在任何深度比對字面 test → com/a/test 漏收而紅;不去 BOM → bom 套件變預設套件而紅;不檢查一般檔 → 開具名管道卡住。"""
-    import shutil
     import io, contextlib
     m = _load_lumos_inproc()
     tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-pkgs-"))
@@ -150442,7 +150486,10 @@ def t_choice_cov_src_pkgs_edges():
         files = {"app/src/main/java/com/a/test/T.kt": "package com.a.test\n", "app/src/main/java/bom/B.kt": "\ufeffpackage bom.x\n",
                  "app/src/main/java/bt/C.kt": "// 授權\n@file:JvmName(\"C\")\npackage `bt`.y\n",
                  "app/src/testDebug/java/td/D.kt": "package td\n", "app/src/androidTestFree/java/af/E.kt": "package af\n",
-                 "lib/src/jvmTest/kotlin/jt/F.kt": "package jt\n", "app/build/gen/G.kt": "package gen\n", "vendor/v/H.java": "package v;\n"}
+                 "lib/src/jvmTest/kotlin/jt/F.kt": "package jt\n", "app/build/gen/G.kt": "package gen\n", "vendor/v/H.java": "package v;\n",
+                 "app/src/main/java/com/a/vendor/V.kt": "package com.a.vendor\n", "app/src/main/java/com/a/dist/W.kt": "package com.a.dist\n",
+                 "app/src/main/java/cm/X.kt": "/*\npackage notreal\n*/\npackage cm.real\n",
+                 "app/src/main/java/lh/Y.kt": "// " + "x" * 9000 + "\npackage lh\n", "app/src/test/java/z/Z.kt": "package z\n"}
         for rel, txt in files.items():
             (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
             (tmp / rel).write_text(txt, encoding="utf-8")
@@ -150453,9 +150500,17 @@ def t_choice_cov_src_pkgs_edges():
         if hasattr(_os_mod, "mkfifo"):
             _os_mod.mkfifo(tmp / "app/src/main/java/pipe.kt")
         got = m._choice_cov_src_pkgs(tmp)
-        want_in, want_out = {"com/a/test", "bom/x", "bt/y"}, {"td", "af", "jt", "gen", "v", "outside/sym"}
-        check("補修 主程式 test 套件、BOM、反引號照收;變體測試資料夾、多平台測試、build、vendor、符號連結(檔與資料夾)不收", want_in <= got and not (got & want_out),
-              str(got))
+        want_in = {"com/a/test", "bom/x", "bt/y", "com/a/vendor", "com/a/dist", "cm/real", "lh"}
+        want_out = {"td", "af", "jt", "gen", "v", "outside/sym", "notreal", "z"}
+        check("補修 主程式 test、vendor、dist 套件、BOM、反引號、區塊註解後、長檔頭後照收;變體測試資料夾、多平台測試、build、根層 vendor、符號連結(檔與資料夾)不收",
+              want_in <= got and not (got & want_out), str(got))
+        check("第二段 根帶尾斜線判法相同", m._choice_cov_src_pkgs(str(tmp) + "/") == got, str(m._choice_cov_src_pkgs(str(tmp) + "/")))
+        jroot = tmp / "j" / "src"
+        for rel, txt in {"testapp/A.kt": "package testapp\n", "org/b/B.kt": "package org.b\n"}.items():
+            (jroot / rel).parent.mkdir(parents=True, exist_ok=True)
+            (jroot / rel).write_text(txt, encoding="utf-8")
+        jgot = m._choice_cov_src_pkgs(jroot)
+        check("第二段 平台根本身叫 src(傳統 Java 版面)→ 根底下的 testapp 照收", jgot == {"testapp", "org/b"}, str(jgot))
         old = m._CHOICE_COV_SRC_MAX
         m._CHOICE_COV_SRC_MAX = 1
         try:
@@ -150464,17 +150519,34 @@ def t_choice_cov_src_pkgs_edges():
                 cut = m._choice_cov_src_pkgs(tmp)
         finally:
             m._CHOICE_COV_SRC_MAX = old
-        check("補修 看滿上限就停、印一行提醒", len(cut) <= 1 and "上限" in buf.getvalue(), f"{cut} {buf.getvalue()!r}")
+        check("補修 看滿上限就停、印一行提醒(收到的是全量的子集)", len(cut) <= 1 and cut <= got and "上限" in buf.getvalue(), f"{cut} {buf.getvalue()!r}")
+        old = m._CHOICE_COV_SRC_ENTRIES
+        m._CHOICE_COV_SRC_ENTRIES = 2
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                cut2 = m._choice_cov_src_pkgs(tmp)
+        finally:
+            m._CHOICE_COV_SRC_ENTRIES = old
+        check("第二段 總檔數上限(含非原始碼)看滿也停、印提醒", len(cut2) <= 2 and cut2 <= got and "上限" in buf.getvalue(), f"{cut2} {buf.getvalue()!r}")
+        calls = []
+        real_scan = m._choice_cov_src_pkgs
+        m._choice_cov_src_pkgs = lambda r: calls.append(r) or real_scan(r)
+        try:
+            prep = m._KillPrep(m.time.monotonic() + 60, [], {}, lambda *a: None)
+            p1, p2 = prep._pkgs_of(tmp), prep._pkgs_of(str(tmp) + "/")
+        finally:
+            m._choice_cov_src_pkgs = real_scan
+        check("第二段 同一個平台根只掃一次(尾斜線算同一個)", len(calls) == 1 and p1 == p2 == real_scan(tmp), f"{calls} {p1 == p2}")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        shutil.rmtree(outside, ignore_errors=True)
+        _ck_cleanup(tmp, outside)
 
 
 def t_choice_cov_base_read_rejects():
     """[選擇點存活回指 補修代碼審 r1 通才 g1、邊界 b3、架構 a3] 續跑快取的基準檔:只收 rc 0、沒逾時、秒數是有限非負數、輸出尾巴是字串的 JSON 物件;
     缺檔、壞 JSON、陣列、rc 1、逾時、rc 是 True、秒數是字串、超大整數、NaN、負數、超過上限都回 None(呼叫端刪掉重量,不崩、不把壞基準當綠)。
     基準檔寫不下(路徑被資料夾佔住)時覆蓋資料照用。翻紅釘:拿掉 rc 與逾時檢查 → rc 1 那案回成綠基準而紅;不接 OverflowError → 超大整數那案丟例外。"""
-    import json, shutil
+    import json
     m = _load_lumos_inproc()
     tmp = Path(tempfile.mkdtemp(prefix="gctl-ckc-base-"))
     try:
@@ -150503,7 +150575,7 @@ def t_choice_cov_base_read_rejects():
         dst = cb.store("alphaCase", b"x", keep=True, base=(0, "t", 1.0, False, False))
         check("補修 基準檔寫不下 → 覆蓋資料照存、回傳路徑", dst == str(tmp / "b.exec") and (tmp / "b.exec").read_bytes() == b"x", str(dst))
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        _ck_cleanup(tmp)
 
 
 def t_choice_cov_resume_old_cache():
@@ -150577,13 +150649,698 @@ def t_choice_cov_judged_counts():
     try:
         root, fake = _ckc_repo(2, {"__cov__": {"pass": {"alphaCase": [1]}}})
         roots += [root, fake]
-        _ck_run(root, fake)
+        _ckc_run(root, fake)
         run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
         check("F8 run 那筆 cov_judged 1、merged + single + cov_judged 等於 ran(2)", run_ev.get("cov_judged") == 1
               and run_ev.get("merged", 0) + run_ev.get("single", 0) + run_ev.get("cov_judged", 0) == run_ev.get("ran") == 2, str(run_ev))
         rck = [rw.get("ck") or {} for rw in _ckm_gov_ck(_load_lumos_inproc(), root) if rw.get("kind") == "run"]
         check("r2 k2 gov 的 ck 帶出 cov_judged,讀端也驗得了 merged + single + cov_judged == ran", rck and rck[-1].get("cov_judged") == 1
               and rck[-1].get("merged", 0) + rck[-1].get("single", 0) + rck[-1]["cov_judged"] == rck[-1].get("ran"), str(rck))
+    finally:
+        _ck_cleanup(*roots)
+
+
+
+# ── 選擇點存活回指條款第二段(Projects/選擇點存活回指條款_計劃 範圍 1、2 ① ⑤ ⑥、4、5、6、10):合批編譯檢查、換候選、跳過集合、覆蓋抽查 ──
+# 判準來源:計劃〈預期值表〉S17、S19、S22、S24 各列(輸入照抄、預期照抄,檔名與條款號換成臨時 repo 的)。假 Gradle(_CKM_GRADLE)的編譯任務段照 CK_COMPILE
+# 指的 JSON(或 beh.json 的 __compile__)讀樹上的壞法印 Kotlin 形狀的編譯錯誤;換候選那幾案用改版型錄(_ckcc_cat:C-7 的候選改成 !==、==、!=)。
+# 預期的 new_sha 獨立算:old 是那一行本身(唯一),new 是那一行換運算子,new_sha 是 new 的 sha256 前 16 碼(〈用詞〉壞法身分)。
+def _ckcc_cat(tmp):
+    """改版型錄(C-7 `$A === $B` 的候選壞法改成 `$A !== $B`、`$A == $B`、`$A != $B`,三個都是同一列;其餘照真型錄)→ 路徑。"""
+    cat = _choice_real_cat().read_text(encoding="utf-8")
+    old = "| C-7 | ROR | `ror.yml` `$A === $B` | 運算子 | `$A !== $B` |"
+    assert old in cat, "真型錄 C-7 那一列變了,改版型錄要跟著改"
+    out = Path(tmp) / "checks-catalog.md"
+    out.write_text(cat.replace(old, "| C-7 | ROR | `ror.yml` `$A === $B` | 運算子 | `$A !== $B`、`$A == $B`、`$A != $B` |"), encoding="utf-8")
+    return out
+
+
+def _ckcc_sha(i, op):
+    import hashlib
+    return hashlib.sha256(f"        val k{i} = a{i} {op} b{i}".encode("utf-8")).hexdigest()[:16]
+
+
+def _ckcc_points(root, fake, cat=None):
+    """choice-points → (結果, {定位: 那一行}, {定位: 挑到的運算子})。"""
+    env = _ck_env(fake, **({"LUMOS_KT_CATALOG": str(cat)} if cat else {}))
+    cp = subprocess.run([sys.executable, GRAPHCTL, "choice-points", "--diff", "main..HEAD", "--repo", str(root)], cwd=root, capture_output=True,
+                        text=True, env=env, stdin=subprocess.DEVNULL)
+    lines = {ln.split()[0]: ln for ln in cp.stdout.splitlines() if ln.startswith("  " + _CHOICE_MAIN)}
+    ops = {}
+    for loc, ln in lines.items():
+        m = _ckm_re.search(r"→ val k(\d+) = a\1 (\S+) b\1", ln)
+        ops[loc] = m.group(2) if m else None
+    return cp, lines, ops
+
+
+def _ckcc_compiles(log):
+    """假 Gradle 的編譯紀錄 → [(狀態, 這次樹上的運算子串)](依序;沒有壞法的那次運算子串是空的)。"""
+    return [(x[1], x[3] if len(x) > 3 else "") for x in _ck_log(log) if len(x) > 2 and x[2] == "compile"]
+
+
+def _ckcc_git(root, *a):
+    return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True).stdout.strip()
+
+
+def _ckcc_commit(root, files=None, msg="改"):
+    for rel, text in (files or {}).items():
+        (Path(root) / rel).write_text(text, encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", msg, "--allow-empty"], cwd=root, capture_output=True)
+
+
+def _ckcc_more_src(fake, src2):
+    """假 ast-grep 多認一份內容 src2(只在檔尾加行,命中的位移跟原版相同):照抄原版那一份命中。"""
+    import hashlib
+    import json as _j
+    hp = Path(fake) / "hits.json"
+    t = _j.loads(hp.read_text(encoding="utf-8"))
+    first = next(v for k, v in t.items() if k != "bad")
+    t[hashlib.sha256(src2.encode("utf-8")).hexdigest()] = first
+    hp.write_text(_j.dumps(t), encoding="utf-8")
+
+
+def t_choice_compile_batch():
+    """[選擇點存活回指 S17] 合批編譯檢查時某行候選 1 編不過(錯誤落在那個壞法的行、單獨編也紅)→ 記一筆 invalid、換候選 2 再合批編一次、交給 guard-kill 的是候選 2、
+    帳上壞法事件的 new_sha 是候選 2 的;choice-points 與 situation-rule --point(_choice_kill_scan)挑到同一個(第 2 個)候選;再跑一次直接從候選 2 開始(跳過集合累積);
+    那支檔改了之後重新從候選 1 驗。全部候選都編不過 → 那一行 exhausted、推送閘不擋、choice-points 印「沒有可用壞法」。判準來源:計劃預期值表 S17 三列。
+    翻紅釘:不換候選 → 帳上 new_sha 是候選 1 而紅;跳過集合不看 blob → 改檔後仍挑候選 2 而紅;exhausted 照舊交測試 → 壞法事件出現而紅。"""
+    import json as _j
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    roots = []
+    try:
+        cat = _ckcc_cat(tmp)
+        root, fake = _ckc_repo(1, {}, cov=False)
+        roots += [root, fake]
+        _cp, _ln, ops = _ckcc_points(root, fake, cat)
+        op1 = ops.get(_ck_loc(1))
+        check("S17 ★前置★ choice-points 挑到改版型錄 C-7 的某個候選", op1 in ("!==", "==", "!="), f"{ops}\n{_cp.stdout[-400:]}{_cp.stderr[-300:]}")
+        cc = tmp / "cc.json"
+        cc.write_text(_j.dumps({"bad": [f"a1 {op1} b1"]}), encoding="utf-8")
+        log = tmp / "a.log"
+        r = _ck_run(root, fake, runlog=log, LUMOS_KT_CATALOG=str(cat), CK_COMPILE=str(cc))
+        inv = _ck_gov(root, kind="invalid")
+        evs = _ck_gov(root, kind="choice-kill")
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        head, blob = _ckcc_git(root, "rev-parse", "HEAD"), _ckcc_git(root, "rev-parse", f"HEAD:{_CHOICE_MAIN}")
+        check("S17 記一筆 invalid:new_sha 是候選 1、列號 C-7、帶 at_sha 與那支檔的 blob、不是補償",
+              len(inv) == 1 and inv[0].get("new_sha") == _ckcc_sha(1, op1) and inv[0].get("row") == "C-7" and inv[0].get("at_sha") == head
+              and inv[0].get("blob") == blob and "cleared" not in inv[0] and inv[0].get("fp") == _ck_fp(1, 1), f"{inv}\n{r.stdout[-500:]}{r.stderr[-500:]}")
+        _cp2, _ln2, ops2 = _ckcc_points(root, fake, cat)
+        op2 = ops2.get(_ck_loc(1))
+        check("S17 choice-points 改挑候選 2(不是候選 1)", op2 in ("!==", "==", "!=") and op2 != op1, f"{op1} {ops2}")
+        check("S17 帳上壞法事件的 new_sha 是候選 2 的", len(evs) == 1 and evs[0].get("new_sha") == _ckcc_sha(1, op2), str(evs))
+        comp = _ckcc_compiles(log)
+        check("S17 編譯順序:原樹對照組 → 合批(候選 1)→ 單獨確認(候選 1)→ 換候選再合批(候選 2)",
+              comp == [("base", ""), ("1", f"1:{op1}"), ("1", f"1:{op1}"), ("1", f"1:{op2}")], str(comp))
+        check("S17 交給 guard-kill 的是候選 2:壞法階段有呼叫", bool(_ckm_phase(_ckm_calls(log)).get("1")), str(_ckm_calls(log)))
+        check("S17 run 那筆 compile on、compile_batches 2、invalid_n 1、exhausted_n 0",
+              (run_ev.get("compile"), run_ev.get("compile_batches"), run_ev.get("invalid_n"), run_ev.get("exhausted_n")) == ("on", 2, 1, 0), str(run_ev))
+        m = _load_lumos_inproc()
+
+        def scan(mm):
+            rng, at, _w = mm._choice_range(Path(root), "main..HEAD", None)
+            return mm._choice_kill_scan(Path(root), rng, at, None)
+        got, _o, _e = _ckm_inproc(root, fake, scan, LUMOS_KT_CATALOG=str(cat))
+        x = next((y for y in (got["lines"] if isinstance(got, dict) else []) if y["line"] == 5), None)
+        check("S17 situation-rule --point 那一條路(_choice_kill_scan)挑到同一個(第 2 個)候選",
+              x is not None and x["mutant"]["identity"]["new_sha"] == _ckcc_sha(1, op2), f"{got if not isinstance(got, dict) else x}\n{_e[-300:]}")
+        log.unlink(missing_ok=True)
+        r = _ck_run(root, fake, "--only", _ck_loc(1), runlog=log, LUMOS_KT_CATALOG=str(cat), CK_COMPILE=str(cc))
+        comp = _ckcc_compiles(log)
+        check("S17 再跑一次直接從候選 2 開始(沒有再編候選 1、沒有新 invalid)", comp == [("base", ""), ("1", f"1:{op2}")] and len(_ck_gov(root, kind="invalid")) == 1,
+              f"{comp}\n{r.stderr[-400:]}")
+        src2 = (Path(root) / _CHOICE_MAIN).read_text(encoding="utf-8") + "fun extra() = 1\n"
+        _ckcc_more_src(fake, src2)
+        _ckcc_commit(root, {_CHOICE_MAIN: src2}, "改了 Vm.kt")
+        _cp3, _ln3, ops3 = _ckcc_points(root, fake, cat)
+        check("S17 那支檔改了(blob 不同)→ choice-points 重新挑候選 1", ops3.get(_ck_loc(1)) == op1, f"{ops3}\n{_cp3.stdout[-400:]}")
+        # 全部候選都編不過
+        root2, fake2 = _ckc_repo(1, {}, cov=False)
+        roots += [root2, fake2]
+        p0 = _ckp_push(root2, fake2, LUMOS_KT_CATALOG=str(cat))
+        check("S17 ★對照★ 還沒跑 choice-kill 時推送閘擋這一行(帳不在)", p0.returncode != 0 and "[選擇點]" in p0.stdout + p0.stderr, (p0.stdout + p0.stderr)[-500:])
+        cc.write_text(_j.dumps({"bad": ["a1 !== b1", "a1 == b1", "a1 != b1"]}), encoding="utf-8")
+        log2 = tmp / "b.log"
+        r = _ck_run(root2, fake2, runlog=log2, LUMOS_KT_CATALOG=str(cat), CK_COMPILE=str(cc))
+        run2 = (_ck_gov(root2, kind="run") or [{}])[-1]
+        inv2 = _ck_gov(root2, kind="invalid")
+        check("S17 全部候選都編不過:3 筆 invalid(三個候選各一)、沒有壞法事件、沒有壞法階段的呼叫",
+              len(inv2) == 3 and len({e.get("new_sha") for e in inv2}) == 3 and not _ck_gov(root2, kind="choice-kill") and not _ckm_phase(_ckm_calls(log2)),
+              f"{inv2}\n{r.stdout[-400:]}{r.stderr[-400:]}")
+        check("S17 run 那筆 exhausted_n 1、compile_batches 3、ran 0、rc 0", (run2.get("exhausted_n"), run2.get("compile_batches"), run2.get("ran")) == (1, 3, 0)
+              and r.returncode == 0 and "沒有可用壞法" in r.stdout, f"rc={r.returncode} {run2}\n{r.stdout[-400:]}")
+        _cp4, ln4, _o4 = _ckcc_points(root2, fake2, cat)
+        check("S17 choice-points 印「沒有可用壞法」", "沒有可用壞法" in ln4.get(_ck_loc(1), ""), _cp4.stdout[-400:])
+        _ckp_commit(root2, [])
+        p1 = _ckp_push(root2, fake2, LUMOS_KT_CATALOG=str(cat))
+        check("S17 推送閘不擋沒有可用壞法的行", p1.returncode == 0 and "[選擇點]" not in p1.stdout + p1.stderr, (p1.stdout + p1.stderr)[-500:])
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_compile_probe():
+    """[選擇點存活回指〈用詞〉跳過集合 探針] 某行候選 1 先前記過 invalid,之後那支檔沒變、別支檔改了(at_sha 不同、blob 相同)→ 這次準備物件把候選 1 放進合批編譯當探針
+    (不跑測試),能編了就記一筆補償 invalid(cleared true),choice-points 下一次挑回候選 1;探針編不過就不記。判準來源:計劃〈用詞〉跳過集合。
+    翻紅釘:不做探針 → 沒有 cleared 而紅;cleared 不從跳過集合拿掉 → choice-points 仍挑候選 2 而紅;探針紅也記 → 對照組那條紅。"""
+    import json as _j
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    roots = []
+    try:
+        cat = _ckcc_cat(tmp)
+        root, fake = _ckc_repo(1, {}, cov=False)
+        roots += [root, fake]
+        op1 = _ckcc_points(root, fake, cat)[2].get(_ck_loc(1))
+        cc = tmp / "cc.json"
+        cc.write_text(_j.dumps({"bad": [f"a1 {op1} b1"]}), encoding="utf-8")
+        _ck_run(root, fake, LUMOS_KT_CATALOG=str(cat), CK_COMPILE=str(cc))
+        op2 = _ckcc_points(root, fake, cat)[2].get(_ck_loc(1))
+        check("S17 ★前置★ 候選 1 記了 invalid、choice-points 挑候選 2", len(_ck_gov(root, kind="invalid")) == 1 and op2 not in (None, op1), f"{op1} {op2}")
+        _ckcc_commit(root, {"docs/other.txt": "別支檔\n"}, "改別支檔")
+        log = tmp / "a.log"
+        r = _ck_run(root, fake, "--only", _ck_loc(1), runlog=log, LUMOS_KT_CATALOG=str(cat), CK_COMPILE=str(cc))
+        check("探針 ★對照★ 還是編不過 → 不記補償、choice-points 照挑候選 2", len(_ck_gov(root, kind="invalid")) == 1
+              and _ckcc_points(root, fake, cat)[2].get(_ck_loc(1)) == op2 and ("1", f"1:{op1}") in _ckcc_compiles(log), f"{_ckcc_compiles(log)}\n{r.stderr[-300:]}")
+        cc.write_text(_j.dumps({}), encoding="utf-8")
+        _ckcc_commit(root, {"docs/other.txt": "別支檔又改\n"}, "再改別支檔")
+        log.unlink(missing_ok=True)
+        r = _ck_run(root, fake, "--only", _ck_loc(1), runlog=log, LUMOS_KT_CATALOG=str(cat), CK_COMPILE=str(cc))
+        inv = _ck_gov(root, kind="invalid")
+        comp = _ckcc_compiles(log)
+        check("探針 能編了 → 記一筆補償 invalid(new_sha 候選 1、cleared true)", len(inv) == 2 and inv[-1].get("cleared") is True
+              and inv[-1].get("new_sha") == _ckcc_sha(1, op1), f"{inv}\n{comp}\n{r.stderr[-300:]}")
+        check("探針 不跑測試:壞法階段跑的是候選 2(探針只在編譯紀錄裡)", ("1", f"1:{op1}") in comp and ("1", f"1:{op2}") in comp
+              and (_ck_gov(root, kind="choice-kill") or [{}])[-1].get("new_sha") == _ckcc_sha(1, op2), str(comp))
+        check("探針 choice-points 下一次挑回候選 1", _ckcc_points(root, fake, cat)[2].get(_ck_loc(1)) == op1, "")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_compile_env_failopen():
+    """[選擇點存活回指 S22] 沒套壞法的原樹本身編不過、或編譯輸出被截斷、或錯誤對不回任何壞法、或嫌疑壞法單獨編是綠的 → 合批編譯檢查一筆 invalid 都不記、
+    run 事件 compile 為 env(原樹紅)、那些壞法照現在交給測試階段;推送閘對那些行的判定跟沒有合批編譯檢查時(--no-compile-check)相同。判準來源:計劃預期值表 S22 兩列、
+    〈用詞〉合批編譯檢查(對不回、截斷不記)。翻紅釘:原樹紅不跳過 → 記 invalid 或 compile 不是 env 而紅;截斷照讀 → 記 invalid 而紅;不單獨確認 → 單獨綠那案記 invalid 而紅。"""
+    import json as _j
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    roots = []
+    try:
+        cases = [("原樹紅", 1, {"base_red": True}), ("截斷", 1, {"bad": ["a1 !== b1"], "trunc": True}), ("對不回", 1, {"stray": True}),
+                 ("單獨綠", 2, {"batch_only": [1]}), ("對照", 1, {})]
+        jobs, info = [], []
+        for name, n, cfg in cases:
+            root, fake = _ckc_repo(n, {}, cov=False)
+            roots += [root, fake]
+            cc, log = tmp / f"{name}.json", tmp / f"{name}.log"
+            cc.write_text(_j.dumps(cfg), encoding="utf-8")
+            args = ["--no-compile-check"] if name == "對照" else []
+            jobs.append((root, fake, args, log, "3", {"CK_COMPILE": str(cc)}))
+            info.append((name, root, fake, log))
+        outs = _ckm_run_many(jobs)
+        got = {}
+        for (name, root, fake, log), r in zip(info, outs):
+            got[name] = (r, _ck_gov(root, kind="invalid"), (_ck_gov(root, kind="run") or [{}])[-1], _ck_gov(root, kind="choice-kill"), log)
+        for name in ("原樹紅", "截斷", "對不回", "單獨綠"):
+            r, inv, run_ev, evs, log = got[name]
+            want = "env" if name == "原樹紅" else "on"
+            check(f"S22 {name}:一筆 invalid 都不記、run compile {want}", not inv and run_ev.get("compile") == want and run_ev.get("invalid_n") == 0,
+                  f"{inv} {run_ev}\n{r.stderr[-500:]}")
+            check(f"S22 {name}:壞法照現在交給測試階段(有壞法階段的呼叫、每行都有判定)", bool(_ckm_phase(_ckm_calls(log)))
+                  and len(evs) == (2 if name == "單獨綠" else 1) and all(e.get("verdict") == "survived" for e in evs), f"{evs}\n{_ckm_calls(log)}")
+        comp = _ckcc_compiles(got["單獨綠"][4])
+        check("S22 單獨綠:合批紅之後只單獨編了嫌疑的壞法 1(單獨那次樹上只有 1)", ("1", "1:!==") in comp and ("1", "1:!==,2:!==") in comp
+              and comp.count(("1", "1:!==")) == 1 and all(c != ("2", "2:!==") for c in comp), str(comp))
+        check("S22 原樹紅:只編了原樹那一次(沒有套壞法的編譯)", _ckcc_compiles(got["原樹紅"][4]) == [("base", "")], str(_ckcc_compiles(got["原樹紅"][4])))
+        check("S22 ★對照★ --no-compile-check:run compile off、沒有編譯呼叫", got["對照"][2].get("compile") == "off" and not _ckcc_compiles(got["對照"][4]),
+              str(got["對照"][2]))
+        pushed = {}
+        for name, root, fake, _log in info:
+            if name in ("原樹紅", "對照"):
+                _ckp_commit(root, [])
+                pr = _ckp_push(root, fake)
+                pushed[name] = (pr.returncode, [ln for ln in (pr.stdout + pr.stderr).splitlines() if "[選擇點]" in ln])
+        check("S22 推送閘判定跟沒有合批編譯檢查時相同(rc 與擋下的原因行)", pushed["原樹紅"] == pushed["對照"] and pushed["對照"][0] != 0, str(pushed))
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def _ckcc_keep(m, kept):
+    """行程內把 cmd_guard_kill 的隔離工作樹留下來(keep=True),樹的路徑收進 kept;回原函式(收尾還原用)。"""
+    orig = m._isolated_worktree
+
+    def keep(*a, **k):
+        k = dict(k, keep=True, on_keep=lambda pth: kept.append(pth))
+        return orig(*a, **k)
+    m._isolated_worktree = keep
+    return orig
+
+
+def _ckcc_drop_kept(root, kept):
+    import shutil
+    for pth in kept:
+        if pth:
+            subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", pth], capture_output=True)
+            shutil.rmtree(str(Path(pth).parent), ignore_errors=True)
+
+
+def t_choice_compile_restore():
+    """[選擇點存活回指 S24] 合批編譯檢查在套上壞法後被中斷或拋例外 → 樹上還原回原版(內容比對相同)、之後量的覆蓋基準是原版的(假 Gradle 記的狀態是 base);
+    合批編譯中途送 SIGINT → 當場收掉那次編譯(不等 60 秒)、沒有 reach 事件、rc 2。判準來源:計劃預期值表 S24 列、〈範圍〉2 中斷。
+    翻紅釘:還原不在 finally → 拋例外那案樹上留著壞法而紅;編譯呼叫不帶當場收的標記 → SIGINT 那案等滿 60 秒而紅。"""
+    import signal as _sig
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    roots = []
+    try:
+        m = _load_lumos_inproc()
+        orig_src = _choice_wrap(_ck_body(1))
+        # 拋例外:解析錯誤時程式出錯
+        root, fake = _ckc_repo(1, {"__compile__": {"bad": ["a1 !== b1"]}, "__cov__": {"pass": {"alphaCase": [1]}}})
+        roots += [root, fake]
+        log, kept = tmp / "a.log", []
+        o_keep, o_err = _ckcc_keep(m, kept), m._choice_compile_errors
+
+        def boom(*_a, **_k):
+            raise RuntimeError("解析時出錯")
+        m._choice_compile_errors = boom
+        try:
+            rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_choice_kill(mm.Env(Path(root) / _KSP_V), diff="main..HEAD"), log=log)
+        finally:
+            m._isolated_worktree, m._choice_compile_errors = o_keep, o_err
+        tree = (Path(kept[0]) / _CHOICE_MAIN).read_text(encoding="utf-8") if kept and kept[0] else None
+        _ckcc_drop_kept(root, kept)
+        cov = [x for x in _ck_log(log) if len(x) > 2 and x[2] == "cov"]
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        check("S24 拋例外:樹上還原回原版(內容比對相同)", tree == orig_src, f"{tree!r}\n{err[-400:]}")
+        check("S24 拋例外:之後量的覆蓋基準是原版的(每次掛覆蓋的呼叫狀態都是 base)", cov and all(x[1] == "base" for x in cov), str(cov))
+        check("S24 拋例外:不記 invalid、run compile env、壞法照常判", not _ck_gov(root, kind="invalid") and run_ev.get("compile") == "env"
+              and len(_ck_gov(root, kind="choice-kill")) == 1, f"{run_ev}\n{err[-400:]}")
+        # 中斷(行程內):合批那次編譯跑完時第一個訊號剛好來(準備物件的 interrupted 設起來)
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {"alphaCase": [1]}}})
+        roots += [root, fake]
+        log, kept = tmp / "b.log", []
+        o_keep, o_run = _ckcc_keep(m, kept), m._kill_run
+
+        def run_sig(cmd, cwd, timeout, keep_re=None, started=None, merge=None):
+            got = o_run(cmd, cwd, timeout, keep_re=keep_re, started=started, merge=merge)
+            vm = Path(cwd) / _CHOICE_MAIN
+            if "compileDebugUnitTestKotlin" in cmd and merge is not None and vm.is_file() and "!==" in vm.read_text(encoding="utf-8"):
+                merge.interrupted = True
+            return got
+        m._kill_run = run_sig
+        try:
+            rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_choice_kill(mm.Env(Path(root) / _KSP_V), diff="main..HEAD"), log=log)
+        finally:
+            m._isolated_worktree, m._kill_run = o_keep, o_run
+        tree = (Path(kept[0]) / _CHOICE_MAIN).read_text(encoding="utf-8") if kept and kept[0] else None
+        _ckcc_drop_kept(root, kept)
+        check("S24 中斷:樹上還原回原版、沒有 reach 事件、沒有覆蓋基準、rc 2", tree == orig_src and not _ckc_reach(root)
+              and not [x for x in _ck_log(log) if len(x) > 2 and x[2] == "cov"] and rc == 2, f"rc={rc} {tree!r}\n{err[-400:]}")
+        if _os_mod.name != "nt":
+            root, fake = _ckc_repo(1, {"__compile__": {"mark": True}, "__cov__": {"pass": {"alphaCase": [1]}}})
+            roots += [root, fake]
+            log, mark = tmp / "c.log", tmp / "mark"
+            rc, secs, err = _ckc_signal_run(root, fake, log, mark, _sig.SIGINT)
+            check("S24 合批編譯中途送 SIGINT → 當場收掉(不等 60 秒)、沒有 reach 事件、沒有壞法事件、rc 2", secs < 30 and rc == 2 and not _ckc_reach(root)
+                  and not _ck_gov(root, kind="choice-kill") and mark.exists(), f"{secs:.1f}s rc={rc}\n{err[-400:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+
+
+def t_choice_cov_audit():
+    """[選擇點存活回指 S19] 抽查的 none 行照跑全部測試時被殺掉 → 記 cov-audit killed true、那一行改記殺掉、印「覆蓋判錯」、這次 run 其餘 none 的行改成照跑(沒有任何
+    via cov 事件);沒被殺掉 → cov-audit killed false、其餘 none 行照覆蓋記存活,而且 via cov 的事件寫在抽查判完之後;另從 clause 的行抽 1 行跑全部守的測試;
+    --cov-audit 0 不抽;帳上這個 at_sha 有抽查判錯過 → 再跑都不判 none。判準來源:計劃預期值表 S19 列、〈範圍〉2 ⑤、5。
+    翻紅釘:不抽查 → 沒有 cov-audit 而紅;判錯不改照跑 → 其餘 none 行記 via cov 而紅;抽查在 via cov 之後才決定 → 事件順序那條紅;不看判錯的 at_sha → 最後一案紅。"""
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    roots = []
+    try:
+        cov = {"__cov__": {"pass": {"alphaCase": [4]}}}
+        # A:都殺不掉
+        root, fake = _ckc_repo(4, cov)
+        roots += [root, fake]
+        log = tmp / "a.log"
+        r = _ck_run(root, fake, runlog=log)
+        rows = _ck_gov(root)
+        aud = [e for e in rows if e.get("kind") == "cov-audit"]
+        evs = _ck_by_file([e for e in rows if e.get("kind") == "choice-kill"])
+        fps = {i: _ck_fp(i, 4) for i in range(1, 5)}
+        an = {e.get("fp") for e in aud if e.get("reach") == "none"}
+        ac = {e.get("fp") for e in aud if e.get("reach") == "clause"}
+        check("S19 預設抽 2 行 none、1 行 clause,都沒被殺掉(killed false、wrong false)", len(an) == 2 and an <= {fps[1], fps[2], fps[3]} and ac == {fps[4]}
+              and all(e.get("killed") is False and e.get("wrong") is False and e.get("killing_test") == "" for e in aud), f"{aud}\n{r.stderr[-500:]}")
+        rest = ({fps[1], fps[2], fps[3]} - an)
+        ph = _ckm_phase(_ckm_calls(log))
+        check("S19 抽到的 none 行照跑全部守的測試、via run;沒抽到的照覆蓋記存活(via cov)",
+              all(evs.get(f, {}).get("via") == "run" for f in an) and all(evs.get(f, {}).get("via") == "cov" for f in rest) and len(rest) == 1, str(evs))
+        check("S19 clause 那行抽到 → 跑全部守的測試(甲乙都跑,不只經過的甲)", _ckc_names(ph.get("4", [])) == {"alphaCase", "bravoCase"}, str(ph))
+        ia = max(i for i, e in enumerate(rows) if e.get("kind") == "cov-audit" and e.get("reach") == "none")
+        ic = [i for i, e in enumerate(rows) if e.get("kind") == "choice-kill" and e.get("via") == "cov"]
+        check("S19 via cov 的事件寫在 none 抽查判完之後", ic and min(ic) > ia, f"{ia} {ic}")
+        # B:三行 none 都會被 alpha 殺掉(覆蓋判錯)
+        root, fake = _ckc_repo(4, dict(cov, alphaCase={"kill": [1, 2, 3]}))
+        roots += [root, fake]
+        r = _ck_run(root, fake)
+        rows = _ck_gov(root)
+        aud = [e for e in rows if e.get("kind") == "cov-audit" and e.get("reach") == "none"]
+        evs = [e for e in rows if e.get("kind") == "choice-kill"]
+        check("S19 抽到的 none 行被殺掉 → cov-audit killed true、wrong true、killing_test 是 alphaCase", len(aud) == 2
+              and all(e.get("killed") is True and e.get("wrong") is True and "alphaCase" in e.get("killing_test", "") for e in aud), f"{aud}\n{r.stderr[-400:]}")
+        check("S19 印「覆蓋判錯」、其餘 none 行改成照跑:沒有任何 via cov 事件、三行都記殺掉", "覆蓋判錯" in r.stdout and not [e for e in evs if e.get("via") == "cov"]
+              and sorted(e.get("verdict") for e in evs if e.get("fp") != _ck_fp(4, 4)) == ["killed"] * 3, f"{evs}\n{r.stdout[-500:]}")
+        # C:--cov-audit 0 不抽查
+        root, fake = _ckc_repo(4, cov)
+        roots += [root, fake]
+        r = _ck_run(root, fake, "--cov-audit", "0")
+        evs = _ck_gov(root, kind="choice-kill")
+        check("S19 --cov-audit 0:沒有 cov-audit、三行 none 都照覆蓋記存活", not _ck_gov(root, kind="cov-audit")
+              and len([e for e in evs if e.get("via") == "cov"]) == 3, f"{evs}\n{r.stderr[-300:]}")
+        # D:帳上這個 at_sha 抽查判錯過 → 不判 none
+        root, fake = _ckc_repo(4, cov)
+        roots += [root, fake]
+        head = _ckcc_git(root, "rev-parse", "HEAD")
+        _ckc_append(root, {"ts": "2026-11-27T10:00:00", "commit": "c", "gate": "choice-kill", "kind": "cov-audit", "hard": False, "nodes": [], "note": "x",
+                           "head_sha": head, "file": _CHOICE_MAIN, "fp": "0" * 16, "new_sha": "0" * 16, "killed": True, "killing_test": "t",
+                           "reach": "none", "wrong": True, "run_id": "r", "token": "a" * 16})
+        r = _ck_run(root, fake, "--cov-audit", "0")
+        evs = _ck_gov(root, kind="choice-kill")
+        run_ev = (_ck_gov(root, kind="run") or [{}])[-1]
+        check("S19 帳上這個 at_sha 抽查判錯過 → 再跑不判 none(沒有 via cov、cov_judged 0)", len(evs) == 4 and not [e for e in evs if e.get("via") == "cov"]
+              and run_ev.get("cov_judged") == 0, f"{evs} {run_ev}\n{r.stderr[-300:]}")
+    finally:
+        _ck_cleanup(*roots, tmp)
+    m = _load_lumos_inproc()
+    ev = {"file": _CHOICE_MAIN, "fp": "f1", "verdict": "survived", "via": "cov", "cov_sha": "c" * 16, "tests_sha": "cov:t", "head_sha": "h1"}
+    x = {"file": _CHOICE_MAIN, "line": 5, "fp": "f1", "status": "mutant", "mutant": {"identity": {"new_sha": "n"}}}
+    keep = m._choice_kill_pick({"lines": [x]}, {(_CHOICE_MAIN, "f1"): [ev]}, set(), set(), "t", None, cov_sha_of=lambda _x: "c" * 16)
+    drop = m._choice_kill_pick({"lines": [x]}, {(_CHOICE_MAIN, "f1"): [ev]}, set(), set(), "t", None, cov_sha_of=lambda _x: "c" * 16, cov_wrong={"h1"})
+    check("範圍 6 帶過去規則:via cov 的存活記的 at_sha 有抽查判錯 → 重跑、不帶過去;沒有 → 帶過去", keep[1] and not keep[0] and drop[0] == [x] and not drop[1],
+          f"{keep} {drop}")
+
+
+def t_choice_compile_units():
+    """[選擇點存活回指 範圍 1、2 ①、6 單元] 平台設定 compile_check 鍵(預設 Android 平台 true、其他 false、型別不對 ValueError、舊單平台 test 節同樣讀)、
+    choice-kill 登記 --no-compile-check 與 --cov-audit、編譯指令從 test<變體>UnitTest 推、Kotlin 兩種錯誤形狀與截斷、多個壞法套同一支檔的行範圍、
+    跳過集合只認 blob 相同而且最後一筆不是補償、_choice_pick 不帶 skip 時跟原本挑法相同。判準來源:計劃〈範圍〉1、〈用詞〉合批編譯檢查、跳過集合。
+    翻紅釘:預設全開 → 非 Android 那條紅;不比 blob → 改檔那條紅;補償不拿掉 → cleared 那條紅;行範圍不算前面壞法多出的行 → 第二個壞法行號那條紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    try:
+        A = "./gradlew :app:testDebugUnitTest --tests '*{method}'"
+        multi = m.load_platforms(tmp, cfg={"platforms": {"a": {"profile": "kotlin-junit", "root": ".", "run_cmd": A},
+                                                         "b": {"profile": "kotlin-junit", "root": ".", "run_cmd": "./gradlew :lib:test --tests '*{method}'"},
+                                                         "c": {"profile": "kotlin-junit", "root": ".", "run_cmd": A, "compile_check": False},
+                                                         "d": {"profile": "node-jest", "root": ".", "run_cmd": "npx jest {method}"}}, "default_platform": "a"})
+        got = {k: v["compile_check"] for k, v in multi["platforms"].items()}
+        check("範圍 1 compile_check 預設:Android(test<變體>UnitTest)true、JVM 模組與其他 profile false、明寫 false 照寫", got == {"a": True, "b": False, "c": False, "d": False},
+              str(got))
+        one = m.load_platforms(tmp, cfg={"test_profile": "kotlin-junit", "test": {"run_cmd": A, "compile_check": False}})
+        check("範圍 1 舊單平台 test 節同樣讀", one["platforms"]["kotlin-junit"]["compile_check"] is False, str(one))
+        bad = []
+        for cfg in ({"platforms": {"a": {"profile": "kotlin-junit", "compile_check": "yes"}}}, {"test_profile": "kotlin-junit", "test": {"compile_check": 1}}):
+            try:
+                m.load_platforms(tmp, cfg=cfg)
+                bad.append(False)
+            except ValueError as e:
+                bad.append("compile_check" in str(e))
+        check("範圍 1 compile_check 型別不對丟 ValueError(多平台與單平台)", bad == [True, True], str(bad))
+    finally:
+        _ck_cleanup(tmp)
+    h = subprocess.run([sys.executable, GRAPHCTL, "choice-kill", "--help"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    check("範圍 1 choice-kill 說明登記 --no-compile-check 與 --cov-audit", "--no-compile-check" in h.stdout and "--cov-audit" in h.stdout, h.stdout[-600:])
+    check("範圍 1 編譯指令:test<變體>UnitTest → compile<變體>UnitTestKotlin、拿掉 --tests;--tests= 形狀同;推不出 → None",
+          m._choice_compile_cmd("./gradlew :app:testDebugUnitTest --tests '*{method}' --info") == "./gradlew :app:compileDebugUnitTestKotlin --info"
+          and m._choice_compile_cmd("./gradlew -p android :core:data:testFreeDebugUnitTest --tests='*{method}'") == "./gradlew -p android :core:data:compileFreeDebugUnitTestKotlin"
+          and m._choice_compile_cmd("./gradlew :lib:test --tests '*{method}'") is None and m._choice_compile_cmd("python run.py {method}") is None,
+          str([m._choice_compile_cmd(c) for c in ("./gradlew :app:testDebugUnitTest --tests '*{method}' --info", "./gradlew -p android :core:data:testFreeDebugUnitTest --tests='*{method}'")]))
+    wt = _os_mod.path.realpath(tempfile.gettempdir())
+    out = (f"e: file://{wt}/app/src/main/java/x/Vm.kt:12:5 Unresolved reference: foo\n"
+           f"e: {wt}/app/src/main/java/x/Old.kt: (7, 3): Type mismatch\n"
+           "e: file:///elsewhere/Other.kt:3:1 boom\nw: warning only\n")
+    errs = m._choice_compile_errors(out, wt)
+    check("〈用詞〉合批編譯檢查 錯誤兩種形狀都認、工作樹外的算對不回", errs == ({("app/src/main/java/x/Vm.kt", 12), ("app/src/main/java/x/Old.kt", 7)}, 1), str(errs))
+    check("〈用詞〉合批編譯檢查 輸出被截斷 → None(一個都不記)", m._choice_compile_errors(m._kill_cap("x\n" * 200000 + out), wt) is None, "")
+    src = "a\nb = 1\nc = 2\nd\n"
+    txt, rg, later = m._choice_compile_apply(src, [("g2", "c = 2", "c = 3"), ("g1", "b = 1", "b = 1\nextra"), ("gx", "zz", "q"), ("go", "b = 1\nc", "x")])
+    check("〈用詞〉合批編譯檢查 同一支檔套好幾個壞法:行範圍算進前面壞法多出的行、對不到與重疊的留到下一批",
+          txt == "a\nb = 1\nextra\nc = 3\nd\n" and rg == {"g1": (2, 3), "g2": (4, 4)} and sorted(later) == ["go", "gx"], f"{txt!r} {rg} {later}")
+    def inv(new_sha, blob, cleared=None, at="h"):
+        return {"gate": "choice-kill", "kind": "invalid", "file": "F.kt", "fp": "fp", "new_sha": new_sha, "row": "C-7", "at_sha": at, "blob": blob,
+                **({"cleared": cleared} if cleared is not None else {})}
+    aux = m._choice_ledger_aux([inv("n1", "b1"), inv("n2", "old"), inv("n3", "b1"), inv("n3", "b1", True), inv("n4", "b1", True), inv("n4", "b1"),
+                                inv("n5", "b1", "壞"), {"gate": "choice-kill", "kind": "invalid", "file": "F.kt", "fp": "fp", "new_sha": 3}])
+    live = m._choice_invalid_live(aux, {"F.kt": "b1"})
+    check("〈用詞〉跳過集合:blob 相同、同一候選最後一筆不是補償的才算(n1、n4);blob 不同(n2)、最後一筆補償(n3)、型別不對的略過",
+          set(live.get(("F.kt", "fp"), {})) == {"n1", "n4"}, str(live))
+    m2, tables = _choice_tables_ip()
+    srcx = _choice_wrap("        val k1 = a1 > b1\n")
+    hits = [_choice_hit(srcx, "C-1", "a1 > b1", mv={"A": "a1", "B": "b1"})]
+    got = m2._choice_file_points(_CHOICE_MAIN, srcx, [5], {"choice": hits, "arid": [], "error": []}, tables)
+    first = got[0]["mutant"]["identity"]["new_sha"]
+    skip1 = m2._choice_file_points(_CHOICE_MAIN, srcx, [5], {"choice": hits, "arid": [], "error": []}, tables, skip={(_CHOICE_MAIN, got[0]["fp"]): {first}})
+    check("範圍 6 _choice_pick 加 skip:第一個在跳過集合裡 → 挑下一個(新的 new_sha);第一個就是不帶 skip 挑到的那個", skip1[0]["status"] == "mutant"
+          and skip1[0]["mutant"]["identity"]["new_sha"] != first and got[0]["more"](skip=set())["identity"]["new_sha"] == first
+          and got[0]["more"](skip={first})["identity"]["new_sha"] == skip1[0]["mutant"]["identity"]["new_sha"], str(skip1)[:400])
+    seen, n = set(), 0
+    while True:
+        mu = got[0]["more"](skip=seen)
+        if mu is None:
+            break
+        seen.add(mu["identity"]["new_sha"])
+        n += 1
+    ex = m2._choice_file_points(_CHOICE_MAIN, srcx, [5], {"choice": hits, "arid": [], "error": []}, tables, skip={(_CHOICE_MAIN, got[0]["fp"]): seen})
+    check("範圍 6 全部候選都在跳過集合 → 行狀態 exhausted、沒有壞法;choice-points 字樣「沒有可用壞法」", n == 5 and ex[0]["status"] == "exhausted" and ex[0]["mutant"] is None
+          and m2._CHOICE_STATUS_TEXT["exhausted"] == "沒有可用壞法" and "  沒有可用壞法" in m2._choice_points_lines(ex[0], {})[0],
+          f"{n} {[{k: v for k, v in e.items() if k != 'more'} for e in ex]}")
+
+
+def t_choice_compile_gov():
+    """[選擇點存活回指 範圍 4、6、10] 帳上有 invalid、cov-audit 事件與 run 的合批編譯欄位時:_choice_ledger_index 跟沒有時相同(只收 kind choice-kill)、
+    gov --stats 選擇點段多印「無效壞法 N 個(依列號)」「沒有可用壞法 N 行」「覆蓋抽查 N 次、判錯 M 次」;補償過的無效不算;型別不對的那一行略過而不中斷;
+    兩個新 kind 登記成不關門的陳述。判準來源:計劃〈範圍〉4、10。翻紅釘:補償照算 → 無效數那條紅;沒登記 kind → 關門分類那條紅。"""
+    import json as _j
+    import shutil
+    m = _load_lumos_inproc()
+
+    def ev(kind, **kw):
+        return {"ts": "2026-11-27T10:00:00", "commit": "c", "gate": "choice-kill", "kind": kind, "hard": False, "nodes": [], "note": "x",
+                "token": _os_mod.urandom(8).hex(), **kw}
+    base = [ev("choice-kill", file=_CHOICE_MAIN, fp="a1", row="C-7", verdict="survived", attempt=1, via="run", killing_test="", reason="", tests_sha="t", new_sha="n" * 16)]
+    extra = [ev("invalid", file=_CHOICE_MAIN, fp="a1", new_sha="1" * 16, row="C-7", at_sha="h", blob="b", run_id="r"),
+             ev("invalid", file=_CHOICE_MAIN, fp="a1", new_sha="2" * 16, row="C-1", at_sha="h", blob="b", run_id="r"),
+             ev("invalid", file=_CHOICE_MAIN, fp="a1", new_sha="2" * 16, row="C-1", at_sha="h2", blob="b", run_id="r", cleared=True),
+             ev("invalid", file=_CHOICE_MAIN, fp="a2", new_sha="3" * 16, row="C-7", at_sha="h", blob="b", run_id="r"),
+             ev("cov-audit", file=_CHOICE_MAIN, fp="a1", new_sha="n" * 16, killed=True, killing_test="t", reach="none", wrong=True, run_id="r"),
+             ev("cov-audit", file=_CHOICE_MAIN, fp="a2", new_sha="n" * 16, killed=False, killing_test="", reach="none", wrong=False, run_id="r"),
+             ev("run", changed=3, mutant_lines=2, secs=5, compile="on", compile_batches=2, invalid_n=2, exhausted_n=1)]
+    bad = ['{"gate": "choice-kill", "kind": "invalid", "file": 1, "cleared": "x"}\n', '{"gate": "choice-kill", "kind": "cov-audit", "killed": "yes"}\n']
+    check("範圍 6 _choice_ledger_index 有沒有 invalid、cov-audit 事件結果相同", m._choice_ledger_index(base) == m._choice_ledger_index(base + extra), "")
+    check("範圍 4 invalid、cov-audit 登記成不關門的陳述", ("choice-kill", "invalid") in m.LOOP_NOT_CLOSE_EVENTS and ("choice-kill", "cov-audit") in m.LOOP_NOT_CLOSE_EVENTS, "")
+    rows = [_j.dumps(x, ensure_ascii=False) + "\n" for x in base + extra] + bad
+    root, vault = _stats_fixture("gctl-ckcc-st-", rows)
+    try:
+        out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    seg = out[out.find("改動選擇點"):]
+    check("範圍 10 gov --stats:無效壞法 2 個(C-7 2;C-1 補償過不算)、沒有可用壞法 1 行", "無效壞法 2 個(C-7 2);沒有可用壞法 1 行" in seg, seg[:900])
+    check("範圍 10 gov --stats:覆蓋抽查 2 次、判錯 1 次", "覆蓋抽查 2 次、判錯 1 次" in seg, seg[:900])
+
+
+
+# ── 選擇點存活回指第二段代碼審 r1 補修(卷證 governance/review-reports/code-選擇點存活回指第二段/r1-*):依根因分組 A–F,每組替同族每處各一案 ──
+def t_choice_exhausted_status_readers():
+    """[第二段 r1 A(正確性 #1、邊界 #2、通才 #1)] 依行狀態查表或分支的讀者都認 exhausted:situation-rule --point(_situation_rule_point_target)
+    對 exhausted 行印「沒有可用壞法」、rc 2、計劃沒動(原本丟 KeyError);lint-waive choice:(_choice_waive_target)說「沒有可用壞法」,不說「沒有壞法」。
+    翻紅釘:point_target 的錯誤表拿掉 exhausted → KeyError;waive 照舊說沒有壞法 → 第二條紅。"""
+    import contextlib
+    import io
+    m = _load_lumos_inproc()
+    line = {"file": "a.kt", "line": 3, "fp": "f", "decl": "", "status": "exhausted", "mutant": None}
+    names = ("_vault_repo_root", "_lens_full_sha", "_choice_range", "_choice_kill_scan", "_choice_tables", "_choice_compute")
+    saved = {k: getattr(m, k) for k in names}
+    try:
+        m._vault_repo_root = lambda env: "/nonexistent"
+        m._lens_full_sha = lambda rr, ref: "a" * 40
+        m._choice_range = lambda rr, diff, branch: ("b" * 40 + ".." + "a" * 40, "a" * 40, None)
+        m._choice_kill_scan = lambda rr, rng, at, only, skip=None: {"lines": [line], "unverified": []}
+        m._choice_tables = lambda path=None: ({"choice": [], "arid": [], "categories": []}, None, False)
+        m._choice_compute = lambda *a, **k: {"lines": [line], "unverified": []}
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            try:
+                rc = m._situation_rule_point_target(None, "a.kt:3", None, None)
+            except KeyError as e:
+                rc = f"KeyError {e}"
+        check("r1 A situation-rule --point 對 exhausted 行:rc 2、印「沒有可用壞法」、計劃沒動", rc == 2 and "沒有可用壞法" in err.getvalue()
+              and "計劃沒動" in err.getvalue(), f"{rc!r} {err.getvalue()[-300:]}")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = m._choice_waive_target("/nonexistent", "a.kt:3", "不適用:這一行的候選都編不過所以不用放行")
+        check("r1 A lint-waive choice: 對 exhausted 行說「沒有可用壞法」、rc 2", rc == 2 and "沒有可用壞法" in err.getvalue(), f"{rc!r} {err.getvalue()[-300:]}")
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+
+
+def _ckcc_unit(m, tmp, files, plist, probes=None, cmd_bad="BAD"):
+    """_KillCompile 的單元現場:tmp 是假工作樹(檔照 files 寫、git 不用),編譯指令是一支小腳本:每支 .kt 有含 cmd_bad 的行就印 Kotlin 形狀的錯誤、rc 1,
+    每次呼叫記一行到 calls.log(那時每支檔的內容)→ (_KillCompile, 記下的 on_invalid 呼叫, calls.log 路徑)。"""
+    import json as _j
+    import types
+    wt = Path(tmp) / "wt"
+    wt.mkdir(parents=True, exist_ok=True)
+    for rel, text in files.items():
+        (wt / rel).parent.mkdir(parents=True, exist_ok=True)
+        (wt / rel).write_text(text, encoding="utf-8")
+    log = Path(tmp) / "calls.log"
+    chk = Path(tmp) / "chk.py"
+    chk.write_text("import os, sys, json\nroot = sys.argv[1]\nbad = sys.argv[2]\nerr = []\nsnap = {}\n"
+                   "for d, _s, fs in os.walk(root):\n    for f in fs:\n        if f.endswith('.kt'):\n            p = os.path.join(d, f)\n"
+                   "            t = open(p, encoding='utf-8').read()\n            snap[os.path.relpath(p, root)] = t\n"
+                   "            for no, ln in enumerate(t.split('\\n'), 1):\n                if bad in ln:\n                    err.append(f'e: file://{p}:{no}:1 boom')\n"
+                   f"open({str(log)!r}, 'a').write(json.dumps(snap) + '\\n')\nprint('\\n'.join(err))\nsys.exit(1 if err else 0)\n", encoding="utf-8")
+    calls = []
+    prep = m._KillPrep(_ckm_time.monotonic() + 600, set(), {}, None, compile={"p"}, cbudget=300.0,
+                       on_invalid=lambda g, ident, cleared: calls.append((g, cleared)), on_swap=lambda plat, g, bad: [], recipes_of=None, probes=probes or {})
+    c = types.SimpleNamespace(plat="p", plist=list(plist), wt=str(wt), wt_real=_os_mod.path.realpath(str(wt)), run_dir=str(wt), floor=20.0,
+                              mstate={"w": 0, "r": 0, "unsure": set()}, run_cmd="x", results=[])
+    kc = m._KillCompile(prep, c)
+    kc.cmd = f"{_sh_quote_t(sys.executable)} {_sh_quote_t(str(chk))} {_sh_quote_t(c.wt_real)} {cmd_bad}"
+    kc.t0 = _ckm_time.monotonic()
+    return kc, calls, log
+
+
+def _sh_quote_t(x):
+    import shlex
+    return shlex.quote(x)
+
+
+def t_choice_compile_probe_split():
+    """[第二段 r1 B(正確性 #2、邊界 #1)] 探針:兩行舊候選同批,一行永久編不過、一行能編 → 整批紅時逐個單獨編,能編的那一行記補償(cleared)、
+    編不過的不記;寫入後修改時間沒錯開或 mstate["unsure"] 非空 → 當成這次沒驗:探針不記補償、合批不記無效、也不跑單獨確認。
+    翻紅釘:整批紅就全不補 → 第一條紅;沒驗當全綠 → 補償那條紅;合批沒驗當綠以外的路徑記無效 → 合批那條紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    o_aw = m._kill_after_write
+    try:
+        files = {"A.kt": "val a = 1\n", "B.kt": "val b = 1\n"}
+        plist = [{"group": "A:1", "file": "A.kt", "old": "val a = 1", "new": "val a = 2", "test": "t"},
+                 {"group": "B:1", "file": "B.kt", "old": "val b = 1", "new": "val b = 2", "test": "t"}]
+        probes = {"A:1": [{"old": "val a = 1", "new": "val a = BAD", "new_sha": "pa", "row": "C-7"}],
+                  "B:1": [{"old": "val b = 1", "new": "val b = 3", "new_sha": "pb", "row": "C-7"}]}
+        kc, calls, log = _ckcc_unit(m, tmp / "1", files, plist, probes)
+        kc.probe()
+        check("r1 B 兩行探針同批、A 永久紅 B 能編 → 只有 B 記補償(cleared)", calls == [("B:1", True)], str(calls))
+        check("r1 B 探針後樹上還原回原版", all((Path(kc.c.wt) / f).read_text(encoding="utf-8") == t for f, t in files.items()), "")
+        m._kill_after_write = lambda path, state: False
+        kc, calls, log = _ckcc_unit(m, tmp / "2", files, plist, {"B:1": probes["B:1"]})
+        kc.probe()
+        check("r1 B 寫入後修改時間沒錯開 → 探針不記補償、也不編", calls == [] and not log.exists(), f"{calls} {log.exists()}")
+        bad_plist = [dict(plist[0], new="val a = BAD")]
+        kc, calls, log = _ckcc_unit(m, tmp / "3", files, bad_plist)
+        kc.batches(kc.units())
+        check("r1 B 寫入後修改時間沒錯開 → 合批不記無效、不跑單獨確認", calls == [] and not log.exists(), f"{calls} {log.exists()}")
+        m._kill_after_write = o_aw
+        kc, calls, log = _ckcc_unit(m, tmp / "4", files, bad_plist)
+        kc.c.mstate["unsure"].add("/elsewhere")
+        kc.batches(kc.units())
+        kc.probe()
+        check("r1 B mstate unsure 非空 → 合批不記無效、探針不記補償", calls == [] and not log.exists(), f"{calls}")
+        kc, calls, log = _ckcc_unit(m, tmp / "5", files, bad_plist)
+        kc.batches(kc.units())
+        check("r1 B ★對照★ 修改時間正常 → 合批確認 A 編不過、記無效", calls == [("A:1", False)], str(calls))
+        n = [0]
+
+        def aw3(path, state):   # 合批那次寫入與還原都正常,單獨確認那次寫入修改時間沒錯開
+            n[0] += 1
+            return False if n[0] == 3 else o_aw(path, state)
+        m._kill_after_write = aw3
+        kc, calls, log = _ckcc_unit(m, tmp / "6", files, bad_plist)
+        kc.batches(kc.units())
+        m._kill_after_write = o_aw
+        check("r1 B 合批紅、單獨確認那次沒驗 → 不記無效(只編了合批那一次)", calls == [] and len(log.read_text(encoding="utf-8").splitlines()) == 1,
+              f"{calls} {log.read_text(encoding='utf-8') if log.exists() else ''}")
+    finally:
+        m._kill_after_write = o_aw
+        _ck_cleanup(tmp)
+
+
+def t_choice_compile_units_guards():
+    """[第二段 r1 C ②、F ①(架構對齊 #2、資安 #1)] 合批前的過濾:配方 new 寫不成 UTF-8(替身字元)或 old 不是字串(_kill_old_issue/_kill_new_issue,同 _kill_merge_apply)
+    不進合批;套壞法的真實路徑落在工作樹的 .git 底下不進合批;一般的照收。翻紅釘:拿掉其中一道 → 那一案被收進合批而紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    try:
+        files = {"A.kt": "val a = 1\n", "B.kt": "val b = 1\n", ".git/hooks/x.kt": "val g = 1\n", "C.kt": "val c = 1\n", "sub/.GIT/y.kt": "val h = 1\n"}
+        plist = [{"group": "A", "file": "A.kt", "old": "val a = 1", "new": "val a = 2"},
+                 {"group": "B", "file": "B.kt", "old": "val b = 1", "new": "val b = \ud800"},
+                 {"group": "G", "file": ".git/hooks/x.kt", "old": "val g = 1", "new": "val g = 2"},
+                 {"group": "C", "file": "C.kt", "old": 3, "new": "val c = 2"},
+                 {"group": "H", "file": "sub/.GIT/y.kt", "old": "val h = 1", "new": "val h = 2"}]
+        kc, _calls, _log = _ckcc_unit(m, tmp, files, plist)
+        got = sorted(kc.units())
+        check("r1 C② F① r2 合批只收一般的 A;替身字元、old 不是字串、.git 底下(含 .GIT 大小寫變體)的都不收", got == ["A"], str(got))
+    finally:
+        _ck_cleanup(tmp)
+
+
+def t_choice_compile_flag_same_source():
+    """[第二段 r1 C ①、#4(架構對齊 #1、#4)] compile_check 預設跟「組不組得出編譯指令」同源:run_cmd 有 test<變體>UnitTest 字樣、但組不出指令
+    (沒有 {method}、兩段 Gradle)→ 預設 false;組得出 → true。覆蓋的分析指令與 exec 路徑跟編譯指令共用同一支取變體的函式,輸出不變。
+    翻紅釘:預設照另寫的正規式 → 前兩案 true 而紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    try:
+        cmds = {"nomethod": "./gradlew :app:testDebugUnitTest", "two": "./gradlew :app:testDebugUnitTest --tests '*{method}' && ./gradlew :b:testDebugUnitTest",
+                "ok": "./gradlew :app:testDebugUnitTest --tests '*{method}'"}
+        pd = m.load_platforms(tmp, cfg={"platforms": {k: {"profile": "kotlin-junit", "root": ".", "run_cmd": v} for k, v in cmds.items()}, "default_platform": "ok"})
+        got = {k: v["compile_check"] for k, v in pd["platforms"].items()}
+        check("r1 C① compile_check 預設 = 組得出編譯指令(沒 {method}、兩段 Gradle → false;組得出 → true)", got == {"nomethod": False, "two": False, "ok": True}, str(got))
+    finally:
+        _ck_cleanup(tmp)
+    sh = m._choice_merge_shape("./gradlew -p android :core:data:testFreeDebugUnitTest --tests='*{method}' --info")
+    a = m._choice_cov_analyze_cmd("./gradlew -p android :core:data:testFreeDebugUnitTest --tests='*{method}' --info", sh, "/i.gradle", "/m.json")
+    check("r1 #4 分析指令照舊:任務換 lumosCovAnalyze、帶變體 FreeDebug、--tests 拿掉",
+          a == "./gradlew -p android :core:data:lumosCovAnalyze --init-script /i.gradle -PlumosCovManifest=/m.json -PlumosCovVariant=FreeDebug --info", a)
+
+
+def t_choice_cov_pkg_comments():
+    """[第二段 r1 D(通才 #2、資源 #1)] 套件讀法:行註解裡的 /*(例 `// 見 src/main/*`)不會被當成區塊註解開頭、一路蓋到檔尾;真的區塊註解照蓋;
+    壞法行那邊(_choice_cov_req)跟掃主程式一樣只讀檔頭 _CHOICE_COV_SRC_HEAD:package 在檔頭之後就讀不到(兩邊一致)。
+    翻紅釘:照舊用區塊註解正規式 → 第一條回空字串;壞法行讀整份 → 長檔頭那條讀到套件而紅。"""
+    m = _load_lumos_inproc()
+    check("r1 D 行註解帶 /* 不吃掉 package", m._choice_cov_pkg_of("// 見 src/main/*\npackage com.example.app\n\nclass A\n") == "com/example/app",
+          repr(m._choice_cov_pkg_of("// 見 src/main/*\npackage com.example.app\n")))
+    check("r1 D ★對照★ 區塊註解裡的 package 不算", m._choice_cov_pkg_of("/* package wrong.one */\npackage right.one\n") == "right/one", "")
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    try:
+        body = "        val k1 = a1 === b1\n"
+        long_head = "/*\n" + ("授權" * 20000) + "\n*/\n"
+        src = long_head + "package far.away\n\nclass Vm {\n    fun load() {\n" + body + "    }\n}\n"
+        (tmp / "Vm.kt").write_text(src, encoding="utf-8")
+        ln = src.split("\n").index(body.rstrip("\n")) + 1
+        x = {"file": "Vm.kt", "line": ln, "decl": "fun load() {", "mutant": {"identity": {"old": body.rstrip("\n"), "new": body.rstrip("\n").replace("===", "!==")}}}
+        req = m._choice_cov_req(tmp, x, 0)
+        (tmp / "src" / "main").mkdir(parents=True)
+        (tmp / "src" / "main" / "Vm.kt").write_text(src, encoding="utf-8")
+        check("r1 D 長檔頭:壞法行跟掃主程式一樣只讀檔頭 → 兩邊都讀不到 package(一致)", req["pkg"] == "" and m._choice_cov_src_pkgs(tmp) == {""}
+              and req["first"] == ln, f"{req} {m._choice_cov_src_pkgs(tmp)}")
+    finally:
+        _ck_cleanup(tmp)
+
+
+def t_choice_cov_audit_noresult():
+    """[第二段 r1 E(通才 #3)] 抽到的 none 行照跑全部測試卻跑不出結果(no_result)→ 不算抽查完成:不記 cov-audit killed、不記 wrong,
+    其餘等著的 none 行改照跑(沒有任何 via cov 事件)。翻紅釘:no_result 當成覆蓋判對了 → 其餘 none 行記 via cov 而紅。"""
+    roots = []
+    try:
+        root, fake = _ckc_repo(4, {"__cov__": {"pass": {"alphaCase": [4]}}, "alphaCase": {"compile": [1, 2, 3]}})
+        roots += [root, fake]
+        r = _ck_run(root, fake)
+        evs = _ck_gov(root, kind="choice-kill")
+        aud = [e for e in _ck_gov(root, kind="cov-audit") if e.get("reach") == "none"]
+        check("r1 E 抽查跑不出結果 → 不記 none 的 cov-audit(沒有 killed、wrong)", not aud, f"{aud}\n{r.stdout[-400:]}")
+        check("r1 E 其餘 none 行改照跑:沒有任何 via cov 事件、三行 none 都記跑不出結果", not [e for e in evs if e.get("via") == "cov"]
+              and sorted(e.get("verdict") for e in evs if e.get("fp") != _ck_fp(4, 4)) == ["no_result"] * 3, f"{evs}\n{r.stdout[-400:]}{r.stderr[-300:]}")
     finally:
         _ck_cleanup(*roots)
 
