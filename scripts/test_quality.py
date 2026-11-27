@@ -152,9 +152,10 @@ class JUnitRejected(ValueError):
     """JUnit 拒收:訊息字串照舊(既有呼叫端照樣接得到 ValueError),另帶原因代碼 code 給安全證據閘用,
     不讓呼叫端比對訊息字串(Projects/安全主張驗收閘_計劃〈讀不可信資料的上限與失敗處理〉)。"""
 
-    def __init__(self, code, message):
+    def __init__(self, code, message, ghost=False):
         super().__init__(message)
         self.code = code
+        self.ghost = ghost   # zero_cases 時:是不是只裝背景輸出的空殼檔(沒有 error、failure,每個 testsuite 宣告的 tests、failures、errors 都是 0)
 
 
 class NoDtdTreeBuilder(ET.TreeBuilder):
@@ -263,7 +264,9 @@ def junit(raw):
     if len(ids) != len(set(ids)):
         raise JUnitRejected('report_duplicate_identity', 'duplicate test identities')
     if not cases:
-        raise JUnitRejected('zero_cases', 'zero testcases')
+        ghost = not st.any_error_elem and not st.outside and all(
+            str(a.get(k, '0')).strip() == '0' for t, a, _c in st.suites if t == 'testsuite' for k in ('tests', 'failures', 'errors'))
+        raise JUnitRejected('zero_cases', 'zero testcases', ghost=ghost)
     # Suite-level errors must not disappear behind passing testcase rows.
     if st.any_error_elem or any(int(a.get('errors', '0')) > 0 for t, a, _c in st.suites if t == 'testsuite'):
         raise JUnitRejected('suite_error', 'runner/suite errors')
