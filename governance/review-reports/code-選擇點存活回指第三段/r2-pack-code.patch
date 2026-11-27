@@ -1,0 +1,2261 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index b04e74e4a..b39800164 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -17924,21 +17924,23 @@ def _gov_choice_counts(rows):
+     """gov --stats 選擇點段的數(Projects/改動選擇點都要有需求守住_計劃 範圍 5、RETIRE-IF;論文 2.3、3.1)→ dict。rows 是去重後的統計列。
+     被回報的存活:帳上出現過 survived 的 (檔, 行指紋) 數(RETIRE-IF 的分母);run:改動行數、有壞法行數、耗時(秒)清單;第一次跑(attempt 1)的
+     killed 與總數;存活後的處置:同鍵之前有 survived 的 killed 依 via 分「寫回規格」(situation-rule)與「補測試後殺掉」(run),放行依理由標籤;
+     no_result 原因(冒號前那段);第一次跑只算 via run(人裁寫回那筆的 attempt 也可能是 1,代碼審 code-改動選擇點 r1 g4);乾節點候選:選擇點放行依 (列號, 外層宣告) 數,3 次以上才列;單一測試殺掉 3 支以上不同檔的壞法;blocked 筆數與
+     原因含「過期」的筆數;unverified 筆數。整數一律 type(x) is int(排除 bool)。"""
+     from collections import Counter
+     c = {"ever": set(), "changed": [], "mutant_lines": [], "secs": [], "first": Counter(), "after": Counter(), "waive": Counter(),
+          "nores": Counter(), "shape": Counter(), "test_files": {}, "blocked": 0, "pass_blocked": 0, "stale_blocked": 0, "unverified": 0,
+          "row_mut": {}, "row_waive": {}, "cov_surv": 0, "cov_keys": set(), "cov_rerun": set(),
+          # 第二段(Projects/選擇點存活回指條款_計劃 範圍 10):invalid {(檔, 行指紋, new_sha): (列號, 補償了沒)} 只留最新一筆;最新一次 run 的 exhausted_n;抽查次數與判錯次數
+-         "invalid": {}, "exhausted": None, "audit": 0, "audit_wrong": 0}
++         "invalid": {}, "exhausted": None, "audit": 0, "audit_wrong": 0,
++         # 第三段(範圍 10):每行最新一筆 reach 的分類與 layer 的層、每行最新一筆判定、依覆蓋省掉的壞法執行數與測試支數
++         "reach_last": {}, "layer_last": {}, "last_v": {}, "cov_saved": 0, "cov_saved_tests": 0}
+     for r in rows:
+         if r.get("gate") == "lint-new" and r.get("ck_waive"):
+             w = r["ck_waive"]
+             c["waive"][str(w.get("label") or "?")] += 1
+             if isinstance(w.get("row"), str):
+                 c["shape"][(w["row"], str(w.get("decl") or "(沒有外層宣告)"))] += 1
+             # 依列號(第二批計劃範圍 5):同一個 (檔, 行指紋) 多筆放行只算提交時間最晚那筆(同一個提交的重複放行去重時已併成一筆);
+             # 時間先後照 _loop_ts_newer 比 UTC 秒數(帳裡可能混不同時區偏移,直接比字串會選錯;代碼審 code-選擇點第二批 r1 a1),同時刻後讀到的那筆贏
+             wk, ts = (w.get("file"), w.get("fp")), str(r.get("ts") or "")
+             if wk not in c["row_waive"] or not _loop_ts_newer(c["row_waive"][wk][0], ts):
+@@ -17969,20 +17971,35 @@ def _gov_choice_by_row(c):
+     return out, norow
+ 
+ 
+ def _gov_choice_count_run(c, r, ck):
+     """run 那筆:改到的行、有壞法的行、秒數;exhausted_n 取最後一筆。"""
+     for k in ("changed", "mutant_lines", "secs"):
+         if type(ck.get(k)) is int or (k == "secs" and type(ck.get(k)) is float):
+             c[k].append(ck[k])
+     if type(ck.get("exhausted_n")) is int:
+         c["exhausted"] = ck["exhausted_n"]
++    if all(type(ck.get(k)) is int for k in ("cov_skipped", "cov_full", "cov_selected")):
++        c["cov_saved"] += ck["cov_skipped"]
++        c["cov_saved_tests"] += max(0, ck["cov_full"] - ck["cov_selected"])
++
++
++def _gov_choice_count_reach(c, r, ck):
++    """reach 那筆:每行最新一筆的覆蓋分類。"""
++    if type(ck.get("reach")) is str:
++        c["reach_last"][(ck.get("file"), ck.get("fp"))] = ck["reach"]
++
++
++def _gov_choice_count_layer(c, r, ck):
++    """layer 那筆:每行最新一筆的層(撤回是 0)。"""
++    if type(ck.get("layer")) is int and 0 <= ck["layer"] <= 4:   # 跟讀側 _choice_ledger_aux 同一判法(r1 邊界 #5)
++        c["layer_last"][(ck.get("file"), ck.get("fp"))] = ck["layer"]
+ 
+ 
+ def _gov_choice_count_invalid(c, r, ck):
+     """invalid 那筆:同一個壞法身分取最後一筆(含補償 cleared)。"""
+     if all(type(ck.get(k)) is str for k in ("file", "fp", "new_sha")) and type(r.get("row")) is str:
+         c["invalid"][(ck["file"], ck["fp"], ck["new_sha"])] = (r["row"], ck.get("cleared") is True)
+ 
+ 
+ def _gov_choice_count_audit(c, r, ck):
+     """cov-audit 那筆:抽查幾次、判錯幾次。"""
+@@ -17997,23 +18014,26 @@ def _gov_choice_count_blocked(c, r, ck):
+     c["stale_blocked"] += any(isinstance(x, dict) and x.get("reason") == "過期" for x in ck.get("reasons") or [])
+ 
+ 
+ def _gov_choice_count_unverified(c, r, ck):
+     c["unverified"] += 1
+ 
+ 
+ def _gov_choice_count_one(c, r, ck, kind):
+     """_gov_choice_counts 的一筆 choice-kill 事件(run、invalid、cov-audit、blocked、unverified、每個壞法那筆)→ 交給那一種的計數函式。"""
+     fn = {"run": _gov_choice_count_run, "invalid": _gov_choice_count_invalid, "cov-audit": _gov_choice_count_audit,
++          "reach": _gov_choice_count_reach, "layer": _gov_choice_count_layer,
+           "blocked": _gov_choice_count_blocked, "unverified": _gov_choice_count_unverified, _CHOICE_KILL_GATE: _gov_choice_count_verdict}.get(kind)
+     if fn is not None:
+         fn(c, r, ck)
++    if kind == _CHOICE_KILL_GATE and r.get("verdict") in ("killed", "survived", "no_result"):   # 每行最新一筆判定(第三段 gov 判讀那行的未判讀)
++        c["last_v"][(ck.get("file"), ck.get("fp"))] = r["verdict"]
+ 
+ 
+ def _gov_choice_count_verdict(c, r, ck):
+     """每個壞法那筆:第一次跑(attempt 1)的判定、曾經存活、存活後殺掉依 via 分、殺掉它的測試涵蓋幾支檔、no_result 原因(冒號前那段)。"""
+     key, v = (ck.get("file"), ck.get("fp")), r.get("verdict")
+     if type(r.get("attempt")) is int and r["attempt"] == 1 and r.get("via") == "run":   # 第一次「自動跑」;人裁寫回的不算(r1 g4)
+         c["first"][v] += 1
+     # 依覆蓋判存活(Projects/選擇點存活回指條款_計劃 範圍 6):via cov 另列;之後同鍵第一次 via run 的判定另列「依覆蓋判存活後改跑」
+     if v == "survived" and r.get("via") == "cov":
+         c["cov_surv"] += 1
+@@ -18083,20 +18103,37 @@ def _render_gov_choice(rows):
+ def _render_gov_choice_compile(c):
+     """選擇點段的合批編譯與抽查兩行(Projects/選擇點存活回指條款_計劃 範圍 10;只數帳上最新一筆,不判有效):無效壞法幾個(依型錄列號;補償過的不算)、
+     最新一次 run 沒有可用壞法幾行;覆蓋抽查幾次、判錯幾次。帳上都沒有就不印。"""
+     from collections import Counter
+     live = Counter(row for row, cleared in c["invalid"].values() if not cleared)
+     if live or c["exhausted"]:
+         rows = "、".join(f"{_kill_esc(k)[:20]} {v}" for k, v in sorted(live.items()))
+         print(f"    無效壞法 {sum(live.values())} 個" + (f"({rows})" if rows else "") + f";沒有可用壞法 {c['exhausted'] or 0} 行(最新一次 run)")
+     if c["audit"]:
+         print(f"    覆蓋抽查 {c['audit']} 次、判錯 {c['audit_wrong']} 次")
++    _render_gov_choice_layers(c)
++
++
++def _render_gov_choice_layers(c):
++    """選擇點段的覆蓋分類、判讀、依覆蓋省掉三行(Projects/選擇點存活回指條款_計劃 範圍 10;只數帳上每行最新一筆,不判有效):覆蓋分類各幾筆;
++    四層各幾筆與未判讀幾筆(未判讀 = 最新判定是存活、沒有判讀或最新一筆是撤回);依覆蓋省掉的壞法執行數與測試支數(各次 run 的 cov_skipped、cov_full - cov_selected 加總)。"""
++    from collections import Counter
++    if c["reach_last"]:
++        rc = Counter(c["reach_last"].values())
++        print(f"    覆蓋分類(每行最新一筆):經過條款 {rc['clause']}、沒有條款經過 {rc['none']}、覆蓋不明 {rc['unknown']}")
++    surv = [k for k, v in c["last_v"].items() if v == "survived"]
++    if c["layer_last"] or (surv and c["reach_last"]):
++        lc = Counter(c["layer_last"].get(k, 0) for k in surv)
++        print("    判讀(每行最新一筆):" + "、".join(f"第 {n} 層 {Counter(v for v in c['layer_last'].values())[n]}" for n in (1, 2, 3, 4))
++              + f";存活裡未判讀 {lc[0]}")
++    if c["cov_saved"] or c["cov_saved_tests"]:
++        print(f"    依覆蓋省掉的壞法執行 {c['cov_saved']} 個、測試 {c['cov_saved_tests']} 支(cov_full - cov_selected 加總)")
+ 
+ 
+ def _render_gov_situation(rows):
+     """gov --stats 的情境題段(計劃範圍 7):每列作者判適用數、正一致率、相符率、二元 Cohen's kappa(樣本 ≥20 且兩方各有兩種答案才印);
+     仲裁採作者/採盲判、段放行(分 ai 與 human)、重判次數、證據樣式提醒經盲判終局確認的真陽性/誤報/待確認;
+     多數決提醒(多數判作者沒照做、沒有多數)只印則數(盲判自己產生的提醒,同一批盲判證不了真假,升擋前要人抽樣;代碼審 r1 丙)。"""
+     author, first, arb, segkey, warns, waives = _gov_situation_collect(rows)
+     n_cited, n_nospec, n_differ, rules = _gov_situation_spec_counts(rows, warns)
+     if not (author or first or warns or rules["human"] or rules["ai"]):
+         return
+@@ -18547,20 +18584,23 @@ _GOV_FIELD_TYPES = {
+     "single_runs": (int,),
+     # 選擇點存活回指條款(Projects/選擇點存活回指條款_計劃 範圍 4):reach 事件與 run、reach-run 那筆的覆蓋欄位;讀者拿來比對與加總,型別錯就跳過那一行
+     **dict.fromkeys(("reach", "reach_why", "cov_sha", "cov"), (str,)),
+     "reach_clauses": (list,),
+     "reach_clauses_truncated": (bool,),
+     **dict.fromkeys(("reach_n", "cov_secs", "cov_skipped", "cov_selected", "cov_full", "cov_judged"), (int,)),
+     # 第二段(範圍 4):invalid 事件(at_sha、blob、cleared)、cov-audit 事件(killed、wrong)、run 那筆的合批編譯欄位
+     **dict.fromkeys(("at_sha", "blob", "compile"), (str,)),
+     **dict.fromkeys(("cleared", "killed", "wrong"), (bool,)),
+     **dict.fromkeys(("compile_batches", "invalid_n", "exhausted_n"), (int,)),
++    # 第三段(範圍 9):layer 事件(層、判讀檔路徑與雜湊、依據指紋)
++    "layer": (int,),
++    **dict.fromkeys(("judgment", "judgment_sha", "deps_sha"), (str,)),
+ }
+ 
+ 
+ def _gov_event_types_ok(d):
+     """治理事件物件的欄位型別合不合 _GOV_FIELD_TYPES(外加 pairs 每項成對、finding_kinds/refute_verdicts 的值是字串、finding_sources 的值是字串清單)。"""
+     for k, types in _GOV_FIELD_TYPES.items():
+         if k in d and not isinstance(d[k], types):
+             return False
+     if any(not (isinstance(x, list) and len(x) == 2) for x in d.get("pairs") or []):
+         return False
+@@ -18639,21 +18679,23 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
+          **({"consent": d.get("consent")} if d.get("gate") == "situation-rule" else {}),
+          # 改動選擇點(Projects/改動選擇點都要有需求守住_計劃 範圍 5):帶 point 的人裁事件分開統計;choice-kill 帶出判定欄位,鑑別子用事件自帶隨機碼
+          **({"point": d.get("point")} if d.get("gate") == "situation-rule" and d.get("point") else {}),
+          **({k: d.get(k) for k in ("verdict", "row", "attempt", "reason", "via", "run_id")} if d.get("gate") == "choice-kill" else {}),
+          # gov --stats 的選擇點段(_render_gov_choice)要的欄位:每個壞法、run、blocked 各自的數;選擇點放行(lint-new waived 帶 scope choice-kill)的理由標籤與形狀
+          **({"ck": dict({k: d.get(k) for k in ("file", "fp", "killing_test", "changed", "mutant_lines", "secs", "reasons", "site",
+                                                 "ran", "base_secs", "merged", "single", "merge_tripped",
+                                                 # 選擇點存活回指條款(範圍 4、10):reach 事件的分類、run 的覆蓋欄位
+                                                 "reach", "reach_why", "cov", "cov_secs", "cov_skipped", "cov_selected", "cov_full", "cov_judged",
+                                                 # 第二段:invalid 與 cov-audit 事件、run 的合批編譯欄位
+-                                                "new_sha", "cleared", "killed", "wrong", "compile", "compile_batches", "invalid_n", "exhausted_n")},
++                                                "new_sha", "cleared", "killed", "wrong", "compile", "compile_batches", "invalid_n", "exhausted_n",
++                                                # 第三段:layer 事件的層
++                                                "layer")},
+                         **({"judged": d.get("judged") or "single"} if d.get("kind") == "choice-kill" else {}),   # 缺 judged 的舊帳讀成 single
+                         # 第二段計劃:缺 merge_kind 讀成空字典(每個平台都當 none)、缺 single_runs 讀成 0;run 那筆缺 merge_unclean、merge_off 讀成空字典
+                         **({"merge_kind": d.get("merge_kind") or {}, "single_runs": d.get("single_runs") or 0} if d.get("kind") == "choice-kill" else {}),
+                         **({"merge_unclean": d.get("merge_unclean") or {}, "merge_off": d.get("merge_off") or {}} if d.get("kind") == "run" else {}),
+                         # 第三段計劃:缺 merge_why、merge_trips、merge_reopen 讀成空字典
+                         **({"merge_why": d.get("merge_why") or {}} if d.get("kind") == "choice-kill" else {}),
+                         **({"merge_trips": d.get("merge_trips") or {}, "merge_reopen": d.get("merge_reopen") or {},
+                             "merge_init_off": d.get("merge_init_off") or {}} if d.get("kind") == "run" else {}))}
+             if d.get("gate") == "choice-kill" else {}),
+          **({"ck_waive": {k: d.get(k) for k in ("label", "row", "decl", "file", "fp")}}
+@@ -21137,20 +21179,22 @@ LOOP_NOT_CLOSE_EVENTS = {
+     ("choice-kill", "choice-kill"),
+     ("choice-kill", "run"),
+     ("choice-kill", "blocked"),
+     ("choice-kill", "unverified"),
+     # 選擇點存活回指條款(Projects/選擇點存活回指條款_計劃 範圍 4):每個壞法行的覆蓋分類、--reach-only 一次呼叫,都是陳述
+     ("choice-kill", "reach"),
+     ("choice-kill", "reach-run"),
+     # 第二段(範圍 4):合批編譯確認編不過的壞法(含探針補償)、覆蓋抽查,都是陳述
+     ("choice-kill", "invalid"),
+     ("choice-kill", "cov-audit"),
++    # 第三段(範圍 9):存活的判讀與撤回,是陳述
++    ("choice-kill", "layer"),
+ }
+ LOOP_CLOSE_SINCE = "2026-08-22"   # 治理帳出現第一筆 design-loop converged 的日子
+ # ★誠實記★:code-loop 的放行事件早得多(最早 2026-07-05),比這個日期早六週。
+ # 上面那個日期只用在「設計審那組」的免責聲明,不涵蓋 code-loop 那組。
+ 
+ 
+ def _loop_ts_key(ts):
+     """ISO 時間字串 → 可比較的 UTC 秒數;解析不動或沒帶時區就回 None(呼叫端退回字串比對)。
+ 
+     ★為什麼需要這一層★:審查帳與治理帳今天全部寫 +08:00(當場數過:1101 / 26443 筆都是),
+@@ -28276,25 +28320,25 @@ def _kill_proc_group(proc):
+         except OSError:
+             pass
+ 
+ 
+ _KILL_RUN_LIVE = {}   # _kill_run 正在跑的測試程序(pid → Popen;開在自己的 session,群組編號就是 pid)
+ _KILL_WT_LIVE = {}    # 活著的隔離工作樹(路徑 → 建它的 repo;_isolated_worktree 登記、收掉時拿掉);人裁與 choice-kill 被強制結束時把路徑印到標準錯誤
+ # 壞法編不過(Kotlin 編譯器的錯誤行、Gradle 編譯任務失敗):choice-kill 判 no_result「壞法編不過」、同組停(論文 3.2.1 編不過的壞法不算數)
+ _KILL_COMPILE_RE = re.compile(r"(?m)^e: (?:file://)?\S+\.kts?[:(]|Compilation error|Execution failed for task '[^']*:compile\w*Kotlin\w*'")
+ 
+ 
+-def _kill_run(cmd, cwd, timeout, keep_re=None, started=None, merge=None):
++def _kill_run(cmd, cwd, timeout, keep_re=None, started=None, merge=None, keep_max=20):
+     """跑 run_cmd(shell,killpg 沿 lint 先例)。回 (rc, tail200, elapsed, timed_out)。
+ 
+-    keep_re 直接轉給 _kill_cap:輸出超過上限而要截斷時,符合這個樣式的行不得被砍掉
+-    (合約測試閘拿它保住「執行了 N 支」那一行;見 _kill_cap)。回傳形狀不變。
++    keep_re 直接轉給 _kill_cap(keep_max 一併轉):輸出超過上限而要截斷時,符合這個樣式的行不得被砍掉
++    (合約測試閘拿它保住「執行了 N 支」那一行;合批編譯拿它保住 `e:` 行;見 _kill_cap)。回傳形狀不變。
+     started 給一個 _BtProcs 就經由它開程序並登記(合約測試閘同時跑時,一支出錯要收掉同批還在跑的;
+     已經在收尾就不再開、丟 _BtStopped);不給不影響。
+     merge 給 choice-kill 的 _KillMerge 或 _KillPrep(任何帶 interrupted 屬性、on_signal 走 _kill_signal_marked 的物件):這筆登記在 _KILL_RUN_LIVE 的程序帶「合併」標記(Popen 物件上的 _lumos_merge 屬性),第一個訊號的回呼
+     (_KillMerge.on_signal)只當場收帶標記的那幾支(Projects/選擇點變異加速_計劃 做法 4);★登記之後再看一次 merge.interrupted★,訊號落在呼叫端看完
+     停止旗標之後、登記之前時回呼收不到它,這裡當場收掉(代碼審 code-選擇點變異加速 r1 正確性 #2;用 pthread_sigmask 包 Popen 不可靠,
+     Python 文件 signal 一節與 bpo-1975)。不給不影響。"""
+     import subprocess
+     import tempfile
+     import time
+     t0 = time.time()
+@@ -28308,35 +28352,36 @@ def _kill_run(cmd, cwd, timeout, keep_re=None, started=None, merge=None):
+         _KILL_RUN_LIVE[proc.pid] = proc   # 人裁第二個終止訊號強制結束前照這張表收測試的程序群組(_situation_rule_force_exit)
+         if merge is not None and merge.interrupted:   # 訊號在登記之前就來過:回呼沒看到這支,當場收掉
+             _kill_proc_group(proc)
+         try:
+             proc.communicate(timeout=timeout)
+         except subprocess.TimeoutExpired:
+             _kill_proc_group(proc)
+             proc.wait()
+             buf.seek(0)
+             txt = buf.read()
+-            return (None, _kill_cap(txt, keep_re), time.time() - t0, True)
++            return (None, _kill_cap(txt, keep_re, keep_max), time.time() - t0, True)
+         except KeyboardInterrupt:
+             # 測試開在自己的 session(start_new_session),終端的 Ctrl-C 送不到它:收掉整個程序群組再往上丟,
+             # 不留著在背景跑(Projects/情境題答案要引規格出處與回寫循環_計劃 範圍 4 中斷;guard kill 原本的呼叫端一樣受惠)
+             _kill_proc_group(proc)
+             proc.wait()
+             raise
+         finally:
+             _KILL_RUN_LIVE.pop(proc.pid, None)
+         buf.seek(0)
+         txt = buf.read()
+-    return (proc.returncode, _kill_cap(txt, keep_re), time.time() - t0, False)
++    return (proc.returncode, _kill_cap(txt, keep_re, keep_max), time.time() - t0, False)
+ 
+ 
+ _KILL_OUT_CAP = 256 * 1024
++_KILL_CAP_KEPT_CUT = "...[kept lines cut]..."   # _kill_cap:中段符合 keep_re 的行比上限多、沒留全(讀者據此判「留下的不是全部」)
+ 
+ 
+ def _kill_wait_new_second(state):
+     """guard kill 寫檔(套壞法、還原)之前:等到現在跟同一組上一次寫檔、上一次跑測試結束都不同秒,最多等 3 秒
+     (時鐘往回撥時不空轉)。測試工具靠「修改時間到秒 + 大小」判斷要不要重編(Python 編譯快取、macOS 內建 make),
+     同一秒寫出同大小的檔會沿用上一次的編譯結果(Projects/殺傷力驗證編譯快取誤判_計劃)。"""
+     deadline = time.time() + 3.0
+     while int(time.time()) <= max(state["w"], state["r"]) and time.time() < deadline:
+         time.sleep(0.05)
+ 
+@@ -28356,42 +28401,43 @@ def _kill_after_write(path, state):
+         if i == 3:
+             return False
+         time.sleep(1.0)
+         try:
+             os.utime(path)
+         except OSError:
+             return False
+     return False
+ 
+ 
+-def _kill_cap(txt, keep_re=None):
++def _kill_cap(txt, keep_re=None, keep_max=20):
+     """[S3 oracle品質包] 保留完整輸出供歸因(上限 256KB;超限取頭尾各半、對齊換行邊界
+     並插 marker——裸位元組砍半會把兩條真實行拼成假行汙染行窗掃描)。
+ 
+     keep_re:★被砍掉的中段裡,符合這個樣式的行要留下來★(2026-09-09 代碼審 r2 f1)。
+     出身:合約測試閘現在靠「測試工具自己說執行了幾支」那一行當證據,而那一行如果落在
+     被砍掉的中段,一支真的跑過的測試會被誤判成「證不出跑過」而擋下推送。
+     ★審查席舉的 jest 例子實測不成立★(jest 29 把覆蓋率表印在摘要之前,摘要仍是最後一行),
+     所以這是防禦性修法而不是修一個已發生的 bug——但沒有它,這道閘等於押注
+-    「所有測試工具都把摘要印在最後」,而那是沒人驗過的假設。最多留 20 行,免得反噬成新的爆量。"""
++    「所有測試工具都把摘要印在最後」,而那是沒人驗過的假設。最多留 keep_max 行(預設 20),免得反噬成新的爆量;
++    符合的行比 keep_max 多時多留一行 _KILL_CAP_KEPT_CUT(讀者看得出「留下的不是全部」;合批編譯靠它判錯誤是不是都看得到,議題第 13 條)。"""
+     if len(txt) <= _KILL_OUT_CAP:
+         return txt
+     half = _KILL_OUT_CAP // 2
+     head, tail = txt[:half], txt[-half:]
+     head = head[:head.rfind("\n") + 1] if "\n" in head else head
+     tail = tail[tail.find("\n") + 1:] if "\n" in tail else tail
+     kept = ""
+     if keep_re is not None:
+         middle = txt[len(head):len(txt) - len(tail)]
+-        hits = [l for l in middle.splitlines() if re.search(keep_re, l)][:20]
++        hits = [ln for ln in middle.splitlines() if re.search(keep_re, ln)]
+         if hits:
+-            kept = "...[kept from truncated middle]...\n" + "\n".join(hits) + "\n"
++            kept = "...[kept from truncated middle]...\n" + "\n".join(hits[:keep_max]) + "\n" + (_KILL_CAP_KEPT_CUT + "\n" if len(hits) > keep_max else "")
+     dropped = len(txt) - len(head) - len(tail)
+     return head + f"...[truncated {dropped} bytes]...\n" + kept + tail
+ 
+ 
+ _KILL_FAIL_MARKS = ("FAIL", "FAILED", "✗", "AssertionError")
+ # 窗內另一個測試名(常見命名:test_x / TestX / xxxTest)——見到即停掃,防「隔壁測試失敗」被算到綁定測試頭上
+ _KILL_OTHER_TEST_RE = re.compile(r"\b([Tt]est[_A-Za-z0-9]\w*|\w+Tests?)\b")
+ 
+ 
+ def _kill_attribute(out, method):
+@@ -28599,25 +28645,24 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+                     b_rc, b_tail, b_elapsed, b_to = _kill_run(cmd, run_dir, max(600.0, floor))
+                     mstate["r"] = int(time.time())   # 每個測試指令的 baseline 都記(夾在配方之間)
+                     # 跑 baseline 時還有還原沒錯開的檔:這份 baseline 可能吃到舊快取,之後沿用它的配方都記弱證據(代碼審第 3 輪正確性席)
+                     baselines[cmd] = (b_rc, b_tail, b_elapsed, b_to, bool(mstate["unsure"]))
+                 b_rc, b_tail, b_elapsed, b_to, b_unsure = baselines[cmd]
+                 if b_to or b_rc != 0:
+                     results.append({**r, "platform": plat, "verdict": "abort",
+                                     "detail": f"baseline 非綠(rc={b_rc}){note_ws}", "tail": b_tail[-200:],
+                                     "fail_excerpt": _kill_fail_excerpt(b_tail, wt)})
+                     continue
+-                # 套配方(路徑圍欄:雙邊 realpath)
+-                target = os.path.realpath(os.path.join(wt, r.get("file", "")))
+-                if not target.startswith(wt_real + os.sep):
+-                    results.append({**r, "platform": plat, "verdict": "error",
+-                                    "detail": "file 路徑逃逸 worktree(圍欄擋下)"})
++                # 套配方(路徑圍欄:雙邊 realpath、不寫進 .git;三處寫檔路徑共用 _kill_target)
++                target, _tw = _kill_target(wt, wt_real, r.get("file", ""))
++                if target is None:
++                    results.append({**r, "platform": plat, "verdict": "error", "detail": _tw})
+                     continue
+                 try:
+                     with open(target, encoding="utf-8") as _tf:
+                         src = _tf.read()
+                 except OSError as ex:
+                     results.append({**r, "platform": plat, "verdict": "drifted",
+                                     "detail": f"file 開不了: {ex}"})
+                     continue
+                 # old/new 會讓下面兩步當掉:記成 error、不當掉。判法與這裡共用 _kill_old_issue/_kill_new_issue,順序照 _kill_judge_file
+                 # (殺傷力配方當場試跑代碼審 r3 起:判法在 file 不是正式寫法時停在 path,擋不到;同類連四輪 → 擋在當掉的地方、共用一支)
+@@ -28640,35 +28685,30 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+                 with open(target, "w", encoding="utf-8") as _tf:
+                     _tf.write(mutated)
+                 # 有還原沒錯開的檔還沒被成功重寫:之後每一條測試都可能 import 到它的舊快取,一律算進來(代碼審第 1、2 輪正確性席)
+                 mt_ok = _kill_after_write(target, mstate)
+                 if mt_ok:
+                     mstate["unsure"].discard(target)
+                 mt_ok = mt_ok and not mstate["unsure"] and not b_unsure
+                 m_timeout = max(b_elapsed * 5, floor)
+                 m_rc, m_tail, _me, m_to = _kill_run(cmd, run_dir, m_timeout)
+                 mstate["r"] = int(time.time())
+-                # 還原前也要等:測試跑得快時,還原寫回的檔可能跟壞法同一秒、同大小,下一條改別的檔、測試卻 import 這支時會吃到壞法的快取
+-                _kill_wait_new_second(mstate)
++                # 還原(_kill_revert:先等新的一秒——測試跑得快時,還原寫回的檔可能跟壞法同一秒、同大小,下一條改別的檔、測試卻 import 這支時會吃到壞法的快取;
+                 # 還原解開連結後實際被改的那支檔(照字面認路徑):原本用配方寫的字串,file 是連結時只還原連結本身、
+-                # 真檔一直停在壞法,同組後面的配方被判成強證據的 killed(代碼審第 3 輪正確性、資安席;改動前就有)
+-                rv = subprocess.run(["git", "-C", wt, "checkout", "--", ":(literal)" + os.path.relpath(target, wt_real)],
+-                                    capture_output=True)
+-                if rv.returncode != 0:
++                # 真檔一直停在壞法,同組後面的配方被判成強證據的 killed(代碼審第 3 輪正確性、資安席;改動前就有))
++                rv = _kill_revert(wt, wt_real, target, mstate)
++                if rv is None:
+                     results.append({**r, "platform": plat, "verdict": "error",
+                                     "detail": "revert 失敗——後續同組配方作廢防污染"})
+                     break   # 樹已髒,本組終止(worktree 在 finally 清)
+-                if _kill_after_write(target, mstate):
+-                    mstate["unsure"].discard(target)
+-                else:
+-                    mt_ok = False
+-                    mstate["unsure"].add(target)   # 還原沒錯開:這支檔重寫成功之前,這一組後面每一條都記弱證據
++                if not rv:
++                    mt_ok = False   # 還原沒錯開:這支檔重寫成功之前,這一組後面每一條都記弱證據(_kill_revert 已加進 unsure)
+                 attr_excerpt = ""
+                 if m_to:
+                     # [S3] timeout 降弱證據(不再計 killed):掛掉可能是環境非變異
+                     verdict = "timed_out_weak"
+                 elif m_rc != 0:
+                     ok_attr, attr_excerpt = _kill_attribute(m_tail, method)
+                     verdict = "killed" if ok_attr else "killed_unattributed"
+                 else:
+                     verdict = "survived"
+                 res = {**r, "platform": plat, "verdict": verdict}
+@@ -29135,20 +29175,21 @@ class _KillPrep:
+ 
+     def __init__(self, deadline, cov, req, on_done, cache=None, blob_of=None, compile=(), cbudget=0.0, on_invalid=None, on_swap=None,
+                  recipes_of=None, probes=None):
+         self.deadline, self.cov, self.req, self.on_done = deadline, set(cov), dict(req), on_done
+         self.cache, self.blob_of = cache, dict(blob_of or {})
+         self.state, self.secs, self.interrupted = {}, 0.0, False
+         self._src_pkgs = {}   # 平台根 → 主程式套件集合(_measure 每個平台組都用,只掃一次)
+         self.compile, self.cbudget, self.on_invalid, self.on_swap, self.recipes_of = set(compile), float(cbudget), on_invalid, on_swap, recipes_of
+         self.probes = {g: list(v) for g, v in (probes or {}).items()}
+         self.cstate, self.csecs, self.batches, self.swapped, self.hk_of = {}, 0.0, 0, set(), {}
++        self.seed = ""   # 探針單獨編的輪替種子(choice-kill 給這次的 run_id;議題第 14 條)
+ 
+     def remaining(self):
+         return self.deadline - time.monotonic()
+ 
+     def on_signal(self):
+         """第一個終止訊號:當場收掉合批編譯、覆蓋基準、不掛重跑、分析這幾種帶標記的呼叫(_kill_signal_marked)。"""
+         _kill_signal_marked(self)
+ 
+     def run(self, c):
+         """一個平台組 → 這組要跑的配方(合批編譯換過候選、依覆蓋選過、依抽查排過);途中收到訊號丟 _KillHalt(guard-kill 照現在停,不寫 reach)。
+@@ -29280,24 +29321,27 @@ class _KillPrep:
+             raise _KillHalt()
+         return _choice_cov_parse(_choice_cov_read(out) if rc == 0 and not to else None, cand, idx)
+ 
+ 
+ class _KillPrepAbort(Exception):
+     """合批編譯檢查還原後檔內容跟原版對不上(git checkout 與直接寫回原文都不行):整個準備物件中止(〈用詞〉合批編譯檢查)。"""
+ 
+ 
+ _CHOICE_COMPILE_BATCHES = 3        # 合批編譯最多幾批(第 1 批全部壞法、之後只有換了候選的行;〈用詞〉合批編譯檢查)
+ _CHOICE_COMPILE_BUDGET_K = 0.25    # 編譯預算:合批編譯檢查(含對照組、確認、換候選、探針)用掉的時間不超過 --max-seconds 的這個比例(〈用詞〉編譯預算)
+-_CHOICE_COMPILE_UNVERIFIED = ("unverified",)   # apply_compile 這次沒驗(寫入後修改時間沒錯開或有還原沒錯開的檔):不記無效、不記補償
++_CHOICE_COMPILE_UNVERIFIED = object()   # apply_compile 這次沒驗(寫入後修改時間沒錯開或有還原沒錯開的檔):不記無效、不記補償
+ _CHOICE_COMPILE_MIN_CAP = 1.0      # 一次編譯呼叫至少要有幾秒的預算才開跑(不夠就停在批與批之間,記 budget)
+ # Kotlin 編譯錯誤的兩種形狀:K2 起 `e: file:///<絕對路徑>:<行>:<欄> <訊息>`,舊版 `e: <絕對路徑>: (<行>, <欄>): <訊息>`(Kotlin 1.x 的 MessageRenderer.PLAIN)
+ _CHOICE_COMPILE_ERR_RE = re.compile(r"(?m)^e: (?:file://)?(.+?\.kts?)(?::(\d+):\d+|: \((\d+), \d+\))")
++_CHOICE_COMPILE_KEEP_RE = r"^e: "   # 編譯輸出被截斷時中段要留下的行(_kill_cap 的 keep_re;議題第 13 條)
++_CHOICE_COMPILE_KEEP_MAX = 2000     # 最多留幾行(超過就有錯誤看不到,整批不判無效)
++_CHOICE_PROBE_SOLO_MAX = 3          # 探針整批紅時一次最多單獨編幾個(依 seed 輪替順序,其餘留到下一次;議題第 14 條)
+ 
+ 
+ def _choice_unit_variant(shape):
+     """合併形狀的單元測試任務是 `test<變體>UnitTest` → 變體(大寫開頭,例 FreeDebug),否則 None(合批編譯指令、覆蓋資料檔位置、分析指令共用;代碼審 r1 架構對齊 #4)。"""
+     m = re.fullmatch(r"test([A-Z][A-Za-z0-9]*)UnitTest", shape["task"]) if shape else None
+     return m.group(1) if m else None
+ 
+ 
+ def _choice_task_swap(run_cmd, shape, task):
+     """run_cmd 拿掉 --tests 那一段、把 `:<模組>:<單元測試任務>` 換成同模組的 task → (換好的前半, 後半) 或 None(任務字樣在 --tests 之前找不到)。
+@@ -29318,37 +29362,56 @@ def _choice_compile_cmd(run_cmd):
+     Gradle 依相依編上游模組)、拿掉 --tests 那一段;推不出(不是合併形狀、任務不是 test<變體>UnitTest、任務字樣在 --tests 之前找不到)→ None(不做)。
+     只用測試所在模組那一個任務:壞法所在檔在測試模組不相依的模組時編不到它,錯誤不會出現、不記無效(失效開放,同現在交給測試階段)。"""
+     shape = _choice_merge_shape(run_cmd)
+     v = _choice_unit_variant(shape)
+     got = _choice_task_swap(run_cmd, shape, f"compile{v}UnitTestKotlin") if v else None
+     if got is None:
+         return None
+     return (_run_cmd_expand(got[0]).rstrip() + _run_cmd_expand(got[1])).rstrip()
+ 
+ 
+-def _choice_compile_errors(out, wt_real):
+-    """編譯輸出 → ({(相對工作樹的路徑, 行)}, 對不回工作樹的錯誤數) 或 None(輸出被 _kill_cap 截斷過:中段的錯誤看不到,一個都不記無效)。
++def _choice_compile_errors(out, wt_real, kept=False):
++    """編譯輸出 → ({(相對工作樹的路徑, 行)}, 對不回工作樹的錯誤數) 或 None(輸出被 _kill_cap 截斷過、中段的錯誤看不到:一個都不記無效)。
++    kept=True:這份輸出是帶 _CHOICE_COMPILE_KEEP_RE 截的(_KillCompile.compile),中段的 `e:` 行另外留下了,截斷了照判;留下的行也被砍
++    (_KILL_CAP_KEPT_CUT)才回 None(議題第 13 條;第二段代碼審 r1 資源 #2:原本一截斷就整批不判)。
+     file:// 的路徑照 URI 解碼;路徑真實位置不在工作樹裡的算對不回。"""
+     import urllib.parse
+-    if "...[truncated " in str(out or ""):
++    if "...[truncated " in str(out or "") and (not kept or _KILL_CAP_KEPT_CUT in str(out or "")):
+         return None
+     hits, stray = set(), 0
+     for m in _CHOICE_COMPILE_ERR_RE.finditer(str(out or "")):
+         path = urllib.parse.unquote(m.group(1))
+         real = os.path.realpath(path)
+         if not real.startswith(wt_real + os.sep):
+             stray += 1
+             continue
+         hits.add((os.path.relpath(real, wt_real).replace(os.sep, "/"), int(m.group(2) or m.group(3))))
+     return hits, stray
+ 
+ 
++_CHOICE_COMPILE_SOLO_MAX = 8   # 一批最多單獨確認幾個嫌疑(同檔嫌疑多時不吃光編譯預算;第三段代碼審 r1 資源 #2)
++
++
++def _choice_compile_suspects(ranges, rel, errs):
++    """嫌疑(〈用詞〉合批編譯檢查):錯誤所在檔有壞法,那支檔的壞法都算(Kotlin 型別錯誤常報在呼叫端或簽章行);依跟那支檔最近一個錯誤行的距離排(行範圍含錯誤行是 0),
++    最多 _CHOICE_COMPILE_SOLO_MAX 個,其餘這批不確認、照現在交給測試階段(失效開放)。errs:{(檔, 行)}。"""
++    lines = {}
++    for f, ln in errs:
++        lines.setdefault(f, []).append(ln)
++
++    def dist(g):
++        a, b = ranges[g]
++        return min(0 if a <= ln <= b else min(abs(ln - a), abs(ln - b)) for ln in lines[rel[g]])
++    sus = sorted((g for g in ranges if rel[g] in lines), key=dist)
++    return sus[:_CHOICE_COMPILE_SOLO_MAX]
++
++
+ def _choice_compile_apply(src, muts):
+     """一支檔同時套好幾個壞法(〈用詞〉合批編譯檢查,泛化 _kill_merge_apply 成多檔版的單檔那一步):muts [(group, old, new)…] → (新內容, {group: (起行, 迄行)}, 這批套不上的 group 清單)。
+     old 在原檔要恰好一次(_count_overlapping);依位置排序,跟前一個重疊的留到下一批;行範圍是 new 在新內容裡佔的那幾行(錯誤落在裡面就算嫌疑)。"""
+     locs, later = [], []
+     for g, old, new in muts:
+         if not old or _count_overlapping(src, old, stop=2) != 1:
+             later.append(g)
+             continue
+         i = src.index(old)
+         locs.append((i, i + len(old), g, new))
+@@ -29365,57 +29428,57 @@ def _choice_compile_apply(src, muts):
+         out.append(new)
+         line += new.count("\n")
+         pos = e0
+     out.append(src[pos:])
+     return "".join(out), ranges, later
+ 
+ 
+ class _KillCompile:
+     """_KillPrep 一個平台組的合批編譯檢查(〈範圍〉2 ①、〈用詞〉合批編譯檢查、編譯預算、無效壞法):
+     ①-1 先編一次沒套壞法的原樹當對照組(紅、逾時或被中斷 → cstate env,一個都不記無效);②-2 把這一批壞法同時套上(每支檔一次寫入,沿用 _kill_wait_new_second 與 mstate 錯開)
+-    編一次,依錯誤的檔與行列出嫌疑(壞法改的行範圍含那一行);③-3 每個嫌疑單獨再編一次,單獨也紅才記無效、換同一行下一個候選(on_swap),換了候選的行再一批,最多
++    編一次,錯誤所在檔有壞法的,那支檔的壞法都列成嫌疑(Kotlin 型別錯誤常報在別行;錯誤落在沒有壞法的檔才算對不回);③-3 每個嫌疑單獨再編一次,單獨也紅才記無效、換同一行下一個候選(on_swap),換了候選的行再一批,最多
+     _CHOICE_COMPILE_BATCHES 批;④-4 有探針(檔沒變、別支檔改了的舊無效候選)時另編一批,全綠才記補償(cleared)。錯誤對不回、輸出被截斷、單獨編也綠都不記無效。
+     每次寫檔都包在 try/finally 裡還原、還原後比對內容等於原版(_restore),對不上丟 _KillPrepAbort;被第一個訊號收掉 → 先還原再丟 _KillHalt。
+     受編譯預算管:還沒開跑的呼叫在預算不夠時停在批與批之間(cstate budget),還沒確認的壞法照現在交給測試階段。帶 also(補 import)的壞法不進合批(照現在交給測試階段)。"""
+ 
+     def __init__(self, prep, c):
+         self.prep, self.c = prep, c
+         self.cmd = _choice_compile_cmd(c.run_cmd)
+         self.full = max(600.0, c.floor)
+ 
+     def cap(self):
+         """這次呼叫的上限:剩下的編譯預算、剩下的總時限、單支上限取最小;不到 _CHOICE_COMPILE_MIN_CAP → None(預算用完)。"""
+         left = min(self.prep.cbudget - self.prep.csecs - (time.monotonic() - self.t0), self.prep.remaining(), self.full)
+         return left if left >= _CHOICE_COMPILE_MIN_CAP else None
+ 
+     def compile(self):
+         """編一次 → (rc, 輸出, 逾時) 或 None(預算不夠,沒跑)。被第一個訊號收掉 → 丟 _KillHalt(呼叫端的 finally 先還原)。"""
+         cap = self.cap()
+         if cap is None:
+             return None
+-        rc, out, _el, to = _kill_run(self.cmd, self.c.run_dir, cap, merge=self.prep)
++        rc, out, _el, to = _kill_run(self.cmd, self.c.run_dir, cap, merge=self.prep, keep_re=_CHOICE_COMPILE_KEEP_RE, keep_max=_CHOICE_COMPILE_KEEP_MAX)
+         self.c.mstate["r"] = int(time.time())
+         if self.prep.interrupted:
+             raise _KillHalt()
+         return rc, out, to
+ 
+     def units(self):
+         """這一組每一行(group)現在的壞法 → {group: (目標檔真實路徑, old, new, 那一行第一條配方)};路徑逃逸工作樹或在 .git 底下、帶 also、
+         old 或 new 有問題(_kill_old_issue、_kill_new_issue)的不收。"""
+         out = {}
+         for r in self.c.plist:
+             g = r.get("group")
+             if g is None or g in out or r.get("also"):
+                 continue
+-            target = os.path.realpath(os.path.join(self.c.wt, str(r.get("file", ""))))
+-            if not target.startswith(self.c.wt_real + os.sep) or ".git" in (x.lower() for x in Path(os.path.relpath(target, self.c.wt_real)).parts):   # 不分大小寫的檔案系統上 .GIT 也是版控資料夾
+-                continue   # 逃逸工作樹、落在 .git 底下(代碼審 r1 資安 #1)的不寫
++            target, _why = _kill_target(self.c.wt, self.c.wt_real, r.get("file", ""))
++            if target is None:
++                continue   # 逃逸工作樹、落在 .git 底下的不寫(共用 _kill_target)
+             if _kill_old_issue(r) or _kill_new_issue(r):   # 同 _kill_merge_apply 的兩道(r1 架構對齊 #2):有問題的照現在交給測試階段判 error
+                 continue
+             out[g] = (target, r["old"], r["new"], r)
+         return out
+ 
+     def run(self):
+         c, pr = self.c, self.prep
+         self.t0 = time.monotonic()
+         if self.cmd is None:
+             pr.cstate.setdefault(c.plat, "off")
+@@ -29453,25 +29516,27 @@ class _KillCompile:
+         """一批 → 下一批要編的 group(這批套不上的、換了候選的)。"""
+         got, ranges, later = self.apply_compile(todo)
+         if got is None:   # 預算不夠沒跑:這批都照現在交給測試階段
+             self.prep.cstate[self.c.plat] = "budget"
+             return []
+         if got is _CHOICE_COMPILE_UNVERIFIED:   # 這次沒驗:不判、不單獨確認
+             return later
+         rc, out, to = got
+         if rc == 0 and not to:
+             return later
+-        errs = None if to else _choice_compile_errors(out, self.c.wt_real)
++        errs = None if to else _choice_compile_errors(out, self.c.wt_real, kept=True)
+         if errs is None:   # 輸出被截斷或逾時:對不回,一個都不記無效
+             return later
+         rel = {g: os.path.relpath(units[g][0], self.c.wt_real).replace(os.sep, "/") for g in ranges}
+-        sus = [g for g in ranges if any(f == rel[g] and ranges[g][0] <= ln <= ranges[g][1] for f, ln in errs[0])]
++        # 嫌疑:錯誤所在檔 = 壞法所在檔(同一支檔的壞法都算;2026-11-27 實驗專案實跑:Kotlin 型別錯誤常報在呼叫端或函式簽章那行,只認「落在壞法改的行範圍」
++        # 會整批對不回、到測試階段才記編不過)。每個嫌疑照舊單獨套上編一次確認,單獨也紅才記無效;單獨確認走 apply_compile,受 cap() 管
++        sus = _choice_compile_suspects(ranges, rel, errs[0])
+         nxt = list(later)
+         for g in sus:
+             one = self.apply_compile({g: units[g]})[0]
+             if one is None:
+                 self.prep.cstate[self.c.plat] = "budget"
+                 return []
+             if one is _CHOICE_COMPILE_UNVERIFIED or one[0] == 0 or one[2]:   # 沒驗、單獨編綠(或逾時判不了):不記無效
+                 continue
+             if self.invalid(g, units):
+                 nxt.append(g)
+@@ -29505,21 +29570,24 @@ class _KillCompile:
+                 todo[g] = (units[g][0], idents[0]["old"], idents[0]["new"], idents[0])
+         if not todo or self.cap() is None:
+             return
+         got, ranges, _later = self.apply_compile(todo)
+         if got is None or got is _CHOICE_COMPILE_UNVERIFIED:
+             return
+         if got[0] == 0 and not got[2]:
+             for g in ranges:
+                 self.prep.on_invalid(g, todo[g][3], True)
+             return
+-        for g in ranges if len(ranges) > 1 else ():   # 整批紅:逐個單獨編,能編的那一個才記補償(代碼審 r1 正確性 #2:一個永久編不過的探針不拖累同批)
++        # 整批紅:逐個單獨編,能編的那一個才記補償(代碼審 r1 正確性 #2:一個永久編不過的探針不拖累同批);順序依 seed 輪替、一次最多
++        # _CHOICE_PROBE_SOLO_MAX 個(議題第 14 條:固定順序時永久紅的那個每次先吃編譯預算)
++        solo = sorted(ranges, key=lambda g: _choice_sha(f"{self.prep.seed}\n{g}", 16))[:_CHOICE_PROBE_SOLO_MAX] if len(ranges) > 1 else ()
++        for g in solo:
+             one, rg, _l = self.apply_compile({g: todo[g]})
+             if one is None:
+                 return
+             if one is not _CHOICE_COMPILE_UNVERIFIED and g in rg and one[0] == 0 and not one[2]:
+                 self.prep.on_invalid(g, todo[g][3], True)
+ 
+     def apply_compile(self, todo):
+         """把 todo({group: (目標檔, old, new, 配方)})同時套上、編一次、還原 → ((rc, 輸出, 逾時) 或 None(預算不夠), {group: 行範圍}, 這批套不上的)。
+         寫入後修改時間沒錯開(_kill_after_write)或 mstate 有還原沒錯開的檔 → 不編、回 _CHOICE_COMPILE_UNVERIFIED(這次沒驗:編譯快取可能吃到舊的;
+         呼叫端不記任何無效也不記任何補償,壞法照現在交給測試階段;代碼審 r1 正確性 #2:原本回 (0, "", False) 被探針當成全綠記補償)。"""
+@@ -29553,39 +29621,37 @@ class _KillCompile:
+                 with open(t, "w", encoding="utf-8") as fh:
+                     fh.write(txt)
+                 ok = _kill_after_write(t, c.mstate) and ok
+             got = self.compile() if ok and not c.mstate["unsure"] else _CHOICE_COMPILE_UNVERIFIED
+         finally:
+             self.restore(wrote, orig)
+         return got, ranges, later
+ 
+     def restore(self, wrote, orig):
+         """還原(照逐支那段:等新的一秒 → git checkout → 讀回修改時間)並比對內容等於原版;git 還原後對不上就直接寫回原文再比一次,還不對丟 _KillPrepAbort。"""
+-        import subprocess
+         c = self.c
+         if not wrote:
+             return
+-        _kill_wait_new_second(c.mstate)
++        _kill_wait_new_second(c.mstate)   # 多檔還原只等一次
+         for t in wrote:
+-            subprocess.run(["git", "-C", c.wt, "checkout", "--", ":(literal)" + os.path.relpath(t, c.wt_real)], capture_output=True)
++            rv = _kill_revert(c.wt, c.wt_real, t, c.mstate, wait=False)   # 共用的還原步驟(checkout 失敗也接著比內容:對不上才中止)
+             if _choice_file_text(t) != orig[t]:
++                rv = None
+                 try:
+                     with open(t, "w", encoding="utf-8") as fh:
+                         fh.write(orig[t])
+                 except OSError:
+                     pass
+                 if _choice_file_text(t) != orig[t]:
+                     raise _KillPrepAbort(f"合批編譯檢查還原 {_kill_esc(os.path.relpath(t, c.wt_real))} 後內容跟原版不同")
+-            if _kill_after_write(t, c.mstate):
+-                c.mstate["unsure"].discard(t)
+-            else:
+-                c.mstate["unsure"].add(t)
++            if rv is None:   # checkout 失敗或改成直接寫回原文:修改時間由這裡重讀(_kill_revert 的後半)
++                _kill_mtime_settle(t, c.mstate)
+ 
+ 
+ def _choice_file_text(path):
+     """讀一支檔的文字(UTF-8);讀不到 → None(比對內容時當成不同)。"""
+     try:
+         with open(path, encoding="utf-8") as fh:
+             return fh.read()
+     except (OSError, UnicodeDecodeError):
+         return None
+ 
+@@ -29861,35 +29927,62 @@ def _choice_init_file_write(path, text):
+         return False
+     return True
+ 
+ 
+ def _choice_merge_clear(rdir):
+     """合併呼叫之前刪掉結果資料夾(rdir 已經過圍欄),讀到的一定是這次寫的。"""
+     import shutil
+     shutil.rmtree(rdir, ignore_errors=True)
+ 
+ 
+-def _kill_merge_restore(c, target, r0):
+-    """快篩這一側的還原(照逐支那段:等新的一秒 → git checkout → 讀回修改時間)→ 修改時間錯開了沒(bool)或 None(還原失敗:記一列 error、這組作廢)。"""
++def _kill_revert(wt, wt_real, target, mstate, wait=True):
++    """guard-kill 還原一支套過壞法的檔的共用步驟(逐支流程、合併快篩、合批編譯三處共用;第二段代碼審 r1 架構對齊 #4 延後到第三段收):
++    等新的一秒(wait=False 時呼叫端已等過,多檔還原只等一次)→ git checkout 那支檔(照字面認路徑)→ 讀回修改時間,錯開就從 mstate["unsure"] 拿掉、
++    沒錯開就加進去 → True(錯開)/ False(沒錯開)/ None(git checkout 失敗)。"""
+     import subprocess
+-    _kill_wait_new_second(c.mstate)
+-    rv = subprocess.run(["git", "-C", c.wt, "checkout", "--", ":(literal)" + os.path.relpath(target, c.wt_real)], capture_output=True)
++    if wait:
++        _kill_wait_new_second(mstate)
++    rv = subprocess.run(["git", "-C", wt, "checkout", "--", ":(literal)" + os.path.relpath(target, wt_real)], capture_output=True)
+     if rv.returncode != 0:
+-        c.results.append({**r0, "platform": c.plat, "verdict": "error", "detail": "revert 失敗——後續同組配方作廢防污染"})
+         return None
+-    if _kill_after_write(target, c.mstate):
+-        c.mstate["unsure"].discard(target)
++    return _kill_mtime_settle(target, mstate)
++
++
++def _kill_mtime_settle(target, mstate):
++    """還原之後讀回修改時間(_kill_revert 的後半;合批編譯直接寫回原文時也走它,第三段代碼審 r1 架構對齊 #1):錯開就從 mstate["unsure"] 拿掉、回 True,
++    沒錯開就加進去、回 False。"""
++    if _kill_after_write(target, mstate):
++        mstate["unsure"].discard(target)
+         return True
+-    c.mstate["unsure"].add(target)
++    mstate["unsure"].add(target)
+     return False
+ 
+ 
++def _kill_target(wt, wt_real, file):
++    """配方要寫的檔(路徑圍欄,三處寫檔路徑共用:逐支流程、合併快篩、合批編譯;第二段代碼審 r2 架構對齊 #1 延後到第三段收)→ (真實路徑, None) 或
++    (None, 原因):真實路徑逃逸工作樹,或落在工作樹的 .git 底下(不分大小寫:不分大小寫的檔案系統上 .GIT 也是版控資料夾;第二段代碼審 r1 資安 #1)。"""
++    target = os.path.realpath(os.path.join(wt, str(file or "")))
++    if not target.startswith(wt_real + os.sep):
++        return None, "file 路徑逃逸 worktree(圍欄擋下)"
++    if ".git" in (x.lower() for x in Path(os.path.relpath(target, wt_real)).parts):
++        return None, "file 落在工作樹的 .git 底下(圍欄擋下,不改版控資料)"
++    return target, None
++
++
++def _kill_merge_restore(c, target, r0):
++    """快篩這一側的還原(_kill_revert)→ 修改時間錯開了沒(bool)或 None(還原失敗:記一列 error、這組作廢)。"""
++    got = _kill_revert(c.wt, c.wt_real, target, c.mstate)
++    if got is None:
++        c.results.append({**r0, "platform": c.plat, "verdict": "error", "detail": "revert 失敗——後續同組配方作廢防污染"})
++    return got
++
++
+ def _kill_merge_base(mg, c, methods, nf, sh):
+     """開跑量基準(〈做法〉2):乾淨樹上把每支單支基準量齊(存進同一份 baselines,逐支流程之後直接用),單支綠的不到 2 支 → None;
+     再跑一次合併基準,不是「通過」→ 標準錯誤印原因、None。→ (合併道, 合併指令, 合併基準耗時) 或 None。每支之前看停止旗標(hk.between)。"""
+     t0 = time.monotonic()
+     try:
+         cmd_of = {m: _run_cmd_expand(c.run_cmd, m, name_filter=nf) for m in methods}
+         c.merge_need = None
+         if not _kill_merge_singles(mg, c, list(dict.fromkeys(methods)), cmd_of):
+             _kill_merge_halt_check(mg, c)
+             return _kill_merge_off(mg, c.plat, "基準量不齊", need=c.merge_need)
+@@ -29996,22 +30089,22 @@ def _kill_merge_chunks(plist):
+         if out and out[-1][0] == key and key[0] is not None:
+             out[-1][1].append(r)
+         else:
+             out.append((key, [r]))
+     return [rs for _k, rs in out]
+ 
+ 
+ def _kill_merge_apply(c, r0, lane, nf):
+     """合併快篩套壞法(照逐支那段)→ (寫入的檔, None),或 (None, "single"|"break")。套不上、壞法有問題、寫入後修改時間沒錯開
+     (或已有還原沒錯開的檔、基準帶不明)→ "single";寫入後還原失敗 → "break"(這組作廢)。"""
+-    target = os.path.realpath(os.path.join(c.wt, r0.get("file", "")))
+-    if not target.startswith(c.wt_real + os.sep):
++    target, _why = _kill_target(c.wt, c.wt_real, r0.get("file", ""))
++    if target is None:
+         return None, "single"
+     try:
+         with open(target, encoding="utf-8") as fh:
+             src = fh.read()
+     except OSError:
+         return None, "single"
+     if _kill_old_issue(r0) or _count_overlapping(src, r0.get("old", "")) != 1 or _kill_new_issue(r0):
+         return None, "single"
+     mutated, bad = _kill_mutated(src, r0, c.override)
+     lane_unsure = any(c.baselines[_run_cmd_expand(c.run_cmd, m, name_filter=nf)][4] for m in lane)
+@@ -42425,20 +42518,22 @@ _BOOKKEEPING_FILES = (_TEST_DURATIONS_REL, "docs/.governance-log.jsonl", "docs/.
+ # _PITFALL_DIFF_SKIP_EXT(.json/.jsonl,2026-08-22)按副檔名擋掉、輪不到白名單這關(s1-f1)。
+ # ↑ kill-log/signoff-log 2026-09-06 補([[Projects/全repo審視_計劃]] #5):兩本同樣是工具自己
+ # 寫的 append-only 帳(kill-log 由 guard kill 寫、signoff-log 由 signoff 寫),而這次替
+ # _pull_source_or_abort 加「來源只髒簿記帳就聯集合併不擋人」時,漏了它們就等於那條路對這兩本
+ # 失效——有人在來源 clone 跑過 guard kill 或 signoff,更新照樣被擋。
+ _BOOKKEEPING_DIRS = ("governance/code-loop/", "governance/review-reports/", "governance/replay/",
+                      "governance/note-verdicts/",   # 2026-09-17 小改動閘 r2:卷證目錄也是紀錄不是碼(三個消費者共用這一組)
+                      # 2026-10-01 回頭重讀的對照紀錄:理由同筆記內容審判定檔——紀錄不是碼,提交它不該讓代碼審留痕失效
+                      # (Projects/守檔筆記對照改動_計劃 [S8];整案回退時要同一個 revert 提交裡 git rm -r 這個資料夾)
+                      "governance/reread-verdicts/",
++                     # 2026-11-27 選擇點存活判讀檔:判讀代理的結論與依據,是紀錄不是碼(Projects/選擇點存活回指條款_計劃 範圍 9;回退時同一個提交 git rm 這個資料夾)
++                     "governance/choice-layers/",
+                      # 2026-11-03 規格閘紅燈版:規格閘判紅那一刻存下的測試內容,是紀錄不是碼(Projects/規格閘紅燈測試快照_計劃)
+                      "governance/redbase/",
+                      # Android 端到端驗收的查證紀錄:推送檢查的輸入,不是碼;提交它不該讓代碼審留痕失效(Projects/Android端到端驗收_計劃 第 3 步)
+                      ".lumos/e2e-records/")
+ # JS/TS 的兩種主流寫法 *.test.* 與 __tests__/ 2026-10-15 補(Jest/Vitest 預設的 testMatch;[[Projects/前端框架從vue分出_計劃]] S43):
+ # 原本只認 .spec.,React 專案的 App.test.tsx 被當成產品程式拿題目。點號與目錄斜線都要在,latest、contest、attest 這類字不算。
+ # 檔名本身是 test/spec 的只認小寫加 JS/TS 副檔名(r2 邊界、資安席:Test.tsx 元件、test.py 正式檔不算);tests/、test/ 在 repo 根也算
+ # test_ 只認檔名開頭或 / 之後(r3 G8:contest_form.tsx、latest_items.ts 不算)
+ _PITFALL_DIFF_TEST_PAT = re.compile(r"((?:^|/)test_|_test\.|\.spec\.|\.test\.|(?:^|/)tests?/|(?:^|/)__tests__/|(?:^|/)(?-i:test|spec)\.[cm]?[jt]sx?$)", re.I)
+ # 測試基礎設施路徑(2026-10-15 [[Projects/前端知識與風險詞_計劃]] 做法 7):跟上面那支分工——那支把測試檔整支排除(四個消費者都先用它擋;
+@@ -57510,37 +57605,38 @@ def _note_audit_safe_dir(root, rel):
+         bad = _repo_path_unsafe(root, rel, dirs=True)
+         if bad:
+             return None, _repo_path_unsafe_why(root, rel, bad)
+         d.mkdir(parents=True, exist_ok=True)
+         bad = _repo_path_unsafe(root, rel, dirs=True)       # 建好再查一次(建的途中被換成連結)
+     except OSError as e:
+         return None, f"建不了 {rel}({e.__class__.__name__})"
+     return (None, _repo_path_unsafe_why(root, rel, bad)) if bad else (d, None)
+ 
+ 
+-def _note_audit_write_verdict(root, doc, dirname=None, prefix="", max_bytes=None, too_big=""):
++def _note_audit_write_verdict(root, doc, dirname=None, prefix="", max_bytes=None, too_big="", name=None, sort_keys=False):
+     """一份報告寫一個判定檔(暫存再原子換名;<prefix><UTC 時間>-<32 位亂數>.json)→ (檔名, None) 或 (None, 原因)。
+     dirname 不給是筆記內容審的判定檔資料夾;回頭重讀的對照紀錄給自己的資料夾、prefix 給「<對照指紋>-」(架構對齊席 F1:
+     原本各寫一套)。資料夾過 _note_audit_safe_dir(是符號連結或跑出 repo 就不寫)。
+     ★寫端保證讀端讀得了★:讀端有單份上限的(回頭重讀的 _NOTE_REREAD_VERDICT_MAX)傳 max_bytes,序列化後超過就不寫、回原因
+-    (原因後面接 too_big 那句怎麼辦);原本照寫,提交後讀端讀不了、block 下每次推送都擋(代碼審發現)。"""
++    (原因後面接 too_big 那句怎麼辦);原本照寫,提交後讀端讀不了、block 下每次推送都擋(代碼審發現)。
++    name 給了就用它當檔名(選擇點判讀檔用內容雜湊當檔名,Projects/選擇點存活回指條款_計劃 範圍 9);sort_keys 照 json.dumps(雜湊要跟寫出的內容一致)。"""
+     import json as _j, uuid as _uuid, datetime as _dt
+     d, why = _note_audit_safe_dir(root, dirname or _NOTE_AUDIT_VERDICT_DIR)
+     if d is None:
+         return None, why
+-    body = _j.dumps(doc, ensure_ascii=False, indent=1) + "\n"
++    body = _j.dumps(doc, ensure_ascii=False, indent=1, sort_keys=sort_keys) + "\n"
+     size = len(body.encode("utf-8"))
+     if max_bytes is not None and size > max_bytes:
+         # 印位元組不印取整的 KB:上限加 1 到 1023 位元組時兩個數字都取整會印成「256 KB,超過上限 256 KB」(代碼審發現)
+         return None, (f"這份紀錄有 {size} 位元組,超過讀端單份上限 {max_bytes} 位元組({max_bytes / 1024:g} KB)"
+                       "——寫了推送前的檢查也讀不了,不寫" + too_big)
+-    name = prefix + _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + _uuid.uuid4().hex + ".json"
++    name = name or (prefix + _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + _uuid.uuid4().hex + ".json")
+     _write_lf(d / name, body)
+     return name, None
+ 
+ 
+ def _note_audit_work_dir(root):
+     """項目檔與清單檔的工作目錄(不進版控、14 天自動清)→ (路徑, None) 或 (None, 原因)。
+     ★資料夾或它在 repo 內的任一層是符號連結就整個拒用、不清檔★(資安席 F1:原本會順著提交進來的連結刪掉 repo 外超過
+     14 天的 .md);清檔也跳過符號連結本身。"""
+     d, why = _note_audit_safe_dir(root, _NOTE_AUDIT_WORK_DIR)
+     if d is None:
+@@ -79462,26 +79558,26 @@ def _choice_ledger_status(repo_root, at_sha, keys, rng=None, reach_out=None, new
+             last = evs_k[-1]
+             out[k] = f"殺掉 by {_kill_esc(str(last.get('killing_test')))}({'、'.join(_kill_esc(str(c)) for c in last.get('clauses') or [])})"
+         elif disp == "survived" and evs_k[-1].get("judged") == "merged":
+             out[k] = "存活(合併快篩判)"   # 回退與抽查從這裡挑(Projects/選擇點變異加速_計劃〈回退〉)
+         elif disp is not None:
+             out[k] = {"waived": "已放行", "stale": "過期(殺掉它的測試已沒有條款綁)", "survived": "存活", "no_result": "跑不出結果"}[disp]
+     return out
+ 
+ 
+ def _choice_reach_fill(rr, at_sha, guard, surv, evs, reach_out, new_sha_of):
+-    """choice-points 存活行的覆蓋分類字樣填進 reach_out:最新一筆 reach 有效 → 「<分類> 未判讀」,否則「未分類」(〈範圍〉6、10)。"""
+-    cur = _choice_reach_cur(rr, at_sha, guard, new_sha_of, surv)
+-    aux = _choice_ledger_aux(evs) if surv else {}
++    """choice-points 存活行那一段字樣填進 reach_out(〈範圍〉6、10):有判讀印層(待複核的加標),沒有判讀時最新一筆 reach 有效 → 「<分類> 未判讀」,
++    否則「未分類」(_choice_seg_fill,存活清單與推送閘同一個算法)。"""
++    sc = {"rr": rr, "at_sha": at_sha, "guard": guard, "aux": _choice_ledger_aux(evs) if surv else {}, "blobs": None}
++    segs = _choice_seg_fill(sc, {k: new_sha_of[k] for k in surv if k in (new_sha_of or {})})
+     for k in surv:
+-        r = (aux.get(k) or {}).get("reach")
+-        reach_out[k] = f"{_choice_reach_text(r)} 未判讀" if _choice_reach_valid(r, cur.get(k)) else "未分類"
++        reach_out[k] = _choice_seg_text(*segs[k]) if k in segs else "未分類"
+ 
+ 
+ def _choice_reach_cur(rr, at_sha, guard, new_sha_of, keys):
+     """choice-points 用:{(檔, 行指紋): 現在的 cov_sha 或 None}(跟 choice-kill 同一支 _choice_cov_sha_fn,守的測試雜湊含測試檔內容;查所在檔帶 _CHOICE_CLI_SCAN_TIMEOUT 期限)。
+     只算 keys(帳上是存活的行);沒有就不查(代碼審 r1 F7)。算不出守的測試 → 空字典(全部未分類)。"""
+     if not guard or not new_sha_of or not keys:
+         return {}
+     deadline = time.monotonic() + _CHOICE_CLI_SCAN_TIMEOUT
+     blobs, _ok = _choice_test_blobs(rr, at_sha, guard["tests"], guard["pdata"]["platforms"], deadline=deadline)
+     fn = _choice_cov_sha_fn(rr, at_sha, guard, blobs, deadline=deadline)
+@@ -80219,27 +80315,35 @@ def _jacoco_varint(b, i):
+ 
+ _CHOICE_COV_SRC_SKIP = frozenset({"build", ".gradle", ".git", ".idea", "node_modules", "__pycache__"})   # 任何深度都跳(Gradle 輸出、版控、IDE)
+ _CHOICE_COV_SRC_SKIP_OUTSIDE = frozenset(CODE_SKIP_DIRS - _CHOICE_COV_SRC_SKIP)   # 共用清單的其他名字(bin、vendor、dist…)只在 src 以外跳:主程式裡可以有叫 vendor 的套件
+ _CHOICE_COV_SRC_MAX = 20000          # 掃主程式套件最多看幾支 .kt、.java(超過就停,已收的照用並印一行提醒)
+ _CHOICE_COV_SRC_ENTRIES = 200000     # 走訪最多看幾個檔(含非原始碼),超過一樣停
+ _CHOICE_COV_SRC_HEAD = 32768         # 每支只讀開頭這麼多位元組找 package(長授權檔頭)
+ _CHOICE_COV_PKG_RE = re.compile(r"^[ \t\ufeff]*package[ \t\r\n]+([\w.`]+)", re.M)
+ _CHOICE_COV_TEST_SRCSET_RE = re.compile(r"(?:test|androidTest)(?:[A-Z]\w*)?|[a-z][A-Za-z0-9]*Test")
+ 
+ 
+-def _choice_cov_pkg_of(text):
++def _choice_cov_pkg_of(text, kotlin=True):
+     """一段原始碼的 package 宣告 → 斜線分隔的套件(區塊註解先蓋成空白再找;去掉反引號;檔首 BOM、package 與名字之間換行都認,Kotlin 文法 packageHeader);
+-    沒有宣告是 ""。掃主程式套件(讀檔頭 _CHOICE_COV_SRC_HEAD)與壞法行的套件(讀整份檔)共用這一支讀法(套件正規式修補代碼審 r1 架構對齊)。"""
+-    m = _CHOICE_COV_PKG_RE.search(_strip_c_comments(text, keep_length=True, kotlin=True))   # 註解剝法用全庫那一支(行註解裡的 /* 不算;代碼審 r1 通才 #2)
++    沒有宣告是 ""。掃主程式套件與壞法行的套件共用這一支讀法(兩邊都只讀 _choice_cov_head 的檔頭;套件正規式修補代碼審 r1 架構對齊)。
++    kotlin=False(.java):照 Java 剝註解(區塊註解不巢狀,Java 語言規格 3.7;議題第 14 條:原本也用 Kotlin 巢狀剝法,檔頭註解裡落單的 /* 讓 package 讀不到)。"""
++    m = _CHOICE_COV_PKG_RE.search(_strip_c_comments(text, keep_length=True, kotlin=kotlin))   # 註解剝法用全庫那一支(行註解裡的 /* 不算;代碼審 r1 通才 #2)
+     return m.group(1).replace("`", "").replace(".", "/") if m else ""
+ 
+ 
++def _choice_cov_head(raw, more):
++    """檔頭位元組(最多 _CHOICE_COV_SRC_HEAD)→ 找 package 用的文字:more(後面還有內容、被截過)時切到最後一個換行,不讀半截的宣告
++    (議題第 14 條;第二段代碼審 r2 邊界 #2:檔頭剛好切在 package 中間時讀到 com/exa)。掃主程式與壞法行共用。"""
++    text = raw[:_CHOICE_COV_SRC_HEAD].decode("utf-8", "replace")
++    return text[:text.rfind("\n") + 1] if more else text
++
++
+ def _choice_cov_test_srcset(parent, name, root):
+     """src 底下的測試原始碼集資料夾(Gradle 原始碼集名的形狀):test、androidTest 本身或後面接大寫開頭的變體(testDebug、androidTestFree、testFixtures),
+     或小寫開頭、Test 結尾(多平台 jvmTest、commonTest)。只在上一層叫 src 而且不是走訪的根本身時算:主程式裡叫 testapp、test 的套件資料夾不跳,
+     傳統 Java 版面以 src 當根時根底下的頂層套件也不跳。"""
+     return parent != root and os.path.basename(parent) == "src" and bool(_CHOICE_COV_TEST_SRCSET_RE.fullmatch(name))
+ 
+ 
+ def _choice_cov_src_pkgs(root):
+     """平台主程式的套件(〈用詞〉專案類別):root 底下 .kt、.java 檔的 package 宣告(斜線分隔;每支只讀開頭 _CHOICE_COV_SRC_HEAD;反引號與檔首 BOM 去掉)。
+     任何深度跳 _CHOICE_COV_SRC_SKIP,共用 CODE_SKIP_DIRS 的其他名字只在還沒進到 src 時跳(_CHOICE_COV_SRC_SKIP_OUTSIDE),src 底下的測試原始碼集
+@@ -80259,24 +80363,24 @@ def _choice_cov_src_pkgs(root):
+                 print(f"⚠ 掃主程式套件看滿上限({_CHOICE_COV_SRC_MAX} 支原始碼或 {_CHOICE_COV_SRC_ENTRIES} 個檔),後面的套件沒收;只碰那些套件的測試會判成不明、照跑",
+                       file=sys.stderr)
+                 return out
+             if not f.endswith((".kt", ".java")):
+                 continue
+             fp = os.path.join(d, f)
+             try:
+                 if os.path.islink(fp) or not os.path.isfile(fp):
+                     continue
+                 with open(fp, "rb") as fh:
+-                    head = fh.read(_CHOICE_COV_SRC_HEAD).decode("utf-8", "replace")
++                    raw = fh.read(_CHOICE_COV_SRC_HEAD + 1)
+             except OSError:
+                 continue
+-            out.add(_choice_cov_pkg_of(head))
++            out.add(_choice_cov_pkg_of(_choice_cov_head(raw, len(raw) > _CHOICE_COV_SRC_HEAD), kotlin=f.endswith(".kt")))
+     return out
+ 
+ 
+ _CHOICE_COV_BASE_TAIL = 4000   # 快取的基準只留輸出尾巴這麼多字(guard-kill 只用尾巴的最後 200 字與失敗摘錄)
+ _CHOICE_COV_BASE_MAX = 65536   # 基準檔的讀取上限
+ 
+ 
+ def _choice_cov_base_path(exec_path):
+     """續跑快取裡一支測試的覆蓋資料檔 → 同名的基準檔路徑(.exec 換成 .base.json)。"""
+     return exec_path[:-len(".exec")] + ".base.json" if exec_path.endswith(".exec") else exec_path + ".base.json"
+@@ -80414,22 +80518,24 @@ def _choice_cov_req(rr, x, i):
+     first = last = int(x["line"])
+     at = text.find(ident["old"]) if text else -1
+     ol, nl = ident["old"].split("\n"), ident["new"].split("\n")
+     if at >= 0 and len(ol) == len(nl):
+         diff = [k for k, (a, b) in enumerate(zip(ol, nl)) if a != b]
+         if diff:
+             start = text.count("\n", 0, at) + 1
+             first, last = start + diff[0], start + diff[-1]
+     lines = text.split("\n")
+     line = lines[x["line"] - 1] if 0 < x["line"] <= len(lines) else ""
+-    head = text.encode("utf-8")[:_CHOICE_COV_SRC_HEAD].decode("utf-8", "replace")   # 跟掃主程式一樣只讀檔頭(代碼審 r1 資源 #1、通才 #2)
+-    return {"i": i, "file": x["file"], "pkg": _choice_cov_pkg_of(head), "src": x["file"].rsplit("/", 1)[-1],
++    # 跟掃主程式一樣只讀檔頭(代碼審 r1 資源 #1、通才 #2);先切字元再編碼,不整份編碼(議題第 14 條;UTF-8 每個字元至少 1 位元組,前 HEAD 個字元一定蓋得住前 HEAD 位元組)
++    cut = text[:_CHOICE_COV_SRC_HEAD].encode("utf-8")
++    head = _choice_cov_head(cut, len(text) > _CHOICE_COV_SRC_HEAD or len(cut) > _CHOICE_COV_SRC_HEAD)
++    return {"i": i, "file": x["file"], "pkg": _choice_cov_pkg_of(head, kotlin=not x["file"].endswith(".java")), "src": x["file"].rsplit("/", 1)[-1],
+             "first": first, "last": last, "exc": _choice_cov_exception(x.get("decl"), line)}
+ 
+ 
+ def _choice_cov_read(path):
+     """讀一份覆蓋資料檔或分析輸出(上限 _CHOICE_COV_OUT_MAX;不是一般檔、超過上限或讀不到 → None)。"""
+     try:
+         if not os.path.isfile(path) or os.path.getsize(path) > _CHOICE_COV_OUT_MAX:
+             return None
+         with open(path, "rb") as fh:
+             return fh.read()
+@@ -80438,40 +80544,42 @@ def _choice_cov_read(path):
+ 
+ 
+ _CHOICE_REACH_TYPES = (("file", str), ("fp", str), ("new_sha", str), ("reach", str), ("reach_clauses", list), ("reach_why", str), ("cov_sha", str))
+ 
+ 
+ _CHOICE_INVALID_TYPES = (("file", str), ("fp", str), ("new_sha", str), ("row", str), ("at_sha", str), ("blob", str))
+ _CHOICE_AUDIT_TYPES = (("file", str), ("fp", str), ("new_sha", str), ("killed", bool), ("killing_test", str))
+ 
+ 
+ def _choice_ledger_aux(evs):
+-    """治理帳的選擇點附帶事件 → {(檔, 行指紋): {"reach": 同鍵最後一筆型別對的 reach 事件或 None, "layer": None, "invalid": [型別對的 invalid 事件…(檔內順序)],
+-    "audit": [型別對的 cov-audit 事件…]}}(〈範圍〉6;layer 是判讀那一段的事)。_choice_ledger_index 照舊只收 kind choice-kill,兩邊各管各的。
++    """治理帳的選擇點附帶事件 → {(檔, 行指紋): {"reach": 同鍵最後一筆型別對的 reach 事件或 None, "layer": 同鍵最後一筆型別對的 layer 事件(含撤回 layer 0)或 None,
++    "invalid": [型別對的 invalid 事件…(檔內順序)], "audit": [型別對的 cov-audit 事件…]}}(〈範圍〉6、9)。_choice_ledger_index 照舊只收 kind choice-kill,兩邊各管各的。
+     型別不對(含 reach 不是三類之一、reach_n 不是整數、invalid 的 cleared 不是布林)略過。"""
+     out = {}
+     for e in evs or []:
+-        if not isinstance(e, dict) or e.get("gate") != _CHOICE_KILL_GATE or e.get("kind") not in ("reach", "invalid", "cov-audit"):
++        if not isinstance(e, dict) or e.get("gate") != _CHOICE_KILL_GATE or e.get("kind") not in ("reach", "invalid", "cov-audit", "layer"):
+             continue
+         kind = e["kind"]
+-        types_ = {"reach": _CHOICE_REACH_TYPES, "invalid": _CHOICE_INVALID_TYPES, "cov-audit": _CHOICE_AUDIT_TYPES}[kind]
++        types_ = {"reach": _CHOICE_REACH_TYPES, "invalid": _CHOICE_INVALID_TYPES, "cov-audit": _CHOICE_AUDIT_TYPES, "layer": _CHOICE_LAYER_TYPES}[kind]
+         if not all(type(e.get(k)) is t for k, t in types_):
+             continue
+         if kind == "reach" and (e["reach"] not in ("clause", "none", "unknown") or ("reach_n" in e and type(e["reach_n"]) is not int)):
+             continue
+         if kind == "invalid" and "cleared" in e and type(e["cleared"]) is not bool:
+             continue
+         if kind == "cov-audit" and "wrong" in e and type(e["wrong"]) is not bool:
+             continue
++        if kind == "layer" and not 0 <= e["layer"] <= 4:
++            continue
+         ent = out.setdefault((e["file"], e["fp"]), {"reach": None, "layer": None, "invalid": [], "audit": []})
+-        if kind == "reach":
+-            ent["reach"] = e
++        if kind in ("reach", "layer"):
++            ent[kind] = e
+         else:
+             ent["invalid" if kind == "invalid" else "audit"].append(e)
+     return out
+ 
+ 
+ def _choice_invalid_live(aux, oids):
+     """跳過集合的單一定義(Projects/選擇點存活回指條款_計劃〈用詞〉跳過集合)→ {(檔, 行指紋): {new_sha: 那個候選最後一筆 invalid 事件}}:
+     帳上 invalid 事件裡 blob 等於那支檔現在 blob(oids:{NFC 路徑: 物件編號})的;同一個 (檔, 行指紋, new_sha) 取檔內順序最後一筆,cleared 為真(補償:重驗能編了)
+     的就不在裡面。累積,不只看最近一次 run;檔內容變了(blob 不同)整筆不算,從第一個候選重驗。"""
+     out = {}
+@@ -80615,21 +80723,22 @@ class _ChoiceKillRun:
+         mut = more(skip=self.skip[key]) if more is not None else None
+         self.recipes = [r for r in self.recipes if r.get("group") != loc]
+         self.rid_map = {k: v for k, v in self.rid_map.items() if v[0] != loc}
+         if mut is None or mut.get("identity") is None:
+             del self.plan_of[loc]
+             if self.prep is not None:
+                 self.prep.req.pop(loc, None)
+             self.exhausted.append((loc, x, "沒有可用壞法" if mut is None else "下一個候選不唯一"))
+             return []
+         nx = dict(x, mutant=mut, status="mutant")
+-        p["x"], p["rows"], p["plats"] = nx, {}, set()
++        # 只清這個平台組的列(議題第 13 條;第二段代碼審 r1 正確性 #4):前面的平台組已經跑完、不會再跑,清掉它的列那一行就永遠湊不齊、落成缺結果
++        p["x"], p["rows"], p["plats"] = nx, {tk: v for tk, v in p["rows"].items() if tk[0] != plat}, set()
+         new = self._recipes(loc, nx, p, tag="#" + mut["identity"]["new_sha"][:8])
+         for r in new:
+             r["_rid"] = _kill_recipe_id(str(self.rel), r)
+             self.rid_map[(r["_rid"], r["platform"])] = (loc, (r["platform"], r["test"]))
+         self.recipes += new
+         if self.prep is not None and loc in self.prep.req:
+             self.prep.req[loc] = _choice_cov_req(self.rr, nx, self.prep.req[loc]["i"])
+         return [r for r in new if r["platform"] == plat]
+ 
+     def on_invalid(self, loc, ident, cleared):
+@@ -80943,20 +81052,829 @@ class _ChoiceKillRun:
+                 "cov_selected": self.cov_n["selected"], "cov_full": self.cov_n["full"]}
+ 
+     def compile_fields(self):
+         """run 那筆的合批編譯欄位(範圍 4):compile on|off|env|budget(平台組之間取最嚴重的:env > budget > on > off)、compile_batches、invalid_n、exhausted_n。"""
+         pr = self.prep
+         st = set((pr.cstate or {}).values()) if pr is not None else set()
+         comp = next((k for k in ("env", "budget", "on") if k in st), "off")
+         return {"compile": comp, "compile_batches": int(pr.batches) if pr is not None else 0, "invalid_n": self.invalid_n, "exhausted_n": len(self.exhausted)}
+ 
+ 
++# ── 選擇點存活判讀(Projects/選擇點存活回指條款_計劃 範圍 8 到 11,第三段):判讀材料(choice-layer --template)、判讀記錄與驗證、
++#    判讀狀態(有效/待複核/作廢,依據指紋 deps_sha)、撤回;choice-points、choice-kill 存活清單、推送閘子原因、gov --stats 都讀這一段 ──
++_CHOICE_LAYER_DIR = "governance/choice-layers"   # 判讀檔(每筆一份,檔名是內容雜湊;簿記檔,_BOOKKEEPING_DIRS)
++_CHOICE_LAYER_WORK = "choice-layer"              # 工作目錄(_NOTE_AUDIT_WORK_DIR)底下的子資料夾:份清單、份材料、另存的正文;留 14 天
++_CHOICE_LAYER_KEEP_DAYS = 14
++_CHOICE_LAYER_PART_MAX = 20                      # 一份材料最多幾個存活(〈範圍〉8)
++_CHOICE_LAYER_PART_BYTES = 200 * 1024            # 一份材料的位元組上限(UTF-8;超過就把存活數減半再切)
++_CHOICE_LAYER_FIELD_MAX = 300                    # before、after、question、reason 各最多幾個實字(〈範圍〉9)
++_CHOICE_LAYER_RAW_MAX = 1200                     # 同上四欄的原始字元上限(實字以外的標點空白也不能無限長;判讀檔大小有上限)
++_CHOICE_LAYER_BASIS_MAX = 5
++_CHOICE_LAYER_QUOTE = (10, 200)                  # 引句實字數上下限(_real_chars,正規化照 _kt_sit_quote_norm)
++_CHOICE_LAYER_QUOTE_RAW = 600                    # 引句原始字元上限(夾大量空白的引句實字數過得了,判讀檔會爆;第三段代碼審 r1 邊界 #1)
++_CHOICE_LAYER_REASON_MIN = 10                    # 第 4 層理由、撤回理由至少幾個實字
++_CHOICE_LAYER_DOC_MAX = 64 * 1024                # 判讀檔單份上限(寫端與讀端同一個數)
++_CHOICE_LAYER_SHOW = 200                         # 引句、問題、理由印出前截到幾個字
++_CHOICE_LAYER_NAMES = {1: "規格沒寫", 2: "正文寫了、條款沒收", 3: "條款寫了、測試沒驗到", 4: "建議等價(要人放行)"}
++_CHOICE_LAYER_KEYS = ("file", "fp", "layer", "before", "after", "basis", "question", "reason")
++_CHOICE_LAYER_Q_WORDS = ("當", "要", "還是", "現在")
++# 計劃正文不含的二級節(〈用詞〉計劃正文):標題前可帶一個節號或代號(§2、T3)、後面可接任何說明(括號裡的輪次或家名、全形括號都算),判法同 _FOLD_AUDIT_RECORD_RE
++# 容前後綴的寫法(第三段代碼審 r1 正確性 #1、通才 #1、邊界 #2:原本整串相等比對,實際計劃的「審計修正紀錄(r1)」「T3 審計修正紀錄」被當正文)
++_CHOICE_LAYER_NOT_BODY_RE = re.compile(r"^(?:\S+\s+)?(?:驗收條款|預期值表|審計修正紀錄)")
++_CHOICE_LAYER_PENDING = "⚠ 計劃改過、待複核:"
++_CHOICE_LAYER_TYPES = (("file", str), ("fp", str), ("layer", int), ("new_sha", str), ("judgment", str), ("judgment_sha", str), ("deps_sha", str))
++_CHOICE_LAYER_NAME_RE = re.compile(r"[0-9a-f]{64}\.json")
++_CHOICE_HEAD_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$")
++
++
++def _choice_plan_sections(text):
++    """計劃正文分段(〈用詞〉計劃正文)→ [(段名, 原文)]:frontmatter、〈驗收條款〉、〈預期值表〉、〈審計修正紀錄〉以外;段名是二級標題起到最近標題的路徑
++    (〈範圍〉/〈1. 覆蓋〉),同名加 #2;第一個二級標題前的文字(含一級標題底下)段名〈前言〉。標題只認圍欄外的(_visible_lines);空段不收。"""
++    lines = _note_lines(text)
++    start = _choice_fm_end(lines)
++    visible = {no for no, _ln in _visible_lines(lines)}
++    stack, name, buf, out, seen = [], "〈前言〉", [], [], {"〈前言〉": 1}   # 初始段名也登記:一級標題後的〈前言〉才會編成 #2(r1 邊界 #3、通才 #3)
++
++    def flush():
++        body = "\n".join(buf).strip()
++        if body and not (stack and _CHOICE_LAYER_NOT_BODY_RE.match(stack[0][1])):
++            out.append((name, body))
++    for no in range(start + 1, len(lines) + 1):
++        m = _CHOICE_HEAD_RE.match(lines[no - 1]) if no in visible else None
++        if m is None:
++            buf.append(lines[no - 1])
++            continue
++        flush()
++        buf, lv = [], len(m.group(1))
++        stack = [] if lv == 1 else [x for x in stack if x[0] < lv] + [(lv, m.group(2).strip())]
++        base = "/".join(f"〈{t}〉" for _l, t in stack) or "〈前言〉"
++        seen[base] = seen.get(base, 0) + 1
++        name = base if seen[base] == 1 else f"{base}#{seen[base]}"
++    flush()
++    return out
++
++
++def _choice_fm_end(lines):
++    """frontmatter 結尾那一行的行號(0 起算的「下一行之前」:沒有 frontmatter 回 0)。"""
++    if not lines or lines[0].strip() != "---":
++        return 0
++    for i in range(1, len(lines)):
++        if lines[i].strip() == "---":
++            return i + 1
++    return 0
++
++
++def _choice_plan_view(text, tidx):
++    """一份計劃 → 判讀用的視圖:clauses {條款號: 定義行原文}、bound(有綁測試的條款號:綁了 [test:] 而且不是 [keeps];[manual:] 不算)、
++    refs {條款號: [測試引用…]}、expected(預期值表那一節的原文)、sections(_choice_plan_sections)、block(條款原文接預期值表,第 2 層的「仍不在條款裡」)、
++    all(條款全文接正文,第 1、4 層的依據)。tidx 是 _platform_test_index 的結果(clause_bindings 認測試用)。"""
++    _pd, split, default, methods_for, hay_for, _loose = tidx
++    lines = _note_lines(text)
++    rows = [r for r in clause_bindings(text, split, default, methods_for, hay_for) if r.get("defined")]
++    keeps, _variant = _spec_gate_keeps_rows(text, rows)
++    clauses = {r["id"]: lines[r["line"] - 1] if 0 < r["line"] <= len(lines) else "" for r in rows}
++    bound = {r["id"] for r in rows if r.get("refs") and r["id"] not in keeps}
++    exp = "\n".join(ln for _no, ln in _h2_section_lines(text, _EXPECTED_H2_RE) or [])
++    secs = _choice_plan_sections(text)
++    ids = sorted(clauses, key=lambda c: int(c[1:]))
++    cl = "\n".join(f"{c}\t{clauses[c]}" for c in ids)
++    return {"clauses": clauses, "bound": bound, "refs": {r["id"]: list(r.get("refs") or []) for r in rows}, "expected": exp, "sections": secs,
++            "block": cl + "\n" + exp, "all": cl + "\n" + "\n".join(f"{n}\t{t}" for n, t in secs)}
++
++
++class _ChoiceLayerCtx:
++    """一次呼叫裡判讀的讀端現場(〈範圍〉9 判讀狀態):計劃視圖、條款綁的測試與所在檔 blob、判讀檔各只算一次、存活之間共用。
++    text_of(計劃圖譜內路徑)→ 文字或 None;doc_raw(判讀檔 repo 相對路徑)→ 位元組或 None(choice-points 讀工作目錄、推送閘讀 B 版的樹);
++    blob_of {(平台, 測試名): 所在檔物件編號};split、default 拆測試引用。"""
++
++    def __init__(self, text_of, doc_raw, tidx, blob_of=None):
++        self.text_of, self.doc_raw, self.tidx, self.blob_of = text_of, doc_raw, tidx, dict(blob_of or {})
++        self._views, self._docs = {}, {}
++
++    def view(self, plan):
++        if plan not in self._views:
++            t = self.text_of(plan)
++            self._views[plan] = None if t is None else _choice_plan_view(t, self.tidx)
++        return self._views[plan]
++
++    def clause_tests(self, plan, cid):
++        """條款綁的測試清單與所在檔 blob(第 3 層的依據)。"""
++        v = self.view(plan)
++        out = []
++        for ref in (v or {}).get("refs", {}).get(cid) or []:
++            try:
++                plat, name, _ex = _split_test_ref_ex(ref, self.tidx[1], self.tidx[2])
++            except ValueError:
++                plat, name = "", ref
++            out.append([ref, str(self.blob_of.get((plat, name)) or "")])
++        return out
++
++    def doc(self, ev):
++        """layer 事件 → 判讀檔內容(dict)或 None(讀不到、雜湊對不上、不是合格的 JSON 物件:當成沒有判讀)。"""
++        rel = ev.get("judgment") or ""
++        if rel not in self._docs:
++            self._docs[rel] = _choice_layer_doc_read(rel, ev.get("judgment_sha"), self.doc_raw)
++        return self._docs[rel]
++
++    def deps(self, doc):
++        return _choice_layer_deps(doc["layer"], doc.get("basis") or [], doc.get("plans") or [], self)
++
++
++def _choice_layer_doc_read(rel, sha, doc_raw):
++    """判讀檔 → dict 或 None:路徑要是 governance/choice-layers/<64 位十六進位>.json、內容的 sha256 等於檔名也等於事件記的 judgment_sha、
++    單份不超過 _CHOICE_LAYER_DOC_MAX、是帶 layer(1 到 4 的整數)、basis(清單)、plans(清單)的 JSON 物件。"""
++    import hashlib
++    import json as _j
++    name = rel[len(_CHOICE_LAYER_DIR) + 1:] if rel.startswith(_CHOICE_LAYER_DIR + "/") else ""
++    if not _CHOICE_LAYER_NAME_RE.fullmatch(name) or name[:-5] != sha:
++        return None
++    raw = doc_raw(rel)
++    if raw is None or len(raw) > _CHOICE_LAYER_DOC_MAX or hashlib.sha256(raw).hexdigest() != sha:
++        return None
++    try:
++        d = _j.loads(raw.decode("utf-8"))
++    except (UnicodeDecodeError, ValueError):
++        return None
++    ok = isinstance(d, dict) and type(d.get("layer")) is int and 1 <= d["layer"] <= 4 and isinstance(d.get("basis"), list) and isinstance(d.get("plans"), list)
++    return d if ok else None
++
++
++def _choice_layer_deps(layer, basis, plans, ctx):
++    """判讀依據指紋 deps_sha(〈範圍〉9 的表):第 3 層 = 引的每條條款原文、那條條款綁的測試清單與所在檔 blob;第 2 層 = 引句所在那一段的原文、
++    涉及的每份計劃的全部條款原文與預期值表;第 1、4 層 = 涉及的每份計劃的條款全文加正文(不含 frontmatter 與審計修正紀錄)。計劃讀不到記 None(一定對不上)。"""
++    import json as _j
++    parts = []
++    for b in basis if layer in (2, 3) else ():
++        if not isinstance(b, dict):
++            continue
++        v = ctx.view(str(b.get("plan")))
++        where = str(b.get("where"))
++        if layer == 3:
++            parts.append([b.get("plan"), where, (v or {}).get("clauses", {}).get(where), ctx.clause_tests(str(b.get("plan")), where)])
++        else:
++            parts.append([b.get("plan"), where, dict((v or {}).get("sections") or []).get(where)])
++    for p in plans if layer != 3 else ():
++        v = ctx.view(str(p))
++        parts.append([p, (v or {}).get("block" if layer == 2 else "all")])
++    return _choice_sha(_j.dumps([layer, parts], ensure_ascii=False, sort_keys=True), 32)
++
++
++def _choice_layer_state(ent, new_sha, ctx):
++    """一行的判讀狀態(〈用詞〉判讀狀態)→ None(沒有判讀:沒有 layer 事件、最後一筆是撤回、壞法身分變了(作廢)、判讀檔讀不到或雜湊對不上)或
++    {"layer", "pending"(依據變了、待複核), "doc"}。同一鍵取帳上最後一筆 layer 事件(_choice_ledger_aux)。"""
++    ev = (ent or {}).get("layer")
++    if ev is None or ev["layer"] == 0 or ev["new_sha"] != new_sha:
++        return None
++    doc = ctx.doc(ev)
++    if doc is None:
++        return None
++    return {"layer": ev["layer"], "pending": ctx.deps(doc) != ev["deps_sha"], "doc": doc}
++
++
++def _choice_plan_short(p):
++    return str(p).removesuffix(".md")
++
++
++def _choice_layer_text(st):
++    """判讀狀態 → choice-points 與存活清單那一段的字樣(〈範圍〉10);引句、問題、理由過 _kill_esc、截到 _CHOICE_LAYER_SHOW 字。"""
++    d, n = st["doc"], st["layer"]
++    def show(s):
++        return _kill_esc(str(s or ""))[:_CHOICE_LAYER_SHOW]
++    basis, cite = d.get("basis") or [], d.get("cite")
++    b = basis[cite] if type(cite) is int and 0 <= cite < len(basis) and isinstance(basis[cite], dict) else None   # 記錄時驗過的那一項(r1 邊界 #6)
++    if n in (2, 3) and b is None:
++        tail = "(出處讀不到)"
++    else:
++        tail = {1: show(d.get("question")), 4: show(d.get("reason")),
++                2: f"{show(_choice_plan_short((b or {}).get('plan')))}{show((b or {}).get('where'))}「{show((b or {}).get('quote'))}」",
++                3: f"{show(_choice_plan_short((b or {}).get('plan')))}#{show((b or {}).get('where'))}"}[n]
++    return (_CHOICE_LAYER_PENDING if st["pending"] else "") + f"第 {n} 層 {_CHOICE_LAYER_NAMES[n]}:{tail}"
++
++
++def _choice_seg_text(st, reach, reach_ok):
++    """存活那一行後面那一段:有判讀印層(_choice_layer_text);沒有判讀時有效 reach 印覆蓋分類加「未判讀」,否則「未分類」。"""
++    if st is not None:
++        return _choice_layer_text(st)
++    return f"{_choice_reach_text(reach)} 未判讀" if reach_ok else "未分類"
++
++
++def _choice_layer_tidx(rr):
++    """_platform_test_index(判讀讀端與記錄共用;設定讀不了 → None,所有判讀當成沒有)。"""
++    try:
++        return _platform_test_index(rr)
++    except (ValueError, OSError):
++        return None
++
++
++def _choice_layer_ctx_here(rr, guard, blobs):
++    """choice-points、choice-layer 用的讀端現場:計劃讀被讀版本的樹(guard 的記憶體圖譜)、判讀檔讀工作目錄。"""
++    tidx = _choice_layer_tidx(rr)
++    if tidx is None or not guard:
++        return None
++    tenv = guard["tenv"]
++
++    def raw(rel):
++        try:
++            p = Path(rr) / rel
++            return None if p.is_symlink() or not p.is_file() else p.read_bytes()
++        except OSError:
++            return None
++    return _ChoiceLayerCtx(lambda p: env_text(tenv, p) if p in tenv.notes else None, raw, tidx, {(p, n): s for p, n, s in blobs or []})
++
++
++def _choice_layer_ctx_at(rr, at_sha, guard, blobs, deadline):
++    """推送閘用的讀端現場:判讀檔從 B 版的樹讀(〈範圍〉9:推送閘從 B 版的樹讀判讀檔);讀不到當成沒有判讀。"""
++    ctx = _choice_layer_ctx_here(rr, guard, blobs)
++    if ctx is None:
++        return None
++
++    def raw(rel):
++        st, data = _residual_blob_at(rr, at_sha, rel, timeout=20, deadline=deadline)
++        return data if st == "ok" else None
++    ctx.doc_raw = raw
++    return ctx
++
++
++def _choice_layer_work(rr):
++    """判讀的工作目錄 <工作目錄>/choice-layer/(擴充 _note_audit_work_dir 那套:符號連結拒用、自帶 .gitignore)→ (路徑, None) 或 (None, 原因)。"""
++    wd, why = _note_audit_work_dir(rr)
++    if wd is None:
++        return None, why
++    return _note_audit_safe_dir(rr, f"{_NOTE_AUDIT_WORK_DIR}/{_CHOICE_LAYER_WORK}")
++
++
++def _choice_layer_prune(rr):
++    """清判讀工作目錄(〈範圍〉2 工作目錄:choice-layer/ 留 14 天;每次 choice-kill 與 choice-layer 開頭做):choice-layer/ 不在、或它或上層是符號連結就不動;
++    符號連結本身不跟、不刪,只刪一般檔。"""
++    rel = f"{_NOTE_AUDIT_WORK_DIR}/{_CHOICE_LAYER_WORK}"
++    top = Path(rr) / rel
++    try:
++        if not top.is_dir() or _repo_path_unsafe(rr, rel, dirs=True):
++            return
++        olds = [f for f in top.iterdir() if not f.is_symlink() and f.is_file() and time.time() - f.stat().st_mtime > _CHOICE_LAYER_KEEP_DAYS * 86400]
++    except OSError:
++        return
++    for f in olds:
++        try:
++            f.unlink()
++        except OSError:
++            pass
++
++
++def _choice_layer_scope(env, diff, branch):
++    """choice-layer 三種用法共用的前半:範圍、被讀版本、挑壞法(跳過集合同 choice-points)、碰到的計劃與守的測試、帳與放行檔、守的測試所在檔
++    → dict 或 rc(已印)。"""
++    rr = Path(_vault_repo_root(env))
++    rng, at_sha, why = _choice_range(rr, diff, branch)
++    if why:
++        return _situation_rule_say(f"choice-layer:{why}")
++    tables, why, missing = _choice_tables()
++    if why or missing:
++        return _situation_rule_say(f"choice-layer:Kotlin 型錄的選擇點表{why}")
++    try:
++        res = _choice_compute(rr, rng, at_sha, tables, skip=_choice_skip_here(rr, at_sha))
++        guard, gwhy = _choice_guard(rr, rng, at_sha)
++    except (_ChoiceNoTool, _ChoiceUnverifiable, _KtSitUnverifiable, ValueError, OSError, subprocess.TimeoutExpired) as e:
++        return _situation_rule_say(f"choice-layer:算不出改到的行與選擇點({_kill_esc(str(e))[:160] or e.__class__.__name__})")
++    if gwhy or not guard["live"]:
++        return _situation_rule_say(f"choice-layer:碰到的計劃算不出來({_kill_esc(gwhy or '範圍沒碰到進行中計劃')[:160]})")
++    evs, gerr = _gov_vc_gate_events(rr, _CHOICE_KILL_GATE)
++    waivers, werr = _lint_waivers_load(rr)
++    if gerr or werr:
++        return _situation_rule_say("choice-layer:治理帳或放行檔讀不了")
++    blobs, _ok = _choice_test_blobs(rr, at_sha, guard["tests"], guard["pdata"]["platforms"], deadline=time.monotonic() + _CHOICE_CLI_SCAN_TIMEOUT)
++    return {"rr": rr, "rng": rng, "at_sha": at_sha, "res": res, "guard": guard, "evs": evs, "idx": _choice_ledger_index(evs),
++            "waived": _choice_waived_keys(waivers), "aux": _choice_ledger_aux(evs), "blobs": blobs}
++
++
++def _choice_layer_survivors(sc):
++    """帳上目前是存活的行(判法同 choice-points 與推送閘的 _choice_disposition)→ [x…](改到的行的順序)。"""
++    out = []
++    for x in sc["res"]["lines"]:
++        key = (x["file"], x["fp"])
++        if x["status"] == "mutant" and x["mutant"].get("identity") and _choice_disposition(sc["idx"].get(key) or [], key in sc["waived"], sc["guard"]["bound"]) == "survived":
++            out.append(x)
++    return out
++
++
++def _choice_seg_fill(sc, nsha, ctx=None):
++    """存活行 nsha {(檔, 行指紋): 現在的 new_sha} → {(檔, 行指紋): (判讀狀態或 None, 最新 reach 或 None, reach 有效)}(choice-points、存活清單、判讀材料、
++    推送閘共用一個算法;sc 要有 rr、at_sha、guard、aux,blobs 沒給就這裡查)。算不出守的測試(guard 是 None)→ 都沒有判讀、reach 都無效。"""
++    if not nsha:
++        return {}
++    guard = sc.get("guard")
++    if guard and sc.get("blobs") is None:
++        sc["blobs"] = _choice_test_blobs(sc["rr"], sc["at_sha"], guard["tests"], guard["pdata"]["platforms"], deadline=time.monotonic() + _CHOICE_CLI_SCAN_TIMEOUT)[0]
++    fn = _choice_cov_sha_fn(sc["rr"], sc["at_sha"], guard, sc["blobs"], deadline=time.monotonic() + _CHOICE_CLI_SCAN_TIMEOUT) if guard else None
++    ctx = ctx or (_choice_layer_ctx_here(sc["rr"], guard, sc["blobs"]) if guard else None)
++    out = {}
++    for k, ns in nsha.items():
++        ent = sc["aux"].get(k) or {}
++        r = ent.get("reach")
++        out[k] = (_choice_layer_state(ent, ns, ctx) if ctx is not None else None, r, _choice_reach_valid(r, fn(k[0], ns) if fn else None))
++    return out
++
++
++def _choice_nsha(xs):
++    return {(x["file"], x["fp"]): x["mutant"]["identity"]["new_sha"] for x in xs}
++
++
++def _choice_layer_plans(x, seg, live):
++    """一個存活的主計劃與涉及的計劃(〈範圍〉8 分份):有效 reach 有經過條款 → 主計劃是第一條經過條款的計劃、涉及經過的條款所屬的計劃;
++    沒有 → 主計劃 None(未歸計劃)、涉及碰到的全部計劃。"""
++    _st, r, ok = seg
++    cl = [str(c) for c in (r or {}).get("reach_clauses") or []] if ok and (r or {}).get("reach") == "clause" else []
++    plans = list(dict.fromkeys(c.split("#S")[0] + ".md" for c in cl if "#S" in c))
++    plans = [p for p in plans if p in live]
++    return (plans[0], plans) if plans else (None, list(live))
++
++
++def _choice_layer_split(groups, render):
++    """分份(〈範圍〉8;第三段代碼審 r1 O1 改):groups [(主計劃或 None, [存活…])](已排好序)→ [(存活清單, 材料文字, 正文另存與否, 超過上限的原因或空字串)…]。
++    每份最多 _CHOICE_LAYER_PART_MAX 個;render(存活清單, 附正文) 的 UTF-8 位元組數超過 _CHOICE_LAYER_PART_BYTES 時先改成計劃正文另存旁檔(存活數不變);
++    仍超過時看是不是共用的計劃材料本身就超過(只放一個存活、正文另存也超過):是 → 不再減半、照這個存活數出,標原因(實驗專案 75 個存活原本切成 75 份);
++    不是 → 存活數減半再切。"""
++    parts = []
++    for _plan, items in groups:
++        i = 0
++        while i < len(items):
++            n = min(_CHOICE_LAYER_PART_MAX, len(items) - i)
++            parts.append(_choice_layer_one_part(items[i:i + n], render))
++            i += len(parts[-1][0])
++    return parts
++
++
++def _choice_layer_over(text):
++    return len(text.encode("utf-8")) > _CHOICE_LAYER_PART_BYTES
++
++
++def _choice_layer_one_part(chunk, render):
++    """從 chunk 起切出一份 → (存活清單, 材料文字, 正文另存與否, 超過原因)。"""
++    text = render(chunk, True)
++    if not _choice_layer_over(text):
++        return chunk, text, False, ""
++    if _choice_layer_over(render(chunk[:1], False)):   # 共用的計劃材料本身就超過:減半也縮不下來
++        return chunk, render(chunk, False), True, "涉及計劃的條款與預期值表本身就超過上限,這份照存活數出"
++    n = len(chunk)
++    while n > 1 and _choice_layer_over(render(chunk[:n], False)):
++        n = max(1, n // 2)
++    return chunk[:n], render(chunk[:n], False), True, ""
++
++
++def _choice_layer_groups(xs, segs, live):
++    """依主計劃分組:計劃名排序,未歸計劃那組放最後;組內照改到的行的順序。"""
++    by = {}
++    for x in xs:
++        main, _pl = _choice_layer_plans(x, segs[(x["file"], x["fp"])], live)
++        by.setdefault(main, []).append(x)
++    return [(p, by[p]) for p in sorted(k for k in by if k is not None)] + ([(None, by[None])] if None in by else [])
++
++
++def _choice_layer_code(rr, at_sha, x, cache):
++    """包住那一行的宣告(取法同 _kt_sit_material;取不到時改附前後各 20 行)→ (起行, 迄行, 原文)。讀被讀版本的那支檔(同一支檔只讀一次)。"""
++    if x["file"] not in cache:
++        try:
++            text = _kt_sit_read_many(rr, at_sha, [x["file"]]).get(x["file"]) or ""
++        except (_KtSitUnverifiable, OSError, subprocess.TimeoutExpired):
++            text = ""
++        lines = text.split("\n")
++        stripped = _strip_c_comments(text, blank_strings=True, keep_length=True, kotlin=True).split("\n")
++        cache[x["file"]] = (lines, stripped, _kt_sit_levels("\n".join(stripped)), {})
++    lines, stripped, levels, mc = cache[x["file"]]
++    ln = int(x["line"])
++    mat = _kt_sit_material(stripped, levels, ln, mc) if 0 < ln <= len(stripped) else None
++    a, b = mat if mat else (max(1, ln - 20), min(len(lines), ln + 20))
++    return a, b, "\n".join(lines[a - 1:b])
++
++
++def _choice_layer_fence(text):
++    """包程式碼的圍欄:比內容裡最長的反引號串多一個(至少 3 個)。"""
++    runs = [len(m.group(0)) for m in re.finditer(r"`+", text)]
++    return "`" * max(3, max(runs, default=0) + 1)
++
++
++def _choice_layer_item_md(k, x, seg, code, ctx, live):
++    """材料裡一個存活那一段(〈用詞〉判讀材料):位置、鍵、型錄列號與類別、壞法(原文 → 改壞後)、覆蓋分類與經過的條款原文、包住那一行的宣告;
++    不含任何已記的層、處置提示或放行理由。"""
++    ident = x["mutant"]["identity"]
++    _st, r, ok = seg
++    a, b, src = code
++    cls = _choice_reach_text(r) if ok else "未分類(沒有有效的覆蓋分類)"
++    out = [f"### 存活 {k}:{x['file']}:{x['line']}", f"- 鍵:file = `{x['file']}`、fp = `{x['fp']}`", f"- 型錄列號與類別:{x['mutant']['row']} {x['mutant'].get('category', '')}",
++           f"- 覆蓋分類:{cls}"]
++    for c in ((r or {}).get("reach_clauses") or []) if ok and (r or {}).get("reach") == "clause" else []:
++        p, _s, cid = str(c).partition("#")
++        v = ctx.view(p + ".md") if ctx is not None else None
++        out.append(f"  - {c} 原文:{(v or {}).get('clauses', {}).get(cid, '(讀不到)')}")
++    why = x["mutant"].get("why")
++    if why and str(why).strip() not in ("", "—", "(無)"):
++        out.append(f"- 型錄說明(這種改法為什麼行為不同):{why}")
++    for label, txt in (("原文", ident["old"]), ("改壞後", ident["new"])):
++        f = _choice_layer_fence(txt)
++        out += [f"- 壞法{label}:", f + "kotlin", txt, f]
++    f = _choice_layer_fence(src)
++    out += [f"- 包住那一行的程式(第 {a} 到 {b} 行):", f + "kotlin", src, f, ""]
++    return out
++
++
++_CHOICE_LAYER_ANSWER = """## 作答格式
++
++回一個 JSON 陣列存成檔案,每個存活一筆,欄位恰好這幾個(沒有別的欄位):
++`{"file": "<鍵的 file>", "fp": "<鍵的 fp>", "layer": 1|2|3|4, "before": "<改壞前的行為>", "after": "<改壞後的行為>", "basis": [{"plan": "<計劃路徑,含 .md>", "where": "<條款號 S3 或段名〈範圍〉/〈1. 覆蓋〉>", "quote": "<從那條條款或那一段逐字引的句子>"}], "question": "<業務問題>", "reason": "<理由>"}`
++
++層的判法(拿條款原文與計劃正文對照「改壞前後兩種行為」;**拿不準一律填 1**):
++1. 規格沒寫:條款與正文都排除不了改壞後的行為,兩種都說得通。question 必填,寫成「當…時,要 A 還是 B,現在程式是哪個」(要含「當」「要」「還是」「現在」)。
++2. 正文寫了、條款沒收:計劃正文有一句排除了改壞後的行為,但任何條款與預期值表都沒收它。basis 至少一項 where 是段名,quote 從那一段逐字引,而且這句不在任何條款或預期值表裡。
++3. 條款寫了、測試沒驗到:某條條款的字面就排除了改壞後的行為,只是綁的測試沒驗到。basis 至少一項 where 是那條條款號(要是標了「有綁測試」的條款),quote 從那條條款逐字引。
++4. 等價:改壞前後行為在規格範圍內相同。reason 至少 10 個字,寫為什麼相同(只是建議,要人確認)。
++
++限制:before、after、question、reason 各最多 300 字;basis 最多 5 項;每項 quote 10 到 200 字,要逐字出自它標的那條條款或那一段;plan 要是上面列的計劃。
++"""
++
++
++def _choice_layer_plan_md(p, v, body, side=None):
++    """材料裡一份計劃那一段:全部條款(標有綁測試的)、預期值表、分段正文(body=False 只附段名清單,正文在 side 那支旁檔)。"""
++    out = [f"### 計劃 {p}", "#### 驗收條款(條款號:定義行原文)"]
++    for cid in sorted(v["clauses"], key=lambda c: int(c[1:])):
++        out.append(f"- {cid}{'(有綁測試)' if cid in v['bound'] else ''}:{v['clauses'][cid]}")
++    out += ["#### 預期值表", v["expected"] or "(沒有)", "#### 計劃正文(段名與原文)" if body else f"#### 計劃正文(段名清單;全文在 `{side}`,判讀時要讀)"]
++    for name, txt in v["sections"]:
++        out += ([f"##### {name}", txt] if body else [f"- {name}"])
++    return [*out, ""]
++
++
++def _choice_layer_render(sc, ctx, segs, xs, body, cache, list_id, n=None):
++    """一份材料的全文(〈用詞〉判讀材料)。xs 的編號從 1 起;n 是第幾份(分份時 None);body=False 時每份計劃的正文改指到那份計劃的旁檔
++    (_choice_layer_side;同一份清單同一份計劃只一份,各份共用)。"""
++    live = sc["guard"]["live"]
++    plans = list(dict.fromkeys(p for x in xs for p in _choice_layer_plans(x, segs[(x["file"], x["fp"])], live)[1]))
++    head = [f"# 選擇點存活判讀材料(清單 {list_id}" + (f" 第 {n} 份" if n else "") + ")", "",
++            ("下面每個存活都是:把那一行換成壞法之後,守的測試仍然全綠。請拿計劃的條款原文與正文,判條款字面能不能排除改壞後的行為、不能的話正文能不能,"
++             "照最後的作答格式回答。只看這份材料。"), "", "## 涉及的計劃", ""]
++    for p in plans:
++        v = ctx.view(p)
++        head += _choice_layer_plan_md(p, v, body, _choice_layer_side(list_id, p)) if v else [f"### 計劃 {p}", "(讀不到)", ""]
++    head += ["## 存活", ""]
++    for k, x in enumerate(xs, 1):
++        head += _choice_layer_item_md(k, x, segs[(x["file"], x["fp"])], _choice_layer_code(sc["rr"], sc["at_sha"], x, cache), ctx, live)
++    return "\n".join(head) + "\n" + _CHOICE_LAYER_ANSWER
++
++
++def _choice_layer_side(lid, plan):
++    """一份計劃的正文旁檔(repo 相對路徑):<工作目錄>/choice-layer/<清單編號>-plan-<計劃路徑雜湊前 12 碼>.md。"""
++    return f"{_NOTE_AUDIT_WORK_DIR}/{_CHOICE_LAYER_WORK}/{lid}-plan-{_choice_sha(str(plan), 12)}.md"
++
++
++def _choice_layer_side_write(rr, ctx, lid, plans, done):
++    """計劃正文旁檔(每份計劃一份,done 記已寫過的、各份共用):計劃名與分段正文全文。"""
++    for p in plans:
++        v = ctx.view(p)
++        if p in done or v is None:
++            continue
++        done.add(p)
++        body = [f"# 計劃 {p} 的正文(選擇點存活判讀材料清單 {lid})", ""] + [x for name, txt in v["sections"] for x in (f"## {name}", txt, "")]
++        _write_lf(Path(rr) / _choice_layer_side(lid, p), "\n".join(body) + "\n")
++
++
++def _choice_layer_want(sc, segs, redo):
++    """要出材料的存活:判讀狀態不是有效(沒有判讀、待複核、作廢)的,加上 --redo 指定的行。"""
++    xs = _choice_layer_survivors(sc)
++    return [x for x in xs if (x["file"], x["line"]) in redo or segs[(x["file"], x["fp"])][0] is None or segs[(x["file"], x["fp"])][0]["pending"]]
++
++
++def _choice_layer_template(env, diff, branch, redo):
++    """lumos choice-layer --template(〈範圍〉8):寫一份清單到工作目錄 choice-layer/<清單編號>.json、每份材料存 <編號>-<n>.md;stdout 印第 1 份,
++    stderr 印份數與取法。沒有要判讀的存活 → 印一行、rc0。"""
++    import json as _j
++    import uuid as _uuid
++    sc = _choice_layer_scope(env, diff, branch)
++    if isinstance(sc, int):
++        return sc
++    _choice_layer_prune(sc["rr"])
++    surv = _choice_layer_survivors(sc)
++    ctx = _choice_layer_ctx_here(sc["rr"], sc["guard"], sc["blobs"])
++    segs = _choice_seg_fill(sc, _choice_nsha(surv), ctx)
++    xs = _choice_layer_want(sc, segs, set(redo or ()))
++    if not xs:
++        print("沒有要判讀的存活")
++        return 0
++    wd, why = _choice_layer_work(sc["rr"])
++    if wd is None:
++        return _situation_rule_say(f"choice-layer:工作目錄拿不到({_kill_esc(str(why))[:160]})")
++    lid, cache = _uuid.uuid4().hex[:12], {}
++    split = _choice_layer_split(_choice_layer_groups(xs, segs, sc["guard"]["live"]),
++                                lambda its, body: _choice_layer_render(sc, ctx, segs, its, body, cache, lid))
++    parts, items, sides = [], {}, set()
++    for n, (its, _t, big, over) in enumerate(split, 1):
++        text = _choice_layer_render(sc, ctx, segs, its, not big, cache, lid, n=n)
++        if big:
++            plans = list(dict.fromkeys(p for x in its for p in _choice_layer_plans(x, segs[(x["file"], x["fp"])], sc["guard"]["live"])[1]))
++            _choice_layer_side_write(sc["rr"], ctx, lid, plans, sides)
++            print(f"提醒:第 {n} 份太大,計劃正文另存在旁檔(材料裡只附段名清單與旁檔路徑)" + (f";{over}" if over else ""), file=sys.stderr)
++        _write_lf(wd / f"{lid}-{n}.md", text)
++        parts.append({"n": n, "sha": _choice_sha(text, 32), "keys": [[x["file"], x["fp"]] for x in its]})
++        for x in its:
++            items[f"{x['file']}\t{x['fp']}"] = {"new_sha": x["mutant"]["identity"]["new_sha"], "line": x["line"], "part": n,
++                                                "plans": _choice_layer_plans(x, segs[(x["file"], x["fp"])], sc["guard"]["live"])[1]}
++    _write_lf(wd / f"{lid}.json", _j.dumps({"v": 1, "id": lid, "rng": sc["rng"], "at_sha": sc["at_sha"], "parts": parts, "items": items}, ensure_ascii=False) + "\n")
++    first, why = _choice_layer_read_part(wd, lid, 1)
++    if first is None:   # 讀回第 1 份失敗:講原因、rc2,不印字面 None(r1 正確性 #5)
++        return _situation_rule_say(f"choice-layer:清單 {lid} 第 1 份讀回失敗({why});重跑 `lumos choice-layer --template`")
++    print(first, end="")
++    print(f"choice-layer:清單 {lid},{len(xs)} 個存活分成 {len(parts)} 份;這是第 1 份。其他份:lumos choice-layer --part <n> --list {lid};"
++          f"派全新代理只看材料判讀,結果存成 JSON 後 lumos choice-layer <結果.json> --list {lid}", file=sys.stderr)
++    return 0
++
++
++def _choice_layer_list(rr, lid):
++    """讀份清單 → (清單 dict, 工作目錄) 或 (None, None)(編號不合格式、工作目錄拿不到、檔不在或壞掉)。"""
++    import json as _j
++    if not re.fullmatch(r"[0-9a-f]{12}", str(lid or "")):
++        return None, None
++    wd, _why = _choice_layer_work(rr)
++    if wd is None:
++        return None, None
++    try:
++        d = _j.loads((wd / f"{lid}.json").read_text(encoding="utf-8"))
++    except (OSError, ValueError, UnicodeDecodeError):
++        return None, None
++    ok = isinstance(d, dict) and isinstance(d.get("parts"), list) and isinstance(d.get("items"), dict) and isinstance(d.get("at_sha"), str) and isinstance(d.get("rng"), str)
++    return (d, wd) if ok and _choice_layer_list_inner_ok(d) else (None, None)
++
++
++def _choice_layer_list_inner_ok(d):
++    """份清單內層形狀(r1 邊界 #4:不對時當成清單不在、不丟堆疊):parts 每份是帶整數 n、字串 sha、清單 keys 的物件;items 每個值是帶字串 new_sha、清單 plans 的物件。"""
++    parts_ok = all(isinstance(p, dict) and type(p.get("n")) is int and isinstance(p.get("sha"), str) and isinstance(p.get("keys"), list) for p in d["parts"])
++    items_ok = all(isinstance(v, dict) and isinstance(v.get("new_sha"), str) and isinstance(v.get("plans"), list) for v in d["items"].values())
++    return parts_ok and items_ok
++
++
++def _choice_layer_read_part(wd, lid, n):
++    """第 n 份材料 → (文字, None) 或 (None, 原因):從清單取、不重算;檔讀不到或內容雜湊跟清單記的不同 → 原因。"""
++    import json as _j
++    try:
++        d = _j.loads((wd / f"{lid}.json").read_text(encoding="utf-8"))
++        part = next(p for p in d["parts"] if p.get("n") == n)
++        text = (wd / f"{lid}-{n}.md").read_text(encoding="utf-8")
++    except (OSError, ValueError, UnicodeDecodeError, StopIteration, KeyError, TypeError):
++        return None, "清單或那一份不在了"
++    return (text, None) if _choice_sha(text, 32) == part.get("sha") else (None, "那一份的內容跟清單記的不同")
++
++
++def _choice_layer_part_cmd(env, lid, n):
++    """lumos choice-layer --part n --list <編號>:印第 n 份(從清單取,不重算)。"""
++    lst, wd = _choice_layer_list(Path(_vault_repo_root(env)), lid)
++    if lst is None:
++        return _situation_rule_say("清單不在了,重跑 `lumos choice-layer --template`")
++    text, why = _choice_layer_read_part(wd, lid, n)
++    if text is None:
++        return _situation_rule_say(f"第 {n} 份:{why}(共 {len(lst['parts'])} 份);重跑 `lumos choice-layer --template`")
++    print(text, end="")
++    return 0
++
++
++def _choice_layer_str_errs(it):
++    """一筆判讀的文字欄位:before、after 必填,question、reason 選填,都要是字串、各最多 _CHOICE_LAYER_FIELD_MAX 個實字(原始字元另有上限)。"""
++    errs = []
++    for k in ("before", "after", "question", "reason"):
++        v = it.get(k, "")
++        if not isinstance(v, str):
++            errs.append(f"{k} 要是字串")
++        elif k in ("before", "after") and not v.strip():
++            errs.append(f"{k} 不能空")
++        elif _real_chars(v) > _CHOICE_LAYER_FIELD_MAX or len(v) > _CHOICE_LAYER_RAW_MAX:
++            errs.append(f"{k} 超過長度上限({_CHOICE_LAYER_FIELD_MAX} 字)")
++    return errs
++
++
++def _choice_layer_quote_in(quote, text):
++    return text is not None and _kt_sit_quote_norm(quote) in _kt_sit_quote_norm(text)
++
++
++def _choice_layer_basis_errs(basis, plans, ctx):
++    """basis 的形狀與每一項的出處(〈範圍〉9):清單、最多 _CHOICE_LAYER_BASIS_MAX 項;每項恰好 plan、where、quote 三個字串,plan 是材料涉及的計劃,
++    where 是那份計劃的條款號或段名,quote 10 到 200 個實字、逐字出自它標的那條條款或那一段(_kt_sit_quote_norm 比)。→ (錯誤句, [(項, 是條款, 出處原文)…])。"""
++    if not isinstance(basis, list) or len(basis) > _CHOICE_LAYER_BASIS_MAX:
++        return [f"basis 要是最多 {_CHOICE_LAYER_BASIS_MAX} 項的清單"], []
++    errs, ok = [], []
++    for j, b in enumerate(basis, 1):
++        if not isinstance(b, dict) or set(b) != {"plan", "where", "quote"} or not all(isinstance(b[k], str) for k in b):
++            errs.append(f"basis 第 {j} 項要恰好有 plan、where、quote 三個字串")
++            continue
++        n = _real_chars(_kt_sit_quote_norm(b["quote"]))
++        if len(b["quote"]) > _CHOICE_LAYER_QUOTE_RAW:
++            errs.append(f"basis 第 {j} 項引句原始長度超過上限({_CHOICE_LAYER_QUOTE_RAW} 字元)")
++            continue
++        if n < _CHOICE_LAYER_QUOTE[0] or n > _CHOICE_LAYER_QUOTE[1]:
++            errs.append(f"basis 第 {j} 項引句{'少於' if n < _CHOICE_LAYER_QUOTE[0] else '多於'} {_CHOICE_LAYER_QUOTE[0] if n < _CHOICE_LAYER_QUOTE[0] else _CHOICE_LAYER_QUOTE[1]} 實字")
++            continue
++        v = ctx.view(b["plan"]) if b["plan"] in plans else None
++        if v is None:
++            errs.append(f"basis 第 {j} 項的 plan {_kill_esc(b['plan'])[:80]} 不是這份材料涉及的計劃")
++            continue
++        is_cl = b["where"] in v["clauses"]
++        src = v["clauses"].get(b["where"]) if is_cl else dict(v["sections"]).get(b["where"])
++        if src is None:
++            errs.append(f"basis 第 {j} 項的 where {_kill_esc(b['where'])[:80]} 不是那份計劃的條款號或段名")
++        elif not _choice_layer_quote_in(b["quote"], src):
++            errs.append(f"basis 第 {j} 項的引句不在 {_kill_esc(b['where'])[:80]} 裡")
++        else:
++            ok.append((j - 1, b, is_cl, src))
++    return errs, ok
++
++
++def _choice_layer_cite(layer, ok, plans, ctx):
++    """各層「通過驗證的那一項」在 basis 的序號(顯示用,第三段代碼審 r1 邊界 #6):第 3 層是第一項有綁測試的條款、第 2 層是第一項只在正文(不在任何條款與預期值表)的段;
++    第 1、4 層或找不到 → None。ok 是 _choice_layer_basis_errs 驗過的 [(序號, 項, 是條款, 出處原文)…]。"""
++    for j, b, is_cl, _s in ok:
++        if layer == 3 and is_cl and b["where"] in ctx.view(b["plan"])["bound"]:
++            return j
++        if layer == 2 and not is_cl and not any(_choice_layer_quote_in(b["quote"], (ctx.view(p) or {}).get("block")) for p in plans):
++            return j
++    return None
++
++
++def _choice_layer_rule_errs(layer, it, ok, plans, ctx):
++    """各層的出處要求(〈範圍〉9):第 3 層至少一項是有綁測試的條款(不是 [manual:] 或 [keeps]);第 2 層至少一項是段名、引句不在任何條款原文與預期值表裡;
++    第 1 層問題含「當」「要」「還是」「現在」;第 4 層理由至少 10 實字。"""
++    if layer == 3 and _choice_layer_cite(3, ok, plans, ctx) is None:
++        return ["第 3 層要至少一項 where 是那份計劃有綁測試的條款號(不是 [manual:] 或 [keeps]),引句出自那條條款"]
++    if layer == 2 and not any(not is_cl for _j, _b, is_cl, _s in ok):
++        return ["第 2 層要至少一項 where 是計劃正文的段名,引句出自那一段"]
++    if layer == 2 and _choice_layer_cite(2, ok, plans, ctx) is None:
++        return ["第 2 層的引句也在條款原文或預期值表裡(條款收了就是第 3 層)"]
++    if layer == 1 and not all(w in str(it.get("question", "")) for w in _CHOICE_LAYER_Q_WORDS):
++        return ["第 1 層的 question 要寫成「當…時,要 A 還是 B,現在程式是哪個」(含「當」「要」「還是」「現在」)"]
++    if layer == 4 and _real_chars(str(it.get("reason", ""))) < _CHOICE_LAYER_REASON_MIN:
++        return [f"第 4 層的 reason 要至少 {_CHOICE_LAYER_REASON_MIN} 個實字"]
++    return []
++
++
++def _choice_layer_item_errs(it, lst, seen, ctx, cites):
++    """一筆判讀的全部檢查 → 錯誤句清單(空的是合格);cites 收每個鍵通過驗證的那一項序號(_choice_layer_cite,寫進判讀檔的 cite)。"""
++    if not isinstance(it, dict):
++        return ["要是物件"]
++    extra = sorted(set(it) - set(_CHOICE_LAYER_KEYS))
++    if extra:
++        return [f"有不認得的欄位 {'、'.join(_kill_esc(str(k))[:40] for k in extra[:5])}"]
++    key = f"{it.get('file')}\t{it.get('fp')}"
++    if not isinstance(it.get("file"), str) or not isinstance(it.get("fp"), str) or key not in lst["items"]:
++        return ["file+fp 不在這份清單裡"]
++    if key in seen:
++        return ["同一個鍵出現兩次"]
++    seen.add(key)
++    if type(it.get("layer")) is not int or not 1 <= it["layer"] <= 4:
++        return ["layer 要是 1 到 4 的整數"]
++    plans = lst["items"][key].get("plans") or []
++    errs = _choice_layer_str_errs(it)
++    berrs, ok = _choice_layer_basis_errs(it.get("basis", []), plans, ctx)
++    cites[key] = _choice_layer_cite(it["layer"], ok, plans, ctx)
++    return errs + berrs + _choice_layer_rule_errs(it["layer"], it, ok, plans, ctx)
++
++
++def _choice_layer_load_result(path):
++    """結果檔 → 清單或 None(讀不到、不是 JSON 陣列)。"""
++    import json as _j
++    try:
++        d = _j.loads(Path(path).read_text(encoding="utf-8-sig"))   # 帶 BOM 的結果檔照讀(同情境題盲判;r1 架構對齊 #2)
++    except (OSError, ValueError, UnicodeDecodeError):
++        return None
++    return d if isinstance(d, list) else None
++
++
++def _choice_layer_record(env, result, lid):
++    """lumos choice-layer <結果.json> --list <清單編號>(〈範圍〉9):先整份驗證,不合就整份拒收(rc2)、逐筆印出哪一筆哪一項不合,什麼都不寫;
++    全過才寫:每筆判讀全文存成 governance/choice-layers/<內容雜湊>.json(_note_audit_write_verdict),治理帳每筆一個 layer 事件(帶依據指紋 deps_sha)。
++    依據、引句都照清單記的被讀版本(at_sha)的計劃算,跟判讀代理看到的材料同一版。"""
++    rr = Path(_vault_repo_root(env))
++    _choice_layer_prune(rr)
++    lst, _wd = _choice_layer_list(rr, lid)
++    res = _choice_layer_load_result(result) if lst is not None else None
++    if lst is None or res is None:
++        return _situation_rule_say("清單不在了,重跑 `lumos choice-layer --template`" if lst is None else f"結果檔 {_kill_esc(str(result))[:120]} 讀不到或不是 JSON 陣列")
++    sc = _choice_layer_scope_at(env, rr, lst)
++    if isinstance(sc, int):
++        return sc
++    ctx = _choice_layer_ctx_here(rr, sc["guard"], sc["blobs"])
++    if ctx is None:
++        return _situation_rule_say("choice-layer:平台設定讀不了,驗不了判讀")
++    seen, bad, cites = set(), [], {}
++    for k, it in enumerate(res, 1):
++        bad += [f"第 {k} 筆({_kill_esc(str((it or {}).get('file') if isinstance(it, dict) else '?'))[:80]}):{e}" for e in _choice_layer_item_errs(it, lst, seen, ctx, cites)]
++    if bad or not res:
++        return _choice_layer_reject(bad)
++    return _choice_layer_write(rr, lst, res, ctx, cites)
++
++
++def _choice_layer_reject(bad):
++    """整份拒收的輸出(照情境題盲判:前綴「擋下:」、最多列 10 條再印另有 N 處;r1 架構對齊 #2)→ rc 2。"""
++    if not bad:
++        print("擋下:判讀結果是空的,整份沒寫", file=sys.stderr)
++        return 2
++    print(f"擋下:判讀結果有 {len(bad)} 處不合,整份沒寫:", file=sys.stderr)
++    for e in bad[:10]:
++        print(f"  - {e}", file=sys.stderr)
++    if len(bad) > 10:
++        print(f"  …另有 {len(bad) - 10} 處", file=sys.stderr)
++    return 2
++
++
++def _choice_layer_scope_at(env, rr, lst):
++    """記錄判讀用的被讀版本現場:清單記的範圍與被讀版本(碰到的計劃、守的測試、所在檔)。→ dict 或 rc(已印)。"""
++    try:
++        guard, why = _choice_guard(rr, lst["rng"], lst["at_sha"])
++    except (_KtSitUnverifiable, ValueError, OSError, subprocess.TimeoutExpired) as e:
++        guard, why = None, str(e) or e.__class__.__name__
++    if why or guard is None:
++        return _situation_rule_say(f"choice-layer:清單那一版的計劃算不出來({_kill_esc(str(why))[:160]})")
++    blobs, _ok = _choice_test_blobs(rr, lst["at_sha"], guard["tests"], guard["pdata"]["platforms"], deadline=time.monotonic() + _CHOICE_CLI_SCAN_TIMEOUT)
++    return {"guard": guard, "blobs": blobs}
++
++
++def _choice_layer_write(rr, lst, res, ctx, cites=None):
++    """驗過的判讀全部寫:判讀檔(檔名是內容雜湊、原子換名、單份上限)與 layer 事件(單筆不超過 4096 位元組,_gate_event 的上限)。
++    寫任何東西之前先把每份判讀檔組好、整份預檢大小,任一份超過 _CHOICE_LAYER_DOC_MAX 就整份拒收、什麼都不寫(第三段代碼審 r1 M3:原本寫到一半停在第 N 筆)。"""
++    import hashlib
++    import json as _j
++    import secrets
++    docs = []
++    for it in res:
++        key = f"{it['file']}\t{it['fp']}"
++        meta = lst["items"][key]
++        doc = {"v": 1, "file": it["file"], "fp": it["fp"], "new_sha": meta["new_sha"], "layer": it["layer"], "before": it["before"], "after": it["after"],
++               "basis": it.get("basis") or [], "question": it.get("question", ""), "reason": it.get("reason", ""), "plans": meta.get("plans") or [],
++               "list": lst["id"], "at_sha": lst["at_sha"], "cite": (cites or {}).get(key)}
++        body = _j.dumps(doc, ensure_ascii=False, sort_keys=True, indent=1) + "\n"
++        docs.append((doc, hashlib.sha256(body.encode("utf-8")).hexdigest(), len(body.encode("utf-8"))))
++    big = [f"第 {k} 筆({_kill_esc(d['file'])[:80]}):判讀檔 {n} 位元組,超過單份上限 {_CHOICE_LAYER_DOC_MAX}" for k, (d, _s, n) in enumerate(docs, 1) if n > _CHOICE_LAYER_DOC_MAX]
++    if big:
++        return _choice_layer_reject(big)
++    wrote = 0
++    for doc, sha, _n in docs:
++        name, why = _note_audit_write_verdict(rr, doc, dirname=_CHOICE_LAYER_DIR, name=sha + ".json", max_bytes=_CHOICE_LAYER_DOC_MAX, sort_keys=True)
++        if name is None:
++            print(f"choice-layer:判讀檔寫不進去({_kill_esc(str(why))[:160]}),停在第 {wrote + 1} 筆;已寫的事件照留,重跑同一個指令會補齊", file=sys.stderr)
++            return 2
++        ex = {"file": doc["file"], "fp": doc["fp"], "layer": doc["layer"], "new_sha": doc["new_sha"], "judgment": f"{_CHOICE_LAYER_DIR}/{name}",
++              "judgment_sha": sha, "deps_sha": ctx.deps(doc), "token": secrets.token_hex(8)}
++        if not _choice_gate_event(rr, "layer", f"選擇點判讀 {doc['file']} 第 {doc['layer']} 層", f"{_kill_esc(doc['file'])} 的判讀", hard=False,
++                                  head_sha=lst["at_sha"], nodes=[], extra=ex):
++            return 2
++        wrote += 1
++    print(f"choice-layer:記了 {wrote} 筆判讀(判讀檔在 {_CHOICE_LAYER_DIR}/)")
++    print(f"下一步:提交治理帳({GOV_LOG_REL})與 {_CHOICE_LAYER_DIR}/(推送閘從被推版本讀它們)")
++    return 0
++
++
++def _choice_layer_withdraw(env, loc, reason, diff, branch):
++    """lumos choice-layer --withdraw <檔>:<行> --reason "<≥10 實字>"(〈範圍〉9 撤回):寫一筆 layer 0 的補償事件(new_sha 填現在的、judgment 空字串、
++    帶 reason),那一行變成沒有判讀。那一行要是帳上存活而且有判讀。"""
++    import secrets
++    if _real_chars(str(reason or "")) < _CHOICE_LAYER_REASON_MIN:
++        return _situation_rule_say(f"--withdraw 要帶 --reason,至少 {_CHOICE_LAYER_REASON_MIN} 個實字")
++    want = _choice_loc_parse(loc)
++    if want is None:
++        return _situation_rule_say("--withdraw 要寫成 <檔>:<行>")
++    sc = _choice_layer_scope(env, diff, branch)
++    if isinstance(sc, int):
++        return sc
++    x = next((y for y in _choice_layer_survivors(sc) if (y["file"], y["line"]) == want), None)
++    ev = ((sc["aux"].get((x["file"], x["fp"])) or {}).get("layer") if x else None)
++    if x is None or ev is None or ev["layer"] == 0:
++        return _situation_rule_say(f"{_kill_esc(loc)[:120]}:不是帳上有判讀的存活行,沒有可撤的判讀")
++    ex = {"file": x["file"], "fp": x["fp"], "layer": 0, "new_sha": x["mutant"]["identity"]["new_sha"], "judgment": "", "judgment_sha": "",
++          "deps_sha": "", "reason": str(reason)[:_CHOICE_LAYER_RAW_MAX], "token": secrets.token_hex(8)}
++    if not _choice_gate_event(sc["rr"], "layer", f"選擇點判讀撤回 {x['file']}", f"{_kill_esc(loc)} 的撤回", hard=False, head_sha=sc["at_sha"], nodes=[], extra=ex):
++        return 2
++    print(f"choice-layer:撤回了 {_kill_esc(loc)} 的判讀(這一行變成沒有判讀;重判:lumos choice-layer --template)")
++    return 0
++
++
++def cmd_choice_layer(env, result=None, template=False, diff=None, branch=None, part=None, list_id=None, redo=None, withdraw=None, reason=None):
++    """lumos choice-layer(Projects/選擇點存活回指條款_計劃 範圍 8、9):--template 出判讀材料(--part n --list <編號> 取第 n 份)、
++    <結果.json> --list <編號> 記判讀、--withdraw <檔>:<行> --reason 撤回。不呼叫模型:判讀由編排者派全新代理只看材料做。"""
++    if withdraw is not None:
++        return _choice_layer_withdraw(env, withdraw, reason, diff, branch)
++    if part is not None:
++        if not list_id or part < 1:
++            return _situation_rule_say("--part 要跟 --list <清單編號> 一起給,n 從 1 起")
++        return _choice_layer_part_cmd(env, list_id, part)
++    if template:
++        bad = [r for r in redo or [] if _choice_loc_parse(r) is None]
++        if bad:
++            return _situation_rule_say("--redo 要寫成 <檔>:<行>")
++        return _choice_layer_template(env, diff, branch, {_choice_loc_parse(r) for r in redo or []})
++    if result is None or not list_id:
++        return _situation_rule_say("choice-layer:給 --template 出材料,或 <結果.json> --list <清單編號> 記判讀,或 --withdraw <檔>:<行> --reason …")
++    return _choice_layer_record(env, result, list_id)
++
++
+ def _choice_kill_report(kr, res, rr, at_sha, carried, nu, left, done, max_mutants, max_seconds):
+     """choice-kill 收尾:記一筆 run(_gate_event_fit 縮 tests 清單)、印帶過去的行與不唯一的行、統計與下一步 → rc(〈範圍〉2 rc 取最大)。"""
+     import math
+     import secrets
+     import time as _t
+     unrun = sum(1 for p in kr.plan_of.values() if not p["done"]) + left
+     secs = int(_t.monotonic() - kr.t0)
+     rx = {"run_id": kr.run_id, "changed": res["changed"], "points": sum(1 for x in res["lines"] if x["status"] != "arid"),
+           "mutant_lines": sum(1 for x in res["lines"] if x["mutant"] is not None), "ran": sum(kr.stats.values()), "counts": dict(kr.stats),
+           "secs": secs, "ast_grep": res["ast_grep"], "tests": [list(x) for x in kr.blobs],
+@@ -81027,20 +81945,21 @@ def cmd_choice_kill(env, diff=None, branch=None, only=None, max_mutants=None, ma
+     bad = _choice_kill_args(reach_only, only, max_mutants, no_cov, no_merge, cov_audit)
+     if bad is not None:
+         return bad
+     if max_mutants is None:
+         max_mutants = _CHOICE_MAX_MUTANTS
+     base = _choice_kill_base(env, diff, branch, only, max_mutants, max_seconds)
+     if isinstance(base, int):
+         return base
+     rr, rng, at_sha, only = base
+     _choice_cov_prune(rr, at_sha)   # 續跑快取只留最近幾個 at_sha:每次 choice-kill 開頭清,不論開不開覆蓋(〈範圍〉2 工作目錄)
++    _choice_layer_prune(rr)         # 判讀工作目錄留 14 天(同上;choice-layer 開頭也清)
+     gevs0, _gerr0 = _gov_vc_gate_events(rr, _CHOICE_KILL_GATE)   # 跳過集合(帳讀不了 → 空;之後 _choice_kill_ledger 照原本報錯)
+     skip, live, _oids = _choice_skip_read(rr, at_sha, [] if _gerr0 else gevs0)
+     res = _choice_kill_scan(rr, rng, at_sha, only, skip=skip)
+     if isinstance(res, int):
+         return res
+     guard = _choice_kill_guard(rr, rng, at_sha)
+     if isinstance(guard, int):
+         return guard
+     # 守的測試所在檔的物件編號:算進守的測試雜湊、也是 run 那筆的 tests;算進這次呼叫的總時限(從這裡起算,代碼審 code-改動選擇點 r1 r4)
+     t0 = time.monotonic()
+@@ -81061,21 +81980,43 @@ def cmd_choice_kill(env, diff=None, branch=None, only=None, max_mutants=None, ma
+     kr = _ChoiceKillRun(env, rr, at_sha, guard, idx, tests_sha, max_seconds, t0=t0, blobs=blobs, merge=merge)
+     for x in todo[:max_mutants]:
+         kr.add(x)
+     _choice_prep_attach(kr, rr, at_sha, cov_plats, cov_sha_of, blobs, max_seconds, t0, run_opts)
+     floor = _kill_timeout_floor()
+     print(f"choice-kill:{len(kr.plan_of)} 個壞法 × 最多 {len(guard['tests'])} 支測試(基準每條測試指令只跑一次、最長 {int(max(600.0, floor))} 秒;"
+           f"壞法最長基準耗時的 5 倍、至少 {int(floor)} 秒;總時限 {int(max_seconds)} 秒,到了就停在配方之間)")
+     sys.stdout.flush()
+     added = len(kr.plan_of)   # 跑之前數:合批編譯把候選用完的行從 plan_of 拿掉,它們不算「沒跑」
+     kr.run()
+-    return _choice_kill_report(kr, res, rr, at_sha, carried, nu, len(todo) - added, done, max_mutants, max_seconds)
++    rc = _choice_kill_report(kr, res, rr, at_sha, carried, nu, len(todo) - added, done, max_mutants, max_seconds)
++    # 這次換過候選的行用換後的壞法(plan_of 裡的那一份;r1 正確性 #4、通才 #4:用掃描時的壞法算 cov_sha 對不上,清單印成未分類)
++    now = {loc: p["x"] for loc, p in kr.plan_of.items()}
++    _choice_kill_survivor_list(rr, at_sha, dict(res, lines=[now.get(f"{x['file']}:{x['line']}", x) for x in res["lines"]]), guard, blobs)
++    return rc
++
++
++def _choice_kill_survivor_list(rr, at_sha, res, guard, blobs):
++    """choice-kill 判完全部壞法後另印一份「存活與分類」清單(〈範圍〉10):重讀工作目錄的帳,帳上是存活的每一行一行,後面接判讀或覆蓋分類那一段
++    (_choice_seg_fill,同 choice-points)。帳讀不了或沒有存活就不印。"""
++    evs, gerr = _gov_vc_gate_events(rr, _CHOICE_KILL_GATE)
++    waivers, werr = _lint_waivers_load(rr)
++    if gerr or werr:
++        return
++    sc = {"rr": rr, "at_sha": at_sha, "res": res, "guard": guard, "blobs": blobs, "idx": _choice_ledger_index(evs), "waived": _choice_waived_keys(waivers),
++          "aux": _choice_ledger_aux(evs)}
++    xs = _choice_layer_survivors(sc)
++    if not xs:
++        return
++    segs = _choice_seg_fill(sc, _choice_nsha(xs))
++    print(f"存活與分類({len(xs)} 行;判讀:lumos choice-layer --template):")
++    for x in xs:
++        print(f"    {_kill_esc(x['file'])}:{x['line']}  {x['mutant']['row']}  {_choice_seg_text(*segs[(x['file'], x['fp'])])}")
+ 
+ 
+ def _choice_kill_args(reach_only, only, max_mutants, no_cov, no_merge, cov_audit):
+     """choice-kill 只看參數就判得出的錯 → rc 2(已印)或 None:--reach-only 同給的旗標、--cov-audit 不是 0 以上的整數。"""
+     clash = _choice_reach_only_clash(reach_only, only, max_mutants, no_cov, no_merge)
+     if clash is not None:
+         return clash
+     if type(cov_audit) is not int or cov_audit < 0:
+         return _situation_rule_say("--cov-audit 要是 0 以上的整數(0 是不抽查)")
+     return None
+@@ -81138,20 +82079,21 @@ def _choice_prep_attach(kr, rr, at_sha, cov_plats, cov_sha_of, blobs, max_second
+     comp = set(opts.get("compile") or ())
+     kr.skip = {k: set(v) for k, v in (opts.get("skip") or {}).items()}
+     kr.audit_n, kr.no_none = int(opts.get("audit", 0) or 0), bool(opts.get("no_none"))
+     if (not cov_plats and not comp) or not kr.plan_of:
+         return
+     kr.cov_sha_of = cov_sha_of if cov_plats else None
+     req = {loc: _choice_cov_req(rr, p["x"], i) for i, (loc, p) in enumerate(kr.plan_of.items())}
+     kr.prep = _KillPrep(t0 + max_seconds, cov_plats, req, kr.on_prep, cache=_choice_cov_dir(rr, at_sha) if cov_plats else None,
+                         blob_of={(p, n): s for p, n, s in blobs}, compile=comp, cbudget=max_seconds * _CHOICE_COMPILE_BUDGET_K,
+                         on_invalid=kr.on_invalid, on_swap=kr.on_swap, recipes_of=kr.recipes_of, probes=kr.probes(opts.get("live")) if comp else None)
++    kr.prep.seed = kr.run_id
+ 
+ 
+ def _choice_reach_only(env, rr, at_sha, res, guard, idx, waived, aux, tests_sha, blobs, cov_plats, cov_sha_of, max_seconds, t0, opts=None):
+     """choice-kill --reach-only(Projects/選擇點存活回指條款_計劃 範圍 7):帳上目前是存活、沒有有效 reach(或最新一筆 reach 是暫時性 unknown)的行,照常挑壞法、
+     交配方與準備物件給 guard-kill(prep_only=True:準備物件做完就結束、不跑任何配方),只補 reach、不寫壞法事件;記一筆 kind reach-run 帶 cov_secs。
+     → rc:補完 0;沒有開覆蓋的平台 2;中斷或寫帳失敗 2。"""
+     import math
+     import secrets
+     if not cov_plats:
+         return _situation_rule_say("--reach-only:守的測試所在平台都沒開 coverage(平台設定 coverage: true 才做逐測試覆蓋),補不了覆蓋分類")
+@@ -81232,25 +82174,30 @@ def _choice_needs_disposition(lines):
+ # ── 改動選擇點第三段:推送前那一道(Projects/改動選擇點都要有需求守住_計劃 範圍 4;論文〈Practical Mutation Testing at Scale〉
+ #    https://arxiv.org/pdf/2102.11378 2.3 回報上限、4.1 每行一個壞法)──
+ # 推送前不重跑殺傷力:只讀被推版本(B)的帳與放行檔、重算哪些行有壞法、驗新鮮度。判定順序先判不需要 ast-grep 的條件(生效日、平台、改到的 .kt、
+ # 碰到的計劃),再掃描;掃描或讀檔算不出來只提醒、記 unverified(規格閘「算不出來就放行」);治理帳在 B 不在或 git 讀帳回錯才擋。
+ _CHOICE_PUSH_TAG = "[選擇點] "            # 推送前規格閘 bad 清單裡選擇點那幾條的開頭(_spec_gate_push_bad_head 認它)
+ _CHOICE_PUSH_SHOW = 20                   # 每種原因最多列幾行示例(〈用詞〉排版)
+ _CHOICE_CAP_PER_FILE = 7                 # 論文 2.3:一次改動最多回報「有增行的檔數 × 7」個存活
+ _CHOICE_GOV_BUDGET = 30.0                # 讀 B 版治理帳與放行檔的時限(秒),不跟掃描的 _KT_SIT_BUDGET 共用
+ _CHOICE_PICK_BUDGET = 15.0               # 推送前挑壞法的時限(秒),從掃描結束起算(代碼審 code-改動選擇點 r2 H3;2026-11-14 實測含讀檔:1400 支小檔 2.4 秒、300 支 200 行 5.1 秒、720KB 單檔 5.9 秒)
+ _CHOICE_INSTALL = "brew install ast-grep 或 pip install ast-grep-cli"
+-_CHOICE_PUSH_REASONS = ("缺紀錄", "存活", "跑不出結果", "不唯一", "過期")
++_CHOICE_PUSH_SURV = ("存活·第1層", "存活·第2層", "存活·第3層", "存活·第4層", "存活·未判讀")   # 「存活」拆成的子原因(〈範圍〉11;行數加總等於原本的存活行數)
++_CHOICE_PUSH_REASONS = ("缺紀錄", *_CHOICE_PUSH_SURV, "跑不出結果", "不唯一", "過期")
+ _CHOICE_PUSH_FIX = {
+     "缺紀錄": "跑 lumos choice-kill 記帳後提交治理帳(推送閘只讀被推送版本的帳;記得提交帳)",
+-    "存活": "規格沒寫 → lumos situation-rule --point <檔>:<行> …;測試太弱 → 補測試後重跑 lumos choice-kill;換了一樣、不是需求、壞法不適用 → "
+-            "lumos lint-waive choice:<檔>:<行> --note \"<等價|不是需求|不適用>:<理由>\"",
++    "存活·第1層": "判讀:規格沒寫 → 問人;答案用 lumos situation-rule --point <檔>:<行> --plan <計劃> --clause \"<新條款文字>\" --test <測試名> 寫回",
++    "存活·第2層": "判讀:正文寫了、條款沒收 → 照計劃正文〈段〉那句補一條條款與邊界測試,不用問人:lumos situation-rule --point <檔>:<行> --plan <計劃> "
++                 "--clause \"<新條款文字>\" --test <測試名>",
++    "存活·第3層": "判讀:條款寫了、測試沒驗到 → 在條款 <計劃#SN> 補一支驗到這個邊界的測試,綁到那一條的 [test:],補完重跑 lumos choice-kill",
++    "存活·第4層": "判讀建議等價:人確認後 lumos lint-waive choice:<檔>:<行> --note \"等價:<理由>\"",
++    "存活·未判讀": "跑 lumos choice-layer --template,派全新代理判讀後 lumos choice-layer <結果> --list <編號> 記下、提交治理帳與 governance/choice-layers/(新增)",
+     "跑不出結果": "看 lumos choice-points 印的原因修好後重跑 lumos choice-kill;壞法本身不適用就 lumos lint-waive choice:<檔>:<行> --note \"不適用:<理由>\"",
+     "不唯一": "前後各 2 行都相同、帶不出唯一的一段:lumos lint-waive choice:<檔>:<行> --note \"不適用:<理由>\"",
+     "過期": "殺掉它的測試已沒有任何計劃的條款綁著:重新綁回條款,或重跑 lumos choice-kill 讓現在守的測試再殺一次",
+ }
+ 
+ 
+ class _ChoiceBad(str):
+     """推送前選擇點那一道擋下的一條原因(開頭 _CHOICE_PUSH_TAG);lines 是這條原因涵蓋的行數(_spec_gate_push_bad_head 的計數是行數)。"""
+     lines = 0
+ 
+@@ -81334,25 +82281,26 @@ def _choice_cap_pick(ever, cap):
+     import hashlib
+     import random
+     keys = sorted(ever)
+     if len(keys) <= cap:
+         return set(keys)
+     seed = int(hashlib.sha256("\n".join(f"{f}\t{fp}" for f, fp in keys).encode("utf-8")).hexdigest(), 16)
+     random.Random(seed).shuffle(keys)
+     return set(keys[:cap])
+ 
+ 
+-def _choice_push_judge(lines, idx, waived, bound, cap):
++def _choice_push_judge(lines, idx, waived, bound, cap, aux=None):
+     """每一行要處置的行(挑到壞法或不唯一)→ ({原因: [行…]}, 沒抽中的存活行, 曾經存活的行數)。放行過的不算;有效處置(killed 而殺掉它的測試仍被
+     條款綁著)不算;不唯一沒放行、同鍵最新一筆缺、過期、no_result → 擋;survived 只擋回報上限抽中的(_choice_cap_pick)。
+     ★放行過的行也進種子集合★(〈用詞〉回報上限:「曾經存活過的行」是帳上同鍵有任一筆 survived,已處置的仍算處置),只在「要不要擋」排除:
+-    放行一行不會讓抽中的那批重洗(代碼審 code-改動選擇點 r1 k1、b31、g2、c32);第三個值是真的曾經存活數(b32 原本印成抽中數)。"""
++    放行一行不會讓抽中的那批重洗(代碼審 code-改動選擇點 r1 k1、b31、g2、c32);第三個值是真的曾經存活數(b32 原本印成抽中數)。
++    aux(_choice_ledger_aux 加上每鍵的 seg):抽中的存活依判讀拆成子原因(_choice_push_sub);不給時全部是存活·未判讀。擋不擋、回報上限不看層。"""
+     by = {r: [] for r in _CHOICE_PUSH_REASONS}
+     survivors, ever = [], set()
+     for x in lines:
+         if x["status"] not in ("mutant", "not_unique"):
+             continue
+         key = (x["file"], x["fp"])
+         evs = idx.get(key) or []
+         if any(e.get("verdict") == "survived" for e in evs):
+             ever.add(key)
+         if key in waived:
+@@ -81363,31 +82311,40 @@ def _choice_push_judge(lines, idx, waived, bound, cap):
+         disp = _choice_disposition(evs, False, bound)
+         if disp == "killed":
+             continue
+         if disp == "survived":
+             survivors.append(x)
+             continue
+         by[{None: "缺紀錄", "stale": "過期", "no_result": "跑不出結果"}[disp]].append(x)
+     picked = _choice_cap_pick(ever, cap)
+     unpicked = []
+     for x in survivors:
+-        (by["存活"] if (x["file"], x["fp"]) in picked else unpicked).append(x)
++        (by[_choice_push_sub(aux, x)] if (x["file"], x["fp"]) in picked else unpicked).append(x)
+     return by, unpicked, len(ever)
+ 
+ 
+-def _choice_push_show(xs):
+-    """排版(〈用詞〉排版):按檔、外層宣告(_kt_sit_material 的那一行,找不到就只按檔)、行號排,最多 _CHOICE_PUSH_SHOW 行示例。"""
++def _choice_push_sub(aux, x):
++    """存活那一行歸哪個子原因(〈範圍〉11):aux 那一鍵的 seg(_choice_seg_fill 的結果,_choice_push_verdict 填)有判讀 → 存活·第N層(待複核的照它的層),
++    否則存活·未判讀。"""
++    st = (((aux or {}).get((x["file"], x["fp"])) or {}).get("seg") or (None,))[0]
++    return f"存活·第{st['layer']}層" if st is not None else "存活·未判讀"
++
++
++def _choice_push_show(xs, extra=None):
++    """排版(〈用詞〉排版):按檔、外層宣告(_kt_sit_material 的那一行,找不到就只按檔)、行號排,最多 _CHOICE_PUSH_SHOW 行示例。
++    extra(選用,x → 字串):接在示例行後面(存活子原因的業務問題、條款號、引句、理由;〈範圍〉11)。"""
+     out = []
+     for x in sorted(xs, key=lambda y: (y["file"], y["decl"] or "", y["line"]))[:_CHOICE_PUSH_SHOW]:
+         mut = x.get("mutant") or {}
+         decl = f" [{_kill_esc(x['decl'])[:60]}]" if x.get("decl") else ""
+-        out.append(f"        {_kill_esc(x['file'])}:{x['line']}  {mut.get('row', '')}{decl}")
++        tail = extra(x) if extra is not None else ""
++        out.append(f"        {_kill_esc(x['file'])}:{x['line']}  {mut.get('row', '')}{decl}" + (f"  {tail}" if tail else ""))
+     if len(xs) > _CHOICE_PUSH_SHOW:
+         out.append(f"        …另有 {len(xs) - _CHOICE_PUSH_SHOW} 行(全部:lumos choice-points)")
+     return out
+ 
+ 
+ def _choice_push_event(rr, at_sha, kind, reasons, note, site="push"):
+     """擋下(blocked,hard)或算不出來(unverified)記一筆 gate choice-kill;同一個 B 同一組 reason 已記過就不重記(讀工作目錄的版控帳)。
+     reasons:[(原因, 行數)…]。寫不進去只在 stderr 講一句,不改判定(_gate_event 的約定)。"""
+     import secrets
+     names = sorted(r for r, _n in reasons)
+@@ -81513,69 +82470,100 @@ def _choice_push_round(env, rr, git_range, push=None, site="push"):
+     if not guard["live"]:
+         _choice_push_event(rr, at_sha, "blocked", [("無規格", n_need)], f"選擇點推送前擋下:無規格({n_need} 行)", site=site)
+         return [_choice_bad(f"無規格 {n_need} 行:這次改動有選擇點,但範圍沒碰到任何進行中計劃——沒規格就判不了選擇點要哪條需求守;"
+                             "若計劃存在但沒連到被改檔的家,補 lands_in 或連結", n_need)]
+     if not guard["tests"]:
+         print(f"{P} 選擇點:這次的選擇點沒有測試守,只能人驗(碰到的計劃條款都是 [manual:]、[keeps],或綁的測試不在 kotlin-junit 平台)")
+         return []
+     got = _choice_push_read(rr, at_sha, n_need, site=site, pre=cache.get("ck_ledger"))
+     if isinstance(got, list):
+         return got
+-    idx, waived = got
+-    return _choice_push_verdict(rr, at_sha, rng, how, res, guard, idx, waived, site=site)
++    idx, waived, aux = got
++    return _choice_push_verdict(rr, at_sha, rng, how, res, guard, idx, waived, site=site, aux=aux)
+ 
+ 
+ def _choice_push_part_unverified(rr, at_sha, bad, site="push"):
+     """幾支檔算不出來:只提醒、記 unverified;其他檔照常判擋(代碼審 code-改動選擇點 r1 r1)。bad 是 [(檔, 原因)…],空的什麼都不做。"""
+     if bad:
+         _choice_push_unverified(rr, at_sha, "語法樹掃描算不出來的檔:" + "、".join(f"{f}({w})" for f, w in bad[:5])
+                                 + (f" 另 {len(bad) - 5} 支" if len(bad) > 5 else ""), part=True, site=site)
+ 
+ 
+ def _choice_push_read(rr, at_sha, n_need, site="push", pre=None):
+-    """B 版治理帳與放行檔 → (帳索引, 放行的 (檔, 行指紋)) 或擋下/提醒的結果清單:時限用完只提醒、記 unverified;帳不在、讀不出擋。
++    """B 版治理帳與放行檔 → (帳索引, 放行的 (檔, 行指紋), 附帶事件 _choice_ledger_aux) 或擋下/提醒的結果清單:時限用完只提醒、記 unverified;帳不在、讀不出擋。
+     pre:_choice_push_scan 為了跳過集合已讀過的 _choice_push_ledger 結果(給了就不再讀)。"""
+     evs, err = pre if pre is not None else _choice_push_ledger(rr, at_sha, site=site)
+     waived, werr = (None, None) if err else _choice_push_waivers(rr, at_sha)
+     err = err or werr
+     if err and err[0] == "unverified":
+         return _choice_push_unverified(rr, at_sha, err[1], site=site)
+     if err:
+         _choice_push_event(rr, at_sha, "blocked", [(err[1], n_need)], f"選擇點推送前擋下:{err[1]}", site=site)
+         return [_choice_bad(f"{err[1]}:被推版本 {at_sha[:12]} 的{'治理帳' if '帳' in err[1] else '放行檔'}"
+                             f"{'不存在' if err[1] == '帳不在' else '讀不出來'},判不了 {n_need} 行選擇點有沒有處置——修好再推(帳要提交)", n_need)]
+-    return _choice_ledger_index(evs), waived
++    return _choice_ledger_index(evs), waived, _choice_ledger_aux(evs)
++
++
++def _choice_push_segs(rr, at_sha, res, guard, aux, blobs):
++    """推送閘的判讀與覆蓋分類(〈範圍〉9、11):每個挑到壞法的行的 seg(_choice_seg_fill;判讀檔從 B 版的樹讀)填進 aux 那一鍵 → aux。"""
++    xs = [x for x in res["lines"] if x["status"] == "mutant" and (x.get("mutant") or {}).get("identity")]
++    sc = {"rr": rr, "at_sha": at_sha, "guard": guard, "aux": aux, "blobs": blobs}
++    ctx = _choice_layer_ctx_at(rr, at_sha, guard, blobs, time.monotonic() + _CHOICE_GOV_BUDGET)
++    for k, seg in _choice_seg_fill(sc, _choice_nsha(xs), ctx).items():
++        aux.setdefault(k, {"reach": None, "layer": None, "invalid": [], "audit": []})["seg"] = seg
++    return aux
++
+ 
++def _choice_push_extra(r, aux):
++    """子原因示例行後面那一段:第 1 層附業務問題、第 2 層附段與引句、第 3 層附條款號、第 4 層附理由、未判讀附經過的條款號;待複核的前面加標。"""
++    def fn(x):
++        st, reach, ok = (((aux or {}).get((x["file"], x["fp"])) or {}).get("seg") or (None, None, False))
++        if st is not None:
++            tail = _choice_layer_text(dict(st, pending=False)).split(":", 1)[-1]
++            return (_CHOICE_LAYER_PENDING if st["pending"] else "") + tail
++        return _choice_reach_text(reach) if ok and (reach or {}).get("reach") == "clause" else ""
++    return fn
+ 
+-def _choice_push_verdict(rr, at_sha, rng, how, res, guard, idx, waived, site="push"):
++
++def _choice_push_fix(r, xs, aux):
++    """子原因的處置句;待複核的判讀處置句後面加重跑提示(〈範圍〉11)。"""
++    fix = _CHOICE_PUSH_FIX[r]
++    if r in _CHOICE_PUSH_SURV and any(((((aux or {}).get((x["file"], x["fp"])) or {}).get("seg") or (None,))[0] or {}).get("pending") for x in xs):
++        fix += ";計劃改過,處置完這一批後重跑 choice-layer --template 複核"
++    return fix
++
++
++def _choice_push_verdict(rr, at_sha, rng, how, res, guard, idx, waived, site="push", aux=None):
+     """判定與回報(〈範圍〉4 判定、〈用詞〉回報上限與排版)→ 擋下原因清單;沒抽中的存活與 tests_sha 不同只提醒。"""
+     P = "[spec-gate 推送前]"
+     n_files = _choice_push_files(rr, rng)
+     cap = _CHOICE_CAP_PER_FILE * (n_files if n_files is not None else len({x["file"] for x in res["lines"]}))
+-    by, unpicked, n_ever = _choice_push_judge(res["lines"], idx, waived, guard["bound"], cap)
+     # 守的測試雜湊含測試檔內容(同 choice-kill 那邊);時限內沒查完就不比(比了會把每筆都誤報成「另一組測試」)
+     blobs, complete = _choice_test_blobs(rr, at_sha, guard["tests"], guard["pdata"]["platforms"], deadline=time.monotonic() + _CHOICE_GOV_BUDGET)
++    aux = _choice_push_segs(rr, at_sha, res, guard, dict(aux or {}), blobs)
++    by, unpicked, n_ever = _choice_push_judge(res["lines"], idx, waived, guard["bound"], cap, aux=aux)
+     stale_t = _choice_push_stale_tests(res["lines"], idx, waived, _choice_tests_sha(guard["tests"], blobs)) if complete else 0
+     if stale_t:
+         print(f"{P} 提醒:選擇點有 {stale_t} 行的紀錄是用另一組守的測試跑的(守的測試集合變了),結果照用;要確認就重跑 lumos choice-kill --only <檔>:<行>")
+     if unpicked:
+         print(f"{P} 選擇點:另有 {len(unpicked)} 行存活沒抽中——回報上限 {cap}(有增行的檔 {cap // _CHOICE_CAP_PER_FILE} × {_CHOICE_CAP_PER_FILE},論文 2.3),"
+               f"曾經存活 {n_ever} 行裡抽 {min(cap, n_ever)} 行要處置,這幾行沒抽中、這次不要求:")
+         for ln in _choice_push_show(unpicked):
+             print(ln)
+     bad, reasons = [], []
+     for r in _CHOICE_PUSH_REASONS:
+         xs = by[r]
+         if not xs:
+             continue
+         reasons.append((r, len(xs)))
+-        body = "\n".join([f"{r} {len(xs)} 行({how}):", *_choice_push_show(xs), f"        → {_CHOICE_PUSH_FIX[r]}"])
++        body = "\n".join([f"{r} {len(xs)} 行({how}):", *_choice_push_show(xs, _choice_push_extra(r, aux) if r in _CHOICE_PUSH_SURV else None),
++                          f"        → {_choice_push_fix(r, xs, aux)}"])
+         bad.append(_choice_bad(body, len(xs)))
+     if bad:
+         _choice_push_event(rr, at_sha, "blocked", reasons, "選擇點推送前擋下:" + "、".join(f"{r} {n} 行" for r, n in reasons), site=site)
+     return bad
+ 
+ 
+ def _choice_waive_target(repo_root, loc, note):
+     """lint-waive choice:<定位>(〈範圍〉3 放行)→ (放行檔的鍵, 規則, 檔, 標籤, 行指紋, 列號, 外層宣告) 或 rc(已印原因)。列號與外層宣告記進放行事件,
+     gov --stats 依 (列號, 外層宣告) 列乾節點候選(論文 3.1)。理由要寫成 <等價|不是需求|不適用>:<至少 10 實字>;
+     讀 HEAD 版、照 choice-points 同一套範圍算出那一行的 (檔, 行指紋);不是改到的行、沒有壞法也不是不唯一、乾節點、行號不合 → rc 2。"""
+@@ -81810,20 +82798,23 @@ def _situation_rule_point(env, point, plan, clause, test, consent, branch, diff)
+     if not _choice_record(ctx.rr, ctx.head, _choice_event_extra(ident, "killed", name, [f"{ctx.pn}#{cid}"], [ctx.pn], "", "",
+                                                                 _SITUATION_RULE_SOURCE, len(ctx.ck) + 1, "")):
+         print("✗ 人裁事件已記,choice-kill 那筆沒記到——重跑同一個指令會補記(冪等)", file=sys.stderr)
+         return 1
+     _situation_rule_point_next(ctx, cid, origin, bool(ctx.existing))
+     return 0
+ 
+ 
+ def _main_choice_cmds(env, args):
+     """main 的分派:人裁寫回規格(situation-rule,含選擇點的 --point)與改動選擇點的 choice-kill 放同一處(都要載圖譜)。"""
++    if args.cmd == "choice-layer":
++        return cmd_choice_layer(env, result=args.cl_result, template=args.cl_template, diff=args.cl_diff, branch=args.cl_branch, part=args.cl_part,
++                                list_id=args.cl_list, redo=args.cl_redo, withdraw=args.cl_withdraw, reason=args.cl_reason)
+     if args.cmd == "choice-kill":
+         return cmd_choice_kill(env, diff=args.ck_diff, branch=args.ck_branch, only=args.ck_only, max_mutants=args.ck_max_mutants,
+                                max_seconds=args.ck_max_seconds, no_merge=args.ck_no_merge, no_cov=args.ck_no_cov, reach_only=args.ck_reach_only,
+                                no_compile_check=args.ck_no_compile_check, cov_audit=args.ck_cov_audit)
+     return cmd_situation_rule(env, args.sr_seg, args.sr_row, args.sr_plan, args.sr_clause, args.sr_test, args.sr_file,
+                               args.sr_old, args.sr_new, consent=args.sr_consent, branch=args.sr_branch,
+                               imports=args.sr_imports, diff=args.sr_diff, point=args.sr_point)
+ 
+ 
+ def cmd_situation_rule(env, seg, row, plan, clause, test, file, old, new, consent=None, branch=None, imports=None, diff=None, point=None):
+@@ -83886,20 +84877,21 @@ HELP_WHEN = {
+     "audit": "某條合約被不知道脈絡的人審過了,留 [audit:] 戳記。",
+     "residual-ask": "合約審計第 3 問的反例要記殘留前,第二個獨立代理判它測不測得到——當場記下;同一個反例只准問一次是方便,把關在推送時的高風險代碼審。",
+     "residual": "反例確認測不到、殘留決策記好之後,在合約行尾加 [residual:<節點>#dN](--remove 拿掉、--reindex 重建索引);碰到它守的程式時 pitfalls 升 high。",
+     "trace": "某條合約 → 守衛測試 → 驗證紀錄的證據鏈,反向可查爆炸半徑。",
+     "kill-add": "宣告一個「故意弄壞」的配方,給 kill 驗測試守不守得住;加 --try 寫完當場只跑這一條。",
+     "kill-rm": "配方失配了(doctor P2 或 kill-add 提醒說原文找不到/不只一處)要改寫時,先用它移掉舊的那條,再照印出的範本 kill-add;不帶 --id 跑一次列出這篇每條的短身分。",
+     "kill": "在隔離副本套壞法,綁的測試必須翻紅;沒翻紅=那條測試是裝飾。--id <短身分> 只跑那一條。",
+     "spec-gate": "設計寫完先過這道:條款句式合不合一條文法、每條綁了 [test:]/[manual:] 沒、回退節夠不夠;綁的測試真跑一次:風險低時紅綠是放行條件(不符就擋)、風險高只印不擋,相依功能的合約測試紅一律擋;風險高、有新行為條款的計劃要寫「## 預期值表」(格式不合就擋)。",
+     "spec-trace": "計劃的驗收條款每條綁了測試沒(綁了/靠人/未標/懸空);舊制「驗證紀錄認領」欄照印當對照。",
+     "signoff": "業務方點頭了,留簽核痕跡(規則還符不符合業務,測試買不到,要人確認);--expected 簽計劃的預期值表(風險高計劃推送前要簽,綁整張表的指紋)。",
++    "choice-layer": "選擇點存活判讀(Projects/選擇點存活回指條款_計劃):--template 對帳上存活、還沒有有效判讀的行出判讀材料(條款、預期值表、分段正文、壞法前後、覆蓋分類,不含已記的層與處置),派全新代理只看材料判四層(規格沒寫/正文寫了條款沒收/條款寫了測試沒驗到/建議等價);<結果.json> --list <編號> 整份驗過(引句要逐字出自它標的條款或段)才存判讀檔到 governance/choice-layers/ 並記治理帳;--withdraw <檔>:<行> --reason 撤回。依據變了的判讀標待複核照樣顯示。不改擋不擋。",
+     "choice-kill": "選擇點有沒有需求守著:還沒處置的改到的行,把挑到的壞法批次跑碰到的進行中計劃綁的測試(殺掉、編不過、逾時就停),判殺掉、存活或跑不出結果並逐筆記治理帳;存活要人處置(situation-rule --point、補測試、lint-waive choice:)。平台設定 coverage: true 時先逐測試掛 JaCoCo 量基準,每個壞法只跑經過那一行的條款測試、沒有測試經過的行直接記存活並記覆蓋分類(--no-cov 關;--reach-only 只補存活行的覆蓋分類;--cov-audit N 每次抽 N 行沒有條款經過的行照跑全部守的測試,預設 2)。Android 平台(設定 compile_check,預設開)跑測試前先合批編譯這批壞法,編不過的換同一行下一個候選、候選用完的行印沒有可用壞法(不跑、不擋;--no-compile-check 關)。",
+     "choice-points": "看這次改動的選擇點:改到的每一行用語法樹(ast-grep)找出換一種寫法照樣編得過、行為卻不同的地方,每行最多挑一個壞法(照 Google 差異式變異測試論文 4.1),列出挑到什麼與帳上狀態;唯讀。",
+     "situation-rule": "情境題答適用卻引不到規格、人在對話裡裁定之後:當場證明「把這段換成同一列另一種寫法,綁的測試會紅」,再把條款寫回計劃〈驗收條款〉、記治理帳;沒有終端要帶 --consent 使用者原話。",
+     "sync-verified-by": "驗證紀錄建了但功能筆記沒反向登記,幫你補 verified_by(紀錄寫了 system_refs 就只看它列的)。預設 dry-run,--apply 才寫。",
+     "search": "進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。",
+     "decisions": "當初為什麼這樣決定、翻案了嗎。--superseded 全庫掃被推翻的。",
+     "rejections": "設計前先看以前否決過什麼:收齊圖譜裡的不選欄位、被翻案與寫著不做的決策、作廢的整篇,按概念比對你的提案。",
+     "stale": "我改了某個流程/環境,哪些驗證該重驗(--candidate --match <關鍵字>);或列已過期的驗證。",
+     "query": "按欄位條件篩筆記:金流且未收案、連到 X 且還開著。至少給一個條件。",
+     "recent": "最近 N 天動了哪些筆記。開工掌握現況用。",
+@@ -84693,20 +85685,31 @@ def main():
+                    help="不跑合併快篩,每支測試各叫一次(現在的逐支流程);全域關閉設 LUMOS_SKIP_CHOICE_MERGE=1")
+     p.add_argument("--no-cov", dest="ck_no_cov", action="store_true",
+                    help="這次不做逐測試覆蓋(平台設定 coverage: true 才會做;關掉時每個壞法跑全部守的測試,run 那筆記 cov off)")
+     p.add_argument("--reach-only", dest="ck_reach_only", action="store_true",
+                    help="只對帳上存活、還沒有有效覆蓋分類的行補覆蓋分類(量覆蓋基準與分析,不跑壞法、不寫判定);不能跟 --no-cov、--only、--max-mutants、--no-merge 同給")
+     p.add_argument("--no-compile-check", dest="ck_no_compile_check", action="store_true",
+                    help="這次不做合批編譯檢查(平台設定 compile_check,Android 平台預設開:跑測試前先編一次這批壞法,編不過的換同一行下一個候選;關掉時 run 那筆記 compile off)")
+     p.add_argument("--cov-audit", dest="ck_cov_audit", type=int, default=_CHOICE_COV_AUDIT, metavar="N",
+                    help="依覆蓋判沒有條款經過的行每次抽幾行照跑全部守的測試(預設 2,0 關;另抽 1 行經過條款的行照跑全部);抽到的被殺掉就印覆蓋判錯、其餘照跑")
+ 
++    p = sub.add_parser("choice-layer", help="選擇點存活判讀:出判讀材料(--template)、記判讀代理的結果(<結果.json> --list <編號>)、撤回(--withdraw)")
++    p.add_argument("cl_result", nargs="?", default=None, help="判讀代理的結果 JSON(配 --list)")
++    p.add_argument("--template", dest="cl_template", action="store_true", help="出判讀材料:帳上存活、判讀狀態不是有效的行;寫份清單、印第 1 份")
++    p.add_argument("--diff", dest="cl_diff", help="範圍 A..B(不給:跟推送前那一道同一套)")
++    p.add_argument("--branch", dest="cl_branch", help="用哪個分支的頂端算範圍(不給:目前分支)")
++    p.add_argument("--part", dest="cl_part", type=int, default=None, metavar="N", help="取第 N 份材料(配 --list;從清單取、不重算)")
++    p.add_argument("--list", dest="cl_list", default=None, metavar="編號", help="--template 印的清單編號")
++    p.add_argument("--redo", dest="cl_redo", action="append", default=None, metavar="檔:行", help="已有有效判讀的這一行照樣出材料(可給多次)")
++    p.add_argument("--withdraw", dest="cl_withdraw", default=None, metavar="檔:行", help="撤回這一行的判讀(配 --reason,至少 10 個實字)")
++    p.add_argument("--reason", dest="cl_reason", default=None, help="撤回的理由")
++
+     p = sub.add_parser("sync-verified-by", help="補 Check 3 漏寫的 verified_by(dry-run 預設)")
+     p.add_argument("--apply", action="store_true", help="真寫入(否則 dry-run 只列)")
+ 
+     p = sub.add_parser("search", help="全文搜尋(frontmatter+body);取代 obsidian search")
+     p.add_argument("term")
+     p.add_argument("--path", dest="path_prefix", help="限資料夾前綴(如 Systems)")
+     p.add_argument("--regex", action="store_true", help="term 當正則(預設 substring 大小寫不敏感)")
+     p.add_argument("--files-only", action="store_true", help="只列檔名+命中數")
+     p.add_argument("--code", action="store_true", help="含 code block(預設排除,對齊 doctor)")
+     p.add_argument("--ranked", action="store_true", help="BM25F 相關性排序(2026-07-11 起已是預設,旗標保留相容)")
+@@ -85803,21 +86806,21 @@ def main():
+         if not args.node:
+             print("擋下:要給計劃節點(lumos spec-gate Projects/<名>_計劃),或用 --push-check <範圍> / --door-rule", file=sys.stderr)
+             return 2
+         return cmd_spec_gate(env, args.node, no_run=args.sg_no_run)
+     if args.cmd == "spec-trace":
+         return cmd_spec_trace(env, args.node, as_json=args.st_json)
+     if args.cmd == "signoff":
+         return cmd_signoff(env, args.node, note=args.note, by=args.by, ref=args.so_ref, expected=args.expected)
+     if args.cmd == "choice-points":
+         return cmd_choice_points(env, diff=args.cp_diff, branch=args.cp_branch, repo=args.cp_repo)
+-    if args.cmd in ("situation-rule", "choice-kill"):
++    if args.cmd in ("situation-rule", "choice-kill", "choice-layer"):
+         return _main_choice_cmds(env, args)
+     if args.cmd == "gov":
+         return cmd_gov(env, args.node, since_days=args.since, full=args.full, stats=args.stats, nags=args.gov_nags)
+ 
+     if args.cmd == "ci-wait":
+         return cmd_ci_wait(env, timeout=args.cw_timeout, repo_dir=args.cw_repo,
+                            sha=args.cw_sha, branch=args.cw_branch,
+                            grace=args.cw_grace, as_json=args.cw_json)
+     if args.cmd == "ci-status":
+         return cmd_ci_status(env, repo_dir=args.cs_repo, as_json=args.cs_json)

@@ -78259,7 +78259,7 @@ def t_door_rule_version_pin():
     """[雙向門放行 S17] 門判定規則的輸入(四類關鍵字表、已排除行規則、合約行掃描)指紋釘死:改了任一支卻沒 bump 常數 → 這裡翻紅。
     ★改到規則要做的事★:把 _DOOR_RULE_VERSION +1,再把下面的指紋換成新的(lumos spec-gate --door-rule 印)。"""
     r = run(mkvault(), "spec-gate", "--door-rule")
-    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=16 " in r.stdout and "inputs_sha=1cef5d5b9e2a6f4b54f021c036b5290ad1ae0de00f4afaf0bb66f4cad667cf70" in r.stdout, r.stdout)
+    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=17 " in r.stdout and "inputs_sha=1805be96988154cad614217a3057629d45171e62c3d983f83c52287d94061c89" in r.stdout, r.stdout)
 
 
 # ── 前端知識與風險詞 做法 9(d1):「送出」的前端語境與 PAYMENT 調整參數識別字例外 ──
@@ -79387,7 +79387,7 @@ def t_spec_gate_nogo_tab_fullwidth_continuation():
         check(f"③ {k} → 停下照掃、風險高", "[spec-gate] 計劃風險: 高" in out and "扣款" in out, (k, out[-400:]))
 
 
-_NOGO_SKIP_LOGIC_PIN = (8, "fd0dbb2b618a652b7a927bb2eb6f0d3466d448676f030204ab0e534232152ed5")
+_NOGO_SKIP_LOGIC_PIN = (9, "d58be0c13fe5c04892fac63561887aefe058e02cb5d5a6d662d8688d93eefac7")
 _NOGO_SKIP_LOGIC_FUNCS = ("_nogo_skip_lines", "_nogo_line_says_nogo", "_ns_indent", "_h2_section_lines", "_visible_lines", "_fence_regions", "_strip_inline_markup", "_inline_hidden", "_note_lines")
 _NOGO_SKIP_LOGIC_PATS = ("_NOGO_H2_RE", "_NOGO_ITEM_RE", "_NOGO_NEG_PREFIX_RE", "_NOGO_NEG_HEADER_RE", "_NOGO_CLAUSE_SPLIT_RE", "_NOGO_REF_TOKEN_RE")
 
@@ -144760,6 +144760,8 @@ def _ckp_repo_src(src, hits, n_extra_files=None, **kw):
 def _ckp_block_lines(out, reason):
     """推送輸出裡某種原因那一條的「N 行」數(沒有那條回 0)。"""
     import re as _re
+    if reason == "存活":   # 第三段起「存活」拆成子原因(存活·第N層、存活·未判讀),行數加總等於原本的存活行數
+        return sum(int(x) for x in _re.findall(r"\[選擇點\] 存活·\S+ (\d+) 行", out))
     m = _re.search(r"\[選擇點\] " + reason + r" (\d+) 行", out)
     return int(m.group(1)) if m else 0
 
@@ -144909,8 +144911,8 @@ def t_codeloop_pass_choice_survived():
         _ckp_commit(r2)
         r = _cpc_pass(r2, f2)
         out = r.stdout + r.stderr
-        check("S3 存活沒處置 → rc 2、印 situation-rule --point、lint-waive choice:、補測試", r.returncode == 2 and "situation-rule --point" in out
-              and "lint-waive choice:" in out and "補測試" in out, f"rc={r.returncode}\n{out[-1200:]}")
+        check("S3 存活沒處置 → rc 2、印處置(第三段起存活拆子原因:沒判讀的歸存活·未判讀,處置句指路 choice-layer --template)", r.returncode == 2
+              and "存活·未判讀" in out and "choice-layer --template" in out, f"rc={r.returncode}\n{out[-1200:]}")
         ev = [x for x in _ck_gov(r2, kind="choice-kill") if x.get("verdict") == "survived"]
         wp = Path(r2) / ".lumos" / "lint-waivers.json"
         wp.parent.mkdir(parents=True, exist_ok=True)
@@ -145331,7 +145333,7 @@ def t_choice_push_cap_waive_stable():
         for k in killed:
             ix[k] = [{"verdict": "survived"}, {"verdict": "killed", "killing_test": "kotlin-junit:alphaCase"}]
         by, unpicked, n_ever = m._choice_push_judge(lines, ix, set(waived), {"kotlin-junit:alphaCase"}, 14)
-        return {(x["file"], x["fp"]) for x in by["存活"]}, {(x["file"], x["fp"]) for x in unpicked}, n_ever
+        return {(x["file"], x["fp"]) for r in m._CHOICE_PUSH_SURV for x in by[r]}, {(x["file"], x["fp"]) for x in unpicked}, n_ever
     b0, u0, n0 = judge(())
     check("G1 前置:20 行存活、上限 14 → 抽 14 擋、6 行沒抽中", len(b0) == 14 and len(u0) == 6, f"{len(b0)} {len(u0)}")
     check("G1 b32 第三個值是真的曾經存活數 20(不是抽中數 14)", n0 == 20, str(n0))
@@ -146287,8 +146289,9 @@ def note(tag):
 
 
 # 編譯任務(選擇點存活回指第二段:合批編譯檢查 :app:compileDebugUnitTestKotlin):讀樹上套了哪些壞法,照 CK_COMPILE 指的 JSON(沒有就 beh.json 的 __compile__)
-# 印 Kotlin 形狀的編譯錯誤 `e: file:///<絕對路徑>:<行>:<欄> <訊息>`:bad 列的字樣出現在哪一行就報那一行;base_red 原樹本身紅;stray 有壞法時報第 1 行(沒有壞法的行);
-# batch_only 同時套了兩個以上壞法才報 batch_only 列的壞法編號那一行(單獨編是綠的);trunc 先印 300KB 雜訊(輸出被截斷);mark 有壞法時寫標記檔後睡著等訊號;
+# 印 Kotlin 形狀的編譯錯誤 `e: file:///<絕對路徑>:<行>:<欄> <訊息>`:bad 列的字樣出現在哪一行就報那一行;base_red 原樹本身紅;stray 有壞法時報沒有壞法的 Other.kt 第 1 行;
+# batch_only 同時套了兩個以上壞法才報 batch_only 列的壞法編號那一行(單獨編是綠的);trunc 錯誤前後各印 300KB 雜訊、錯誤後再印 2100 行對不回的 e: 行
+# (輸出被截斷而且中段的 e: 行多過留存上限);mark 有壞法時寫標記檔後睡著等訊號;
 # sleep 每次編譯睡幾秒(編譯預算那案)。記一筆 compile 紀錄:第四欄是這次樹上 k<i> 的運算子(i:op 逗號串,沒有壞法是空的)。
 if any(re.fullmatch(r":?(?:[\w.-]+:)*compile[A-Z]\w*UnitTestKotlin", a) for a in args):
     cc = beh.get("__compile__") or {}
@@ -146311,8 +146314,8 @@ if any(re.fullmatch(r":?(?:[\w.-]+:)*compile[A-Z]\w*UnitTestKotlin", a) for a in
         for pat in cc.get("bad", []):
             if pat in line:
                 errs.append(f"e: file://{vm}:{no}:{line.index(pat) + 1} Unresolved reference: {pat}")
-    if cc.get("stray") and muts:
-        errs.append(f"e: file://{vm}:1:1 Unresolved reference: 跟壞法無關")
+    if cc.get("stray") and muts:   # 錯誤落在沒有壞法的檔(第三段:同一支檔的錯誤一律當嫌疑)
+        errs.append(f"e: file://{os.path.join(top, 'app/src/main/java/x/Other.kt')}:1:1 Unresolved reference: 跟壞法無關")
     if len(muts) >= 2:
         for k in cc.get("batch_only", []):
             no = next((j for j, ln in enumerate(lines, 1) if re.search(r"a%d (?:!==|==|!=) b%d" % (k, k), ln)), None)
@@ -146323,6 +146326,9 @@ if any(re.fullmatch(r":?(?:[\w.-]+:)*compile[A-Z]\w*UnitTestKotlin", a) for a in
         print(("w: 雜訊 " + "x" * 200 + "\n") * 1500, end="")
     for e in errs:
         print(e)
+    if cc.get("trunc") and errs:   # 第三段(議題第 13 條):截斷時中段的 e: 行另外留下;這一案讓中段的 e: 行多過留存上限(真的有錯誤看不到)
+        print("e: file:///elsewhere/Noise.kt:1:1 雜訊\n" * 2100, end="")
+        print(("w: 雜訊 " + "x" * 200 + "\n") * 1500, end="")
     sys.exit(1 if errs else 0)
 
 
@@ -150837,7 +150843,8 @@ def t_choice_compile_probe():
 
 
 def t_choice_compile_env_failopen():
-    """[選擇點存活回指 S22] 沒套壞法的原樹本身編不過、或編譯輸出被截斷、或錯誤對不回任何壞法、或嫌疑壞法單獨編是綠的 → 合批編譯檢查一筆 invalid 都不記、
+    """[選擇點存活回指 S22] 沒套壞法的原樹本身編不過、或編譯輸出被截斷而且中段的 e: 行沒留全(第三段議題第 13 條:留全了照判,見
+    t_choice_compile_truncated_keeps_errors)、或錯誤對不回任何壞法、或嫌疑壞法單獨編是綠的 → 合批編譯檢查一筆 invalid 都不記、
     run 事件 compile 為 env(原樹紅)、那些壞法照現在交給測試階段;推送閘對那些行的判定跟沒有合批編譯檢查時(--no-compile-check)相同。判準來源:計劃預期值表 S22 兩列、
     〈用詞〉合批編譯檢查(對不回、截斷不記)。翻紅釘:原樹紅不跳過 → 記 invalid 或 compile 不是 env 而紅;截斷照讀 → 記 invalid 而紅;不單獨確認 → 單獨綠那案記 invalid 而紅。"""
     import json as _j
@@ -150867,8 +150874,8 @@ def t_choice_compile_env_failopen():
             check(f"S22 {name}:壞法照現在交給測試階段(有壞法階段的呼叫、每行都有判定)", bool(_ckm_phase(_ckm_calls(log)))
                   and len(evs) == (2 if name == "單獨綠" else 1) and all(e.get("verdict") == "survived" for e in evs), f"{evs}\n{_ckm_calls(log)}")
         comp = _ckcc_compiles(got["單獨綠"][4])
-        check("S22 單獨綠:合批紅之後只單獨編了嫌疑的壞法 1(單獨那次樹上只有 1)", ("1", "1:!==") in comp and ("1", "1:!==,2:!==") in comp
-              and comp.count(("1", "1:!==")) == 1 and all(c != ("2", "2:!==") for c in comp), str(comp))
+        check("S22 單獨綠:合批紅之後同一支檔的兩個壞法都當嫌疑、各單獨編一次(第三段 C:錯誤所在檔有壞法就都算嫌疑),都綠所以都不記",
+              ("1", "1:!==,2:!==") in comp and comp.count(("1", "1:!==")) == 1 and comp.count(("2", "2:!==")) == 1, str(comp))
         check("S22 原樹紅:只編了原樹那一次(沒有套壞法的編譯)", _ckcc_compiles(got["原樹紅"][4]) == [("base", "")], str(_ckcc_compiles(got["原樹紅"][4])))
         check("S22 ★對照★ --no-compile-check:run compile off、沒有編譯呼叫", got["對照"][2].get("compile") == "off" and not _ckcc_compiles(got["對照"][4]),
               str(got["對照"][2]))
@@ -150939,8 +150946,8 @@ def t_choice_compile_restore():
         log, kept = tmp / "b.log", []
         o_keep, o_run = _ckcc_keep(m, kept), m._kill_run
 
-        def run_sig(cmd, cwd, timeout, keep_re=None, started=None, merge=None):
-            got = o_run(cmd, cwd, timeout, keep_re=keep_re, started=started, merge=merge)
+        def run_sig(cmd, cwd, timeout, keep_re=None, started=None, merge=None, **kw):
+            got = o_run(cmd, cwd, timeout, keep_re=keep_re, started=started, merge=merge, **kw)
             vm = Path(cwd) / _CHOICE_MAIN
             if "compileDebugUnitTestKotlin" in cmd and merge is not None and vm.is_file() and "!==" in vm.read_text(encoding="utf-8"):
                 merge.interrupted = True
@@ -151181,7 +151188,7 @@ def t_choice_exhausted_status_readers():
             setattr(m, k, v)
 
 
-def _ckcc_unit(m, tmp, files, plist, probes=None, cmd_bad="BAD"):
+def _ckcc_unit(m, tmp, files, plist, probes=None, cmd_bad="BAD", shift=0):
     """_KillCompile 的單元現場:tmp 是假工作樹(檔照 files 寫、git 不用),編譯指令是一支小腳本:每支 .kt 有含 cmd_bad 的行就印 Kotlin 形狀的錯誤、rc 1,
     每次呼叫記一行到 calls.log(那時每支檔的內容)→ (_KillCompile, 記下的 on_invalid 呼叫, calls.log 路徑)。"""
     import json as _j
@@ -151193,10 +151200,10 @@ def _ckcc_unit(m, tmp, files, plist, probes=None, cmd_bad="BAD"):
         (wt / rel).write_text(text, encoding="utf-8")
     log = Path(tmp) / "calls.log"
     chk = Path(tmp) / "chk.py"
-    chk.write_text("import os, sys, json\nroot = sys.argv[1]\nbad = sys.argv[2]\nerr = []\nsnap = {}\n"
+    chk.write_text(f"import os, sys, json\nSHIFT = {int(shift)}\nroot = sys.argv[1]\nbad = sys.argv[2]\nerr = []\nsnap = {{}}\n"
                    "for d, _s, fs in os.walk(root):\n    for f in fs:\n        if f.endswith('.kt'):\n            p = os.path.join(d, f)\n"
                    "            t = open(p, encoding='utf-8').read()\n            snap[os.path.relpath(p, root)] = t\n"
-                   "            for no, ln in enumerate(t.split('\\n'), 1):\n                if bad in ln:\n                    err.append(f'e: file://{p}:{no}:1 boom')\n"
+                   "            for no, ln in enumerate(t.split('\\n'), 1):\n                if bad in ln:\n                    err.append(f'e: file://{p}:{no + SHIFT}:1 boom')\n"
                    f"open({str(log)!r}, 'a').write(json.dumps(snap) + '\\n')\nprint('\\n'.join(err))\nsys.exit(1 if err else 0)\n", encoding="utf-8")
     calls = []
     prep = m._KillPrep(_ckm_time.monotonic() + 600, set(), {}, None, compile={"p"}, cbudget=300.0,
@@ -151204,14 +151211,10 @@ def _ckcc_unit(m, tmp, files, plist, probes=None, cmd_bad="BAD"):
     c = types.SimpleNamespace(plat="p", plist=list(plist), wt=str(wt), wt_real=_os_mod.path.realpath(str(wt)), run_dir=str(wt), floor=20.0,
                               mstate={"w": 0, "r": 0, "unsure": set()}, run_cmd="x", results=[])
     kc = m._KillCompile(prep, c)
-    kc.cmd = f"{_sh_quote_t(sys.executable)} {_sh_quote_t(str(chk))} {_sh_quote_t(c.wt_real)} {cmd_bad}"
+    import shlex as _shlex
+    kc.cmd = f"{_shlex.quote(sys.executable)} {_shlex.quote(str(chk))} {_shlex.quote(c.wt_real)} {cmd_bad}"
     kc.t0 = _ckm_time.monotonic()
     return kc, calls, log
-
-
-def _sh_quote_t(x):
-    import shlex
-    return shlex.quote(x)
 
 
 def t_choice_compile_probe_split():
@@ -151341,6 +151344,1032 @@ def t_choice_cov_audit_noresult():
         check("r1 E 抽查跑不出結果 → 不記 none 的 cov-audit(沒有 killed、wrong)", not aud, f"{aud}\n{r.stdout[-400:]}")
         check("r1 E 其餘 none 行改照跑:沒有任何 via cov 事件、三行 none 都記跑不出結果", not [e for e in evs if e.get("via") == "cov"]
               and sorted(e.get("verdict") for e in evs if e.get("fp") != _ck_fp(4, 4)) == ["no_result"] * 3, f"{evs}\n{r.stdout[-400:]}{r.stderr[-300:]}")
+    finally:
+        _ck_cleanup(*roots)
+
+
+# ── 選擇點存活回指第三段開工:議題第 13、14 條(Issues/選擇點存活回指第一段末輪小問題第二段先修)──
+
+def t_choice_compile_swap_keeps_other_plat():
+    """[議題第 13 條,第二段代碼審 r1 正確性 #4] 多平台同一行:平台 A 組已跑出列、平台 B 組合批編譯換候選 → 只清 B 這組的列,A 的列留著,
+    那一行湊得齊列、判得出來(不落成缺結果)。判準來源:議題第 13 條「換候選只清這個平台組的列」。翻紅釘:照舊整個 rows 清空 → A 的列不見而紅。"""
+    import io
+    import types
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    try:
+        subprocess.run(["git", "init", "-q", str(tmp)], check=True)
+        subprocess.run(["git", "-C", str(tmp), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "a"], check=True)
+        loc = f"{_CHOICE_MAIN}:5"
+        ident = {"file": _CHOICE_MAIN, "fp": "f" * 16, "row": "C-7", "old": "o", "new": "n", "new_sha": "a" * 16}
+        ident2 = dict(ident, new="n2", new_sha="b" * 16)
+        names = (("app", "aCase"), ("lib", "kCase"))
+        tests = [{"plat": q, "name": n, "ref": f"{q}:{n}", "clauses": [f"Projects/選擇_計劃#S{i}"], "plans": ["Projects/選擇_計劃.md"],
+                  "keys": [("Projects/選擇_計劃.md", i)]} for i, (q, n) in enumerate(names, 1)]
+        guard = {"tests": tests, "live": ["Projects/選擇_計劃.md"], "pdata": {"platforms": {"app": {"root": str(tmp)}, "lib": {"root": str(tmp)}}}}
+        kr = m._ChoiceKillRun(types.SimpleNamespace(find=lambda _n: "Projects/選擇_計劃.md"), tmp, "d" * 40, guard, {}, "s" * 16, 60)
+        kr.out, kr.rel = io.StringIO(), "Projects/選擇_計劃.md"
+        x = {"file": _CHOICE_MAIN, "line": 5, "fp": "f" * 16, "mutant": {"row": "C-7", "identity": ident},
+             "more": lambda skip=(): {"row": "C-7", "identity": ident2} if "b" * 16 not in skip else None}
+        kr.plan_of[loc] = {"x": x, "order": list(names), "tests": {(t["plat"], t["name"]): t for t in tests}, "rows": {}, "done": False,
+                           "plats": {"app", "lib"}, "cov": {}, "full_n": 2}
+        kr.plan_of[loc]["rows"][("app", "aCase")] = {"verdict": "survived", "weak": False, "compile_error": False}
+        new = kr.on_swap("lib", loc, {"a" * 16})
+        rows = kr.plan_of[loc]["rows"]
+        check("議題 13 B 組換候選:A 組已跑的列留著、B 拿到新候選的配方", ("app", "aCase") in rows and [r["test"] for r in new] == ["kCase"]
+              and kr.plan_of[loc]["x"]["mutant"]["identity"]["new_sha"] == "b" * 16, f"{rows} {new}")
+        kr.plan_of[loc]["rows"][("lib", "kCase")] = {"verdict": "survived", "weak": False, "compile_error": False}
+        check("議題 13 ★對照★ B 交了列 → 兩支都有列,湊得齊", len(kr.plan_of[loc]["rows"]) == len(kr.plan_of[loc]["order"]), str(kr.plan_of[loc]["rows"]))
+    finally:
+        _ck_cleanup(tmp)
+
+
+def t_choice_compile_truncated_keeps_errors():
+    """[議題第 13 條,第二段代碼審 r1 資源 #2] 編譯輸出超過 256KB 被截斷時,中段的 `e:` 行另外留下,錯誤仍對得回壞法、照判嫌疑;留下的 `e:` 行超過上限
+    (真的有錯誤看不到)才整批不判。`_CHOICE_COMPILE_UNVERIFIED` 是 object() 哨兵(第 14 條;不是 tuple,不會被當成 (rc, 輸出, 逾時) 拆開)。
+    判準來源:議題第 13 條「截斷時只留 e: 行」。翻紅釘:_choice_compile_errors 一看到截斷就回 None → 第一條紅;不看「留下的行被砍」→ 第二條紅。"""
+    m = _load_lumos_inproc()
+    wt = _os_mod.path.realpath(tempfile.gettempdir())
+    err = f"e: file://{wt}/app/src/main/java/x/Vm.kt:12:5 Unresolved reference: foo\n"
+    big = "x" * 100 + "\n"
+    out = big * 2000 + err + big * 2000
+    capped = m._kill_cap(out, m._CHOICE_COMPILE_KEEP_RE, m._CHOICE_COMPILE_KEEP_MAX)
+    got = m._choice_compile_errors(capped, wt, kept=True)
+    check("議題 13 截斷但中段的 e: 行留下 → 照樣對得回(檔、行)", "...[truncated " in capped and got == ({("app/src/main/java/x/Vm.kt", 12)}, 0), str(got))
+    many = big * 2000 + err * (m._CHOICE_COMPILE_KEEP_MAX + 5) + big * 2000
+    got2 = m._choice_compile_errors(m._kill_cap(many, m._CHOICE_COMPILE_KEEP_RE, m._CHOICE_COMPILE_KEEP_MAX), wt, kept=True)
+    check("議題 13 中段的 e: 行超過留存上限 → None(真的有錯誤看不到,一個都不記)", got2 is None, str(got2)[:200])
+    check("議題 13 ★對照★ 沒帶留存樣式截的輸出 → None(照舊)", m._choice_compile_errors(m._kill_cap(out), wt) is None, "")
+    check("議題 14 這次沒驗的哨兵是 object(),不是 tuple", type(m._CHOICE_COMPILE_UNVERIFIED) is object, repr(m._CHOICE_COMPILE_UNVERIFIED))
+
+
+def t_kill_revert_shared():
+    """[議題第 13 條,第二段代碼審 r1 架構對齊 #4] 還原一支檔的「等新一秒、git checkout、讀回修改時間」只有一份(_kill_revert):合併快篩的
+    _kill_merge_restore、合批編譯的 _KillCompile.restore、逐支流程三處都走它。判準:把 _kill_revert 換成會記錄的替身 → 三處各記到一次。
+    翻紅釘:任一處改回自己寫 checkout → 那一處沒記到而紅。"""
+    import types
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    seen = []
+    orig = m._kill_revert
+
+    def spy(wt, wt_real, target, mstate, wait=True):
+        seen.append(Path(target).name)
+        return orig(wt, wt_real, target, mstate, wait=wait)
+    try:
+        subprocess.run(["git", "init", "-q", str(tmp)], check=True)
+        (tmp / "A.kt").write_text("val a = 1\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(tmp), "add", "A.kt"], check=True)
+        subprocess.run(["git", "-C", str(tmp), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "a"], check=True)
+        m._kill_revert = spy
+        c = types.SimpleNamespace(wt=str(tmp), wt_real=_os_mod.path.realpath(str(tmp)), mstate={"w": 0, "r": 0, "unsure": set()}, results=[], plat="p")
+        (tmp / "A.kt").write_text("val a = 2\n", encoding="utf-8")
+        m._kill_merge_restore(c, _os_mod.path.realpath(str(tmp / "A.kt")), {})
+        merge_ok = seen == ["A.kt"] and (tmp / "A.kt").read_text(encoding="utf-8") == "val a = 1\n"
+        seen.clear()
+        prep = m._KillPrep(_ckm_time.monotonic() + 600, set(), {}, None)
+        kc = m._KillCompile(prep, types.SimpleNamespace(**vars(c), run_cmd="x", floor=20.0, run_dir=str(tmp), plist=[]))
+        t = _os_mod.path.realpath(str(tmp / "A.kt"))
+        (tmp / "A.kt").write_text("val a = 3\n", encoding="utf-8")
+        kc.restore([t], {t: "val a = 1\n"})
+        comp_ok = seen == ["A.kt"] and (tmp / "A.kt").read_text(encoding="utf-8") == "val a = 1\n"
+        check("議題 13 合併快篩與合批編譯的還原都走 _kill_revert", merge_ok and comp_ok, f"{merge_ok} {comp_ok} {seen}")
+    finally:
+        m._kill_revert = orig
+        _ck_cleanup(tmp)
+    seen.clear()
+    root, fake = _ckm_repo(1, {})
+    try:
+        m2 = _load_lumos_inproc()
+        o2 = m2._kill_revert
+
+        def spy2(wt, wt_real, target, mstate, wait=True):
+            seen.append(Path(target).name)
+            return o2(wt, wt_real, target, mstate, wait=wait)
+        m2._kill_revert = spy2
+        try:
+            _rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃",
+                                                                               recipes_override=_ckm_recipes([1], tests=("alphaCase",)), source="choice-kill"))
+        finally:
+            m2._kill_revert = o2
+        check("議題 13 逐支流程的還原也走 _kill_revert", seen == [Path(_CHOICE_MAIN).name], f"{seen} {err[-300:]}")
+    finally:
+        _ck_cleanup(root, fake)
+
+
+def t_choice_compile_probe_rotate():
+    """[議題第 14 條,第二段代碼審 r2 資源 #1] 探針整批紅改逐個單獨編時,順序依這次的 seed 輪替(不固定由同一個永久紅的候選先吃預算),
+    而且一次最多單獨編 _CHOICE_PROBE_SOLO_MAX 個(其餘留到下一次)。判準來源:議題第 14 條「輪替或限次」。
+    翻紅釘:不限次 → 5 個探針單獨編 5 次而紅;不輪替(照 group 字面順序)→ 兩個 seed 第一個單獨編的都是 A 而紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    try:
+        gs = ["A", "B", "C", "D", "E"]
+        files = {f"{g}.kt": f"val {g.lower()} = 1\n" for g in gs}
+        plist = [{"group": f"{g}:1", "file": f"{g}.kt", "old": f"val {g.lower()} = 1", "new": f"val {g.lower()} = 2", "test": "t"} for g in gs]
+        probes = {f"{g}:1": [{"old": f"val {g.lower()} = 1", "new": f"val {g.lower()} = BAD", "new_sha": f"p{g}", "row": "C-7"}] for g in gs}
+        firsts = []
+        for k, seed in enumerate(("seed-one", "seed-two", "seed-three", "seed-four")):
+            kc, calls, log = _ckcc_unit(m, tmp / str(k), files, plist, probes)
+            kc.prep.seed = seed
+            kc.probe()
+            snaps = [_json_mod_t().loads(ln) for ln in log.read_text(encoding="utf-8").splitlines()]
+            solo = snaps[1:]
+            firsts.append(next((f for f, t in solo[0].items() if "BAD" in t), None) if solo else None)
+            if k == 0:
+                check("議題 14 五個永久紅的探針:整批 1 次 + 單獨最多 _CHOICE_PROBE_SOLO_MAX 次", len(snaps) == 1 + m._CHOICE_PROBE_SOLO_MAX and calls == [],
+                      f"{len(snaps)} {calls}")
+        check("議題 14 單獨編的順序依 seed 輪替(四個 seed 第一個不全一樣)", len(set(firsts)) > 1, str(firsts))
+    finally:
+        _ck_cleanup(tmp)
+
+
+def _json_mod_t():
+    import json
+    return json
+
+
+def t_choice_cov_head_cut():
+    """[議題第 14 條,第二段代碼審 r2 邊界 #2、資源 #2] 檔頭(_CHOICE_COV_SRC_HEAD)剛好切在 package 宣告中間時,掃主程式與壞法行兩邊都不讀半截的套件
+    (截斷時切到最後一個換行);兩邊結果一致。判準來源:議題第 14 條。翻紅釘:不切到換行 → 讀到半截套件 com/exa 而紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    try:
+        pad = "// " + "x" * (m._CHOICE_COV_SRC_HEAD - 3 - len("\npackage com.exa")) + "\n"
+        src = pad + "package com.example.app\n\nclass Vm {\n    fun load() {\n        val k1 = a1 === b1\n    }\n}\n"
+        assert src.encode("utf-8")[:m._CHOICE_COV_SRC_HEAD].decode("utf-8").endswith("package com.exa")
+        (tmp / "src" / "main").mkdir(parents=True)
+        (tmp / "src" / "main" / "Vm.kt").write_text(src, encoding="utf-8")
+        (tmp / "Vm.kt").write_text(src, encoding="utf-8")
+        ln = src.split("\n").index("        val k1 = a1 === b1") + 1
+        x = {"file": "Vm.kt", "line": ln, "decl": "fun load() {", "mutant": {"identity": {"old": "        val k1 = a1 === b1", "new": "        val k1 = a1 !== b1"}}}
+        req = m._choice_cov_req(tmp, x, 0)
+        scan = m._choice_cov_src_pkgs(tmp)
+        check("議題 14 檔頭切在 package 中間 → 兩邊都不讀半截(一致)", req["pkg"] == "" and scan == {""}, f"{req['pkg']!r} {scan}")
+        short = "package com.example.app\n\nclass Vm\n"
+        (tmp / "src" / "main" / "Vm.kt").write_text(short, encoding="utf-8")
+        (tmp / "Vm.kt").write_text(short, encoding="utf-8")
+        check("議題 14 ★對照★ 短檔照讀", m._choice_cov_src_pkgs(tmp) == {"com/example/app"}, str(m._choice_cov_src_pkgs(tmp)))
+    finally:
+        _ck_cleanup(tmp)
+
+
+def t_choice_cov_pkg_java():
+    """[議題第 14 條,第二段代碼審 r2 通才 #1] .java 的區塊註解不巢狀:檔頭註解裡有落單的 /* 時,Java 在第一個 */ 就收尾、後面的 package 照讀;
+    .kt 照 Kotlin 巢狀剝法。掃主程式與壞法行兩邊都依副檔名選剝法。判準來源:Java 語言規格 3.7(區塊註解不巢狀)。
+    翻紅釘:.java 也用 Kotlin 剝法 → package 被當成註解、讀成 "" 而紅。"""
+    m = _load_lumos_inproc()
+    head = "/* 授權 /* 見 LICENSE */\npackage com.example.app;\n\nclass Vm {}\n"
+    check("議題 14 .java 區塊註解不巢狀 → 讀得到 package", m._choice_cov_pkg_of(head, kotlin=False) == "com/example/app", repr(m._choice_cov_pkg_of(head, kotlin=False)))
+    check("議題 14 ★對照★ .kt 照 Kotlin 巢狀剝法(同一段讀不到)", m._choice_cov_pkg_of(head) == "", repr(m._choice_cov_pkg_of(head)))
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    try:
+        (tmp / "src" / "main").mkdir(parents=True)
+        (tmp / "src" / "main" / "Vm.java").write_text(head, encoding="utf-8")
+        (tmp / "Vm.java").write_text(head + "class W { void f() { int k1 = 1; } }\n", encoding="utf-8")
+        x = {"file": "Vm.java", "line": 5, "decl": None, "mutant": {"identity": {"old": "int k1 = 1", "new": "int k1 = 2"}}}
+        check("議題 14 掃主程式與壞法行兩邊的 .java 都照 Java 剝法", m._choice_cov_src_pkgs(tmp) == {"com/example/app"} and m._choice_cov_req(tmp, x, 0)["pkg"] == "com/example/app",
+              f"{m._choice_cov_src_pkgs(tmp)} {m._choice_cov_req(tmp, x, 0)['pkg']}")
+    finally:
+        _ck_cleanup(tmp)
+
+
+def t_kill_target_git_shared():
+    """[議題第 14 條,第二段代碼審 r2 架構對齊 #1] 擋 .git 是共用判法(_kill_target):合批編譯、合併快篩、逐支流程三處寫檔路徑都不寫進工作樹的 .git
+    (含 .GIT 大小寫變體);逃逸工作樹照擋。判準來源:議題第 14 條。翻紅釘:合併快篩或逐支流程拿掉 .git 那道 → 那一案寫進 .git 而紅。"""
+    import types
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    try:
+        wt = tmp / "wt"
+        (wt / ".git").mkdir(parents=True)
+        (wt / ".git" / "x.kt").write_text("val g = 1\n", encoding="utf-8")
+        (wt / "A.kt").write_text("val a = 1\n", encoding="utf-8")
+        real = _os_mod.path.realpath(str(wt))
+        check("議題 14 _kill_target:.git 底下、.GIT 變體、逃逸都擋;一般的照收",
+              m._kill_target(str(wt), real, ".git/x.kt")[0] is None and m._kill_target(str(wt), real, "sub/.GIT/y.kt")[0] is None
+              and m._kill_target(str(wt), real, "../out.kt")[0] is None and m._kill_target(str(wt), real, "A.kt")[0] == _os_mod.path.join(real, "A.kt"), "")
+        c = types.SimpleNamespace(wt=str(wt), wt_real=real, mstate={"w": 0, "r": 0, "unsure": set()}, results=[], plat="p", override=True,
+                                  baselines={}, run_cmd="x {method}")
+        got = m._kill_merge_apply(c, {"file": ".git/x.kt", "old": "val g = 1", "new": "val g = 2"}, [], "ident")
+        check("議題 14 合併快篩套壞法不寫進 .git(回 single、檔沒變)", got == (None, "single") and (wt / ".git" / "x.kt").read_text(encoding="utf-8") == "val g = 1\n", str(got))
+    finally:
+        _ck_cleanup(tmp)
+    root, fake = _ckm_repo(1, {})
+    try:
+        rows = []
+        rec = [{"invariant": "gx|alphaCase", "test": "alphaCase", "file": ".git", "old": "gitdir:", "new": "gitdxr:", "group": "gx"}]
+        _rc, _o, err = _ckm_inproc(root, fake, lambda mm: mm.cmd_guard_kill(mm.Env(Path(root) / _KSP_V), "Projects/選擇_計劃", recipes_override=rec,
+                                                                          source="choice-kill", on_row=rows.append))
+        check("議題 14 逐支流程不寫進 .git(那一列 error、說明 .git)", [r["verdict"] for r in rows] == ["error"] and ".git" in str(rows[0].get("detail")),
+              f"{rows} {err[-300:]}")
+    finally:
+        _ck_cleanup(root, fake)
+
+
+def t_choice_compile_suspect_same_file():
+    """[第三段 C,2026-11-27 實驗專案實跑] Kotlin 型別錯誤常報在壞法改的行之外(呼叫端、函式簽章那行):錯誤所在檔有壞法,那支檔的壞法都列成嫌疑、
+    逐個單獨確認,單獨也紅才記無效。①錯誤報在壞法上一行、同一支檔 → 記 invalid;②同一支檔兩個壞法、只有一個真的編不過 → 只記那一個;
+    ③錯誤落在沒有壞法的檔 → 不記(對不回)。判準來源:實驗專案 FakeServer.kt:184(錯誤在 186)、:215(錯誤在 200)兩例。
+    翻紅釘:嫌疑照舊只認行範圍 → ①②沒記而紅;同檔不逐個單獨確認 → ②兩個都記而紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    try:
+        files = {"A.kt": "fun f(): Int {\n    val a = 1\n    return 0\n}\n"}
+        plist = [{"group": "A:2", "file": "A.kt", "old": "val a = 1", "new": "val a = BAD", "test": "t"}]
+        kc, calls, _log = _ckcc_unit(m, tmp / "1", files, plist, shift=-1)
+        kc.batches(kc.units())
+        check("C① 錯誤報在壞法上一行(同檔)→ 單獨確認紅、記 invalid", calls == [("A:2", False)], str(calls))
+        files2 = {"A.kt": "val a = 1\nval b = 1\n"}
+        plist2 = [{"group": "A:1", "file": "A.kt", "old": "val a = 1", "new": "val a = BAD", "test": "t"},
+                  {"group": "A:2", "file": "A.kt", "old": "val b = 1", "new": "val b = 2", "test": "t"}]
+        kc, calls, _log = _ckcc_unit(m, tmp / "2", files2, plist2, shift=5)
+        kc.batches(kc.units())
+        check("C② 同檔兩個壞法、錯誤報在範圍外 → 兩個都當嫌疑、只有真的編不過的那個記 invalid", calls == [("A:1", False)], str(calls))
+        files3 = {"A.kt": "val a = 1\n", "B.kt": "val q = BAD\n"}
+        kc, calls, _log = _ckcc_unit(m, tmp / "3", files3, [{"group": "A:1", "file": "A.kt", "old": "val a = 1", "new": "val a = 2", "test": "t"}])
+        kc.batches(kc.units())
+        check("C③ ★對照★ 錯誤落在沒有壞法的檔 → 不記", calls == [], str(calls))
+    finally:
+        _ck_cleanup(tmp)
+
+
+# ── 選擇點存活回指第三段:判讀分層(Projects/選擇點存活回指條款_計劃 範圍 8 到 11)──
+_CKL_PLAN_REL = "Projects/選擇_計劃.md"
+_CKL_CLAUSES = ("- [S1] 當使用者開啟頁面,系統 應 顯示輸入框 [test:alphaCase]\n"
+                "- [S2] 當沒有結果,系統 應 顯示空狀態 [test:bravoCase]\n"
+                "- [S3] 當人工檢查畫面,系統 應 顯示標題 [manual:看畫面確認標題]\n"
+                "\n## 預期值表\n\n| 條款 | 輸入 | 預期 | 來源 |\n|---|---|---|---|\n| S1 | 開頁 | 顯示輸入框而且游標停在框裡 | 範圍 1 |\n"
+                "\n## 範圍\n\n1. 比較用全等:兩個物件內容一樣但不是同一個實例時,要判成不同。\n2. 空清單時顯示提示文字而不是空白畫面。\n3. 補充:當沒有結果,系統 應 顯示空狀態。\n")
+_CKL_ANS = {
+    1: {"layer": 1, "before": "判成相同", "after": "判成不同", "basis": [], "question": "當兩個值相等時,要顯示相同還是不同,現在程式是哪個", "reason": ""},
+    2: {"layer": 2, "before": "同一個實例才算相同", "after": "內容一樣就算相同", "question": "", "reason": "",
+        "basis": [{"plan": _CKL_PLAN_REL, "where": "〈範圍〉", "quote": "兩個物件內容一樣但不是同一個實例時,要判成不同"}]},
+    3: {"layer": 3, "before": "顯示輸入框", "after": "不顯示輸入框", "question": "", "reason": "",
+        "basis": [{"plan": _CKL_PLAN_REL, "where": "S1", "quote": "當使用者開啟頁面,系統 應 顯示輸入框"}]},
+    4: {"layer": 4, "before": "回 true", "after": "回 true", "basis": [], "question": "", "reason": "兩種寫法在這裡結果一樣,因為輸入一定是同一個實例"},
+}
+
+
+def _re_t():
+    import re
+    return re
+
+
+def _ckl_cmd(root, fake, *args):
+    return subprocess.run([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "choice-layer", *args], cwd=root, capture_output=True, text=True, check=False,
+                          env=_ck_env(fake), stdin=subprocess.DEVNULL, timeout=300)
+
+
+def _ckl_lid(r):
+    import re as _re
+    m = _re.search(r"清單 ([0-9a-f]{12})", r.stderr)
+    return m.group(1) if m else ""
+
+
+def _ckl_ans(n, layers):
+    """第 2 行起每行一筆答案:layers {行號: 層} → 結果清單。"""
+    return [dict(_CKL_ANS[lv], file=_CHOICE_MAIN, fp=_ck_fp(i, n)) for i, lv in layers.items()]
+
+
+def _ckl_write(root, items, name="ans.json"):
+    import json as _j
+    p = Path(root).parent / f"{Path(root).name}-{name}"
+    p.write_text(_j.dumps(items, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def _ckl_setup(n, layers, record=True):
+    """判讀現場:n 行壞法、第 1 行被殺掉、其餘存活(沒開覆蓋);跑 choice-kill、choice-layer --template,layers 有給就記判讀 →
+    (root, fake, 清單編號, template 結果, 記錄結果, 結果檔)。"""
+    root, fake = _ck_repo(n, {"alphaCase": {"kill": [1]}}, clauses=_CKL_CLAUSES)
+    _ck_run(root, fake)
+    t = _ckl_cmd(root, fake, "--template", "--diff", "main..HEAD")
+    lid, rec, ans = _ckl_lid(t), None, None
+    if record and layers:
+        ans = _ckl_write(root, _ckl_ans(n, layers))
+        rec = _ckl_cmd(root, fake, str(ans), "--list", lid)
+    return root, fake, lid, t, rec, ans
+
+
+def _ckl_points(root, fake):
+    return _ckc_points(root, fake)[1]
+
+
+def _ckl_plan_edit(root, old, new):
+    p = Path(root) / _KSP_V / _CKL_PLAN_REL
+    t = p.read_text(encoding="utf-8")
+    assert old in t, old
+    p.write_text(t.replace(old, new, 1), encoding="utf-8")
+    _ckcc_commit(root, msg="改計劃")
+
+
+def t_choice_layer_template():
+    """[選擇點存活回指 S13] choice-layer --template:寫一份清單、stdout 印第 1 份;材料含條款(標有綁測試)、預期值表、分段正文、壞法前後與包住那一行的宣告,
+    不含任何已記的層、處置提示或放行理由;--part n --list 從清單取、記下判讀之後照樣取到原本那一份;沒有要判讀的存活 → 一行、rc0。分份:P 22、Q 3、未歸 2
+    → P 20、P 2、Q 3、未歸 2;材料超過位元組上限時存活數減半,減到 1 個仍超過改附段名清單。判準來源:計劃預期值表 S13 列、〈範圍〉8。
+    翻紅釘:分組不照主計劃 → 四份那條紅;材料帶處置字樣 → 不含那條紅;--part 重算 → 記下判讀後那條紅(已有效的那一行不再出)。"""
+    m = _load_lumos_inproc()
+    roots = []
+    try:
+        root, fake, lid, t, _rec, _a = _ckl_setup(3, {}, record=False)
+        roots += [root, fake]
+        out = t.stdout
+        check("S13 --template rc0、印清單編號與份數、stdout 是第 1 份材料", t.returncode == 0 and lid and "分成 1 份" in t.stderr
+              and f"存活 1:{_CHOICE_MAIN}:{4 + 2}" in out and f"存活 2:{_CHOICE_MAIN}:{4 + 3}" in out, f"{t.returncode}\n{t.stderr[-400:]}\n{out[:400]}")
+        check("S13 材料含條款(S1 標有綁測試、S3 manual 沒標)、預期值表、分段正文〈範圍〉、壞法前後、包住那一行的程式、作答格式",
+              "- S1(有綁測試):" in out and "- S3:" in out and "游標停在框裡" in out and "##### 〈範圍〉" in out and "不是同一個實例時" in out
+              and "a2 !== b2" in out and "fun load()" in out and "## 作答格式" in out, out[:3000])
+        check("S13 材料不含已記的層、處置提示或放行理由", not any(w in out for w in ("lint-waive", "situation-rule", "choice-kill", "放行", "待複核", "第 1 層 規格沒寫:")),
+              out[-1500:])
+        p1 = _ckl_cmd(root, fake, "--part", "1", "--list", lid)
+        check("S13 --part 1 --list 取到的跟第一次印的一模一樣", p1.returncode == 0 and p1.stdout == out, p1.stderr[-300:])
+        ans = _ckl_write(root, _ckl_ans(3, {2: 3}))
+        rec = _ckl_cmd(root, fake, str(ans), "--list", lid)
+        p2 = _ckl_cmd(root, fake, "--part", "1", "--list", lid)
+        t2 = _ckl_cmd(root, fake, "--template", "--diff", "main..HEAD")
+        check("S13 記下判讀之後 --part 1 仍是原本那一份(從清單取,不重算);再出材料只剩沒判讀的那一行", rec.returncode == 0 and p2.stdout == out
+              and f"{_CHOICE_MAIN}:{4 + 3}" in t2.stdout and f"{_CHOICE_MAIN}:{4 + 2}\n" not in t2.stdout and "存活 2:" not in t2.stdout,
+              f"{rec.stderr[-400:]}\n{t2.stdout[:600]}")
+        check("S13 --part 2(沒有那一份)→ rc2", _ckl_cmd(root, fake, "--part", "2", "--list", lid).returncode == 2, "")
+        root2, fake2 = _ck_repo(1, {"alphaCase": {"kill": [1]}}, clauses=_CKL_CLAUSES)
+        roots += [root2, fake2]
+        _ck_run(root2, fake2)
+        t3 = _ckl_cmd(root2, fake2, "--template", "--diff", "main..HEAD")
+        check("S13 沒有要判讀的存活 → 印一行、rc0", t3.returncode == 0 and t3.stdout.strip() == "沒有要判讀的存活", t3.stdout + t3.stderr[-300:])
+    finally:
+        _ck_cleanup(*roots)
+
+    def x(i):
+        return {"file": f"F{i:02d}.kt", "fp": f"f{i}", "line": i}
+    live = ["Projects/P.md", "Projects/Q.md"]
+    segs = {}
+    xs = [x(i) for i in range(27)]
+    for i, it in enumerate(xs):
+        cl = ["Projects/P#S1"] if i < 22 else ["Projects/Q#S2"] if i < 25 else []
+        segs[(it["file"], it["fp"])] = (None, {"reach": "clause" if cl else "none", "reach_clauses": cl}, True)
+    groups = m._choice_layer_groups(xs, segs, live)
+    parts = m._choice_layer_split(groups, lambda its: 10 * len(its))
+    check("S13 分份:P 22、Q 3、未歸 2 → P 20、P 2、Q 3、未歸 2", [len(p[0]) for p in parts] == [20, 2, 3, 2]
+          and [g[0] for g in groups] == ["Projects/P.md", "Projects/Q.md", None], str([len(p[0]) for p in parts]))
+    check("S13 未歸計劃那組的材料涉及碰到的全部計劃;有經過條款的只涉及那份計劃", m._choice_layer_plans(xs[26], segs[("F26.kt", "f26")], live) == (None, live)
+          and m._choice_layer_plans(xs[0], segs[("F00.kt", "f0")], live) == ("Projects/P.md", ["Projects/P.md"]), "")
+    big = m._CHOICE_LAYER_PART_BYTES
+    parts = m._choice_layer_split([("P", xs[:8])], lambda its: (big + 1) if len(its) > 4 else 10)
+    check("S13 存活自己的材料加總超過上限 → 存活數減半再切(r2 N3 起只拿存活材料比,另見 t_choice_layer_split_shared_plan)",
+          [len(p[0]) for p in parts] == [4, 4] and not any(p[1] for p in parts), str([len(p[0]) for p in parts]))
+
+
+def t_choice_layer_record_validate():
+    """[選擇點存活回指 S14] choice-layer <結果.json> --list:有一筆不合(鍵不在清單、同鍵重複、layer 不在 1–4、引句少於 10 實字、第 3 層引句不在那條條款
+    或那條是 manual、第 2 層引句不在那一段或也在某條條款、第 1 層問題缺四字樣之一、第 4 層理由不足 10 實字、欄位超過長度上限)→ 整份拒收、rc2、
+    逐筆印不合處、治理帳不寫、判讀檔不寫;全部合格 → 每筆一份判讀檔、一個 layer 事件(單筆 ≤ 4096 位元組、deps_sha 與判讀檔雜湊都在)。
+    判準來源:計劃預期值表 S14 五列、〈範圍〉9。翻紅釘:拿掉任一道檢查 → 那一案被收而紅。"""
+    roots = []
+    try:
+        root, fake, lid, _t, _rec, _a = _ckl_setup(4, {}, record=False)
+        roots += [root, fake]
+        good = _ckl_ans(4, {2: 1, 3: 2, 4: 3})
+
+        def one(i, **kw):
+            return dict(good[i], **kw)
+        q = lambda w, quote: [{"plan": _CKL_PLAN_REL, "where": w, "quote": quote}]
+        bad = {
+            "鍵不在清單": [one(0, fp="nope")],
+            "同鍵重複": [good[0], good[0]],
+            "layer 不在 1–4": [one(0, layer=5)],
+            "引句少於 10 實字": [one(2, basis=q("S1", "顯示輸入框"))],
+            "第 3 層那條是 manual": [one(2, basis=q("S3", "當人工檢查畫面,系統 應 顯示標題"))],
+            "第 3 層引句不在那條條款": [one(2, basis=q("S1", "當沒有結果,系統 應 顯示空狀態"))],
+            "第 2 層引句不在那一段": [one(1, basis=q("〈範圍〉", "當使用者開啟頁面,系統 應 顯示輸入框"))],
+            "第 2 層引句也在條款": [one(1, basis=q("〈範圍〉", "當沒有結果,系統 應 顯示空狀態"))],
+            "第 1 層問題缺字樣": [one(0, question="要不要顯示說明,現在是哪個")],
+            "第 4 層理由不足": [one(0, layer=4, reason="一樣")],
+            "欄位超過長度上限": [one(0, before="長" * 301)],
+            "不認得的欄位": [one(0, extra="x")],
+        }
+        res = {}
+        for name, items in bad.items():
+            p = _ckl_write(root, items, name="bad.json")
+            res[name] = _ckl_cmd(root, fake, str(p), "--list", lid)
+        layers_dir = Path(root) / "governance" / "choice-layers"
+        ok = {n: r.returncode == 2 and "整份沒寫" in r.stderr and bool(_re_t().search(r"第 [12] 筆", r.stderr)) for n, r in res.items()}
+        check("S14 每一種不合都整份拒收 rc2、逐筆印不合處", all(ok.values()), {n: res[n].stderr[-200:] for n, v in ok.items() if not v})
+        check("S14 拒收時治理帳沒有 layer 事件、沒有判讀檔", not _ck_gov(root, kind="layer") and not (layers_dir.exists() and any(layers_dir.iterdir())), "")
+        r = _ckl_cmd(root, fake, str(_ckl_write(root, good)), "--list", lid)
+        evs = _ck_gov(root, kind="layer")
+        files = sorted(layers_dir.glob("*.json")) if layers_dir.exists() else []
+        sizes = [len(ln.encode("utf-8")) for ln in (Path(root) / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines() if '"kind": "layer"' in ln]
+        check("S14 三筆都合格(第 1、2、3 層)→ 3 份判讀檔、3 個 layer 事件,每筆 ≤ 4096 位元組",
+              r.returncode == 0 and len(files) == 3 and sorted(e["layer"] for e in evs) == [1, 2, 3] and len(sizes) == 3 and max(sizes) <= 4096
+              and all(e.get("deps_sha") and e.get("judgment", "").startswith("governance/choice-layers/") for e in evs), f"{r.stdout}\n{r.stderr[-400:]}\n{evs}")
+        import hashlib
+        check("S14 判讀檔名是內容雜湊、事件的 judgment_sha 對得上", all(hashlib.sha256(f.read_bytes()).hexdigest() == f.stem for f in files)
+              and {e["judgment_sha"] for e in evs} == {f.stem for f in files}, "")
+        check("S14 清單不在 → rc2、印「清單不在了」", "清單不在了" in _ckl_cmd(root, fake, str(_ckl_write(root, good)), "--list", "0" * 12).stderr, "")
+    finally:
+        _ck_cleanup(*roots)
+
+
+def t_choice_layer_validity():
+    """[選擇點存活回指 S15] 第 3 層判讀引 P#S1:之後改別的條款 S2 → 照舊第 3 層;改 S1 → 第 3 層標待複核;第 1 層判讀在 P 加一條新條款之後 → 第 1 層標待複核、
+    不會變成未判讀;只改 frontmatter 的 updated → 兩筆照舊。判準來源:計劃預期值表 S15 四列、〈範圍〉9 判讀狀態的表。
+    翻紅釘:deps_sha 用整份計劃 → 改 S2 那案第 3 層也標待複核而紅;依據變了當成沒判讀 → 待複核那案變未判讀而紅;沒剝 frontmatter → updated 那案紅。"""
+    roots = []
+    try:
+        root, fake, _lid, _t, rec, _a = _ckl_setup(3, {2: 3, 3: 1})
+        roots += [root, fake]
+        l3, l1 = _ck_loc(2), _ck_loc(3)
+        at = _ckl_points(root, fake)
+        check("S15 前置:記了第 3 層與第 1 層", rec.returncode == 0 and at.get(l3, "").endswith("第 3 層 條款寫了、測試沒驗到:Projects/選擇_計劃#S1")
+              and "第 1 層 規格沒寫:當兩個值相等時" in at.get(l1, ""), f"{rec.stderr[-300:]}\n{at}")
+        _ckl_plan_edit(root, "status: doing", "status: doing\nupdated: 2026-11-27")
+        at = _ckl_points(root, fake)
+        check("S15 只改 frontmatter → 兩筆照舊(沒有待複核)", "待複核" not in at.get(l3, "") + at.get(l1, "") and "第 3 層" in at.get(l3, "") and "第 1 層" in at.get(l1, ""), str(at))
+        _ckl_plan_edit(root, "系統 應 顯示空狀態", "系統 應 顯示空狀態與重試按鈕")
+        at = _ckl_points(root, fake)
+        check("S15 改別的條款 S2 → 第 3 層照舊", at.get(l3, "").endswith("第 3 層 條款寫了、測試沒驗到:Projects/選擇_計劃#S1") and "待複核" not in at.get(l3, ""), at.get(l3))
+        check("S15 第 1 層在條款改了之後 → 標待複核、照樣顯示第 1 層(不是未判讀)", "⚠ 計劃改過、待複核:第 1 層 規格沒寫" in at.get(l1, ""), at.get(l1))
+        _ckl_plan_edit(root, "系統 應 顯示輸入框 [test:alphaCase]", "系統 應 顯示輸入框與標題 [test:alphaCase]")
+        at = _ckl_points(root, fake)
+        check("S15 改了引的 S1 → 第 3 層標待複核", "⚠ 計劃改過、待複核:第 3 層 條款寫了、測試沒驗到" in at.get(l3, ""), at.get(l3))
+        root2, fake2, _l, _t2, _r2, _a2 = _ckl_setup(2, {2: 1})
+        roots += [root2, fake2]
+        _ckl_plan_edit(root2, "- [S3] 當人工檢查畫面", "- [S4] 當網路斷線,系統 應 顯示離線提示 [test:bravoCase]\n- [S3] 當人工檢查畫面")
+        at2 = _ckl_points(root2, fake2)
+        check("S15 第 1 層判讀,P 加一條新條款 → 第 1 層標待複核、不會變未判讀", "⚠ 計劃改過、待複核:第 1 層" in at2.get(_ck_loc(2), ""), str(at2))
+    finally:
+        _ck_cleanup(*roots)
+
+
+def t_choice_layer_withdraw():
+    """[選擇點存活回指 S20] choice-layer --withdraw <檔>:<行> --reason 撤回一筆第 2 層判讀 → choice-points 改印未判讀(沒開覆蓋時是未分類)、下一次 --template 出那一行;
+    --redo <檔>:<行> 對已有有效判讀的行照樣出材料;理由不足 10 實字、那一行沒有判讀 → rc2。判準來源:計劃預期值表 S20 列、〈範圍〉9 撤回。
+    翻紅釘:撤回不寫 layer 0 → choice-points 照印第 2 層而紅;--redo 不看 → 有效判讀那行沒出而紅。"""
+    roots = []
+    try:
+        root, fake, _lid, _t, rec, _a = _ckl_setup(3, {2: 2, 3: 3})
+        roots += [root, fake]
+        l2, l3 = _ck_loc(2), _ck_loc(3)
+        at = _ckl_points(root, fake)
+        check("S20 前置:第 2 層與第 3 層", rec.returncode == 0 and "第 2 層 正文寫了、條款沒收:Projects/選擇_計劃〈範圍〉「" in at.get(l2, "") and "第 3 層" in at.get(l3, ""),
+              f"{rec.stderr[-300:]}\n{at}")
+        short = _ckl_cmd(root, fake, "--withdraw", l2, "--reason", "錯了", "--diff", "main..HEAD")
+        none = _ckl_cmd(root, fake, "--withdraw", _ck_loc(1), "--reason", "判讀讀錯了引句的意思要重判", "--diff", "main..HEAD")
+        check("S20 理由不足 10 實字、那一行沒有判讀 → rc2", short.returncode == 2 and none.returncode == 2, short.stderr + none.stderr)
+        w = _ckl_cmd(root, fake, "--withdraw", l2, "--reason", "判讀讀錯了引句的意思要重判", "--diff", "main..HEAD")
+        at = _ckl_points(root, fake)
+        ev = _ck_gov(root, kind="layer")[-1]
+        check("S20 撤回 → 寫 layer 0、judgment 空字串、帶 reason;choice-points 改印未分類(沒開覆蓋),第 3 層那行照舊", w.returncode == 0 and ev["layer"] == 0
+              and ev["judgment"] == "" and ev.get("reason") and at.get(l2, "").endswith("存活  未分類") and "第 3 層" in at.get(l3, ""), f"{w.stderr}\n{at}")
+        t = _ckl_cmd(root, fake, "--template", "--diff", "main..HEAD")
+        check("S20 下一次 --template 出撤回的那一行、不出有效判讀那一行", f"{_CHOICE_MAIN}:{4 + 2}" in t.stdout and f"{_CHOICE_MAIN}:{4 + 3}" not in t.stdout, t.stdout[:800])
+        t2 = _ckl_cmd(root, fake, "--template", "--diff", "main..HEAD", "--redo", l3)
+        check("S20 --redo 對已有有效判讀的行照樣出材料", f"{_CHOICE_MAIN}:{4 + 3}" in t2.stdout and f"{_CHOICE_MAIN}:{4 + 2}" in t2.stdout, t2.stdout[:800] + t2.stderr[-300:])
+        ev3 = next(e for e in _ck_gov(root, kind="layer") if e["layer"] == 3)
+        jf = Path(root) / ev3["judgment"]
+        jf.write_text(jf.read_text(encoding="utf-8").replace("不顯示輸入框", "不顯示輸入匡"), encoding="utf-8")
+        at = _ckl_points(root, fake)
+        check("〈範圍〉9 判讀檔內容被改(雜湊對不上)→ 當成沒有判讀", at.get(l3, "").endswith("存活  未分類"), at.get(l3))
+    finally:
+        _ck_cleanup(*roots)
+
+
+def _ckl_gov_drop(root, kind):
+    """版控治理帳拿掉某一種 kind 的事件(對照「沒有新事件時」),提交。"""
+    p = Path(root) / "docs" / ".governance-log.jsonl"
+    keep = [ln for ln in p.read_text(encoding="utf-8").splitlines() if f'"kind": "{kind}"' not in ln]
+    p.write_text("\n".join(keep) + "\n", encoding="utf-8")
+    _ckp_commit(root, [])
+
+
+def _ckl_push_lines(r):
+    """推送輸出裡選擇點那幾段的示例行(定位)集合與 rc。"""
+    import re as _re
+    out = r.stdout + r.stderr
+    return r.returncode, sorted(set(_re.findall(r"^\s{8}(\S+:\d+)\s", out, _re.MULTILINE)))
+
+
+def t_choice_reach_push_hint():
+    """[選擇點存活回指 S9] 推送閘要求處置存活而那行沒有判讀 → 列在子原因「存活·未判讀」,經過條款的示例行附條款號、處置句含 choice-layer --template;
+    子原因行數加總等於沒有 reach 事件時的存活行數,rc 與擋下清單相同。判準來源:計劃預期值表 S9 列、〈範圍〉11。
+    翻紅釘:不拆子原因 → 「存活·未判讀」那條紅;示例不附條款號 → 那條紅。"""
+    roots = []
+    try:
+        root, fake = _ckc_repo(2, {"__cov__": {"pass": {"alphaCase": [1]}}})
+        roots += [root, fake]
+        _ckc_run(root, fake)
+        _ckp_commit(root, [])
+        r = _ckp_push(root, fake)
+        out = r.stdout
+        check("S9 子原因「存活·未判讀」2 行、處置句含 choice-layer --template", _ckp_block_lines(out, "存活·未判讀") == 2 and "choice-layer --template" in out,
+              out[-1500:])
+        check("S9 經過條款的示例行附條款號", any(ln.strip().startswith(_ck_loc(1)) and "經過 Projects/選擇_計劃#S1" in ln for ln in out.splitlines()), out[-1500:])
+        got = _ckl_push_lines(r)
+        _ckl_gov_drop(root, "reach")
+        r2 = _ckp_push(root, fake)
+        check("S9 子原因行數加總、rc 與擋下的行跟沒有 reach 事件時相同", _ckl_push_lines(r2) == got and _ckp_block_lines(r2.stdout, "存活") == 2 and got[0] != 0,
+              f"{got} {_ckl_push_lines(r2)}")
+    finally:
+        _ck_cleanup(*roots)
+
+
+def t_choice_layer_push_hint():
+    """[選擇點存活回指 S16] 推送閘要求處置存活而那行有判讀 → 列在 存活·第N層,處置句照〈範圍〉11:第 1 層附業務問題、第 3 層不含 situation-rule、第 4 層含 lint-waive
+    與「等價:」;待複核的處置句加重跑提示;第 4 層照樣擋;子原因行數加總、rc、擋下清單跟沒有 layer 事件時相同。判準來源:計劃預期值表 S16 列。
+    翻紅釘:層改了擋不擋 → rc 那條紅;處置句共用一句 → 第 3、4 層那幾條紅。"""
+    import re as _re
+    roots = []
+    try:
+        root, fake, _lid, _t, rec, _a = _ckl_setup(5, {2: 1, 3: 2, 4: 3, 5: 4})
+        roots += [root, fake]
+        _ckp_commit(root, [])
+        r = _ckp_push(root, fake)
+        out = r.stdout
+        blocks = {k: _re.search(r"\[選擇點\] " + k + r" \d+ 行[^\n]*\n((?:\s{8}[^\n]*\n)*)", out) for k in ("存活·第1層", "存活·第2層", "存活·第3層", "存活·第4層")}
+        body = {k: (v.group(0) if v else "") for k, v in blocks.items()}
+        check("S16 前置:記了四層", rec.returncode == 0 and all(_ckp_block_lines(out, k) == 1 for k in body), f"{rec.stderr[-300:]}\n{out[-2500:]}")
+        check("S16 第 1 層示例附業務問題、處置句問人與 situation-rule", "當兩個值相等時" in body["存活·第1層"] and "situation-rule --point" in body["存活·第1層"], body["存活·第1層"])
+        check("S16 第 2 層處置句照正文補條款與邊界測試、不用問人", "不用問人" in body["存活·第2層"] and "〈範圍〉" in body["存活·第2層"], body["存活·第2層"])
+        check("S16 第 3 層附條款號、處置句不含 situation-rule", "Projects/選擇_計劃#S1" in body["存活·第3層"] and "situation-rule" not in body["存活·第3層"]
+              and "[test:]" in body["存活·第3層"], body["存活·第3層"])
+        check("S16 第 4 層處置句含 lint-waive choice: 與「等價:」、照樣擋", "lint-waive choice:" in body["存活·第4層"] and "等價:" in body["存活·第4層"] and r.returncode != 0,
+              body["存活·第4層"])
+        got = _ckl_push_lines(r)
+        _ckl_plan_edit(root, "系統 應 顯示輸入框 [test:alphaCase]", "系統 應 顯示輸入框與標題 [test:alphaCase]")
+        r3 = _ckp_push(root, fake)
+        check("S16 待複核的判讀照它的層歸子原因、處置句加重跑提示", _ckp_block_lines(r3.stdout, "存活·第3層") == 1 and "重跑 choice-layer --template 複核" in r3.stdout,
+              r3.stdout[-2000:])
+        _ckl_gov_drop(root, "layer")
+        r2 = _ckp_push(root, fake)
+        check("S16 子原因行數加總、rc、擋下的行跟沒有 layer 事件時相同", _ckl_push_lines(r2)[0] == got[0] and _ckl_push_lines(r2)[1] == got[1]
+              and _ckp_block_lines(r2.stdout, "存活·未判讀") == 4 and _ckp_block_lines(out, "存活") == 4, f"{got} {_ckl_push_lines(r2)}")
+    finally:
+        _ck_cleanup(*roots)
+
+
+def t_choice_layer_gov_stats():
+    """[選擇點存活回指 範圍 10] gov --stats 選擇點段多覆蓋分類、判讀(四層與未判讀)、依覆蓋省掉三行:每行只數最新一筆、撤回算未判讀;依覆蓋省掉的
+    壞法執行數是 cov_skipped 加總、測試支數是 cov_full - cov_selected 加總。判準來源:〈範圍〉10。翻紅釘:不取最新一筆 → 分類那條紅。"""
+    import json as _j
+    import shutil
+
+    def ev(kind, **kw):
+        return {"ts": "2026-11-27T10:00:00", "commit": "c", "gate": "choice-kill", "kind": kind, "hard": False, "nodes": [], "note": "x",
+                "token": _os_mod.urandom(8).hex(), **kw}
+
+    def ck(fp, verdict):
+        return ev("choice-kill", file="F.kt", fp=fp, row="C-7", verdict=verdict, attempt=1, via="run", killing_test="", reason="", tests_sha="t", new_sha="n")
+
+    def reach(fp, cls):
+        return ev("reach", file="F.kt", fp=fp, new_sha="n", reach=cls, reach_clauses=[], reach_n=0, reach_why="", cov_sha="c", run_id="r")
+
+    def layer(fp, n):
+        return ev("layer", file="F.kt", fp=fp, layer=n, new_sha="n", judgment="", judgment_sha="", deps_sha="")
+    rows = [ck("a", "survived"), ck("b", "survived"), ck("c", "survived"), ck("d", "killed"), reach("a", "none"), reach("a", "clause"), reach("b", "unknown"),
+            layer("a", 3), layer("b", 1), layer("b", 0), ev("run", changed=3, mutant_lines=3, secs=5, cov_skipped=2, cov_full=10, cov_selected=4),
+            ev("run", changed=3, mutant_lines=3, secs=5, cov_skipped=1, cov_full=6, cov_selected=6)]
+    root, vault = _stats_fixture("gctl-ckl-st-", [_j.dumps(x, ensure_ascii=False) + "\n" for x in rows])
+    try:
+        out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        seg = out[out.find("改動選擇點"):]
+        check("範圍 10 覆蓋分類每行最新一筆:經過條款 1、沒有條款經過 0、覆蓋不明 1", "覆蓋分類(每行最新一筆):經過條款 1、沒有條款經過 0、覆蓋不明 1" in seg, seg[:1500])
+        check("範圍 10 判讀:第 3 層 1、其他 0(b 撤回),存活裡未判讀 2(b、c)", "第 1 層 0、第 2 層 0、第 3 層 1、第 4 層 0;存活裡未判讀 2" in seg, seg[:1500])
+        check("範圍 10 依覆蓋省掉的壞法執行 3 個、測試 6 支", "依覆蓋省掉的壞法執行 3 個、測試 6 支" in seg, seg[:1500])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+# ── 選擇點存活回指第三段 代碼審 r1 修補 ──
+
+def t_choice_plan_sections_variants():
+    """[第三段 r1 M1(正確性 #1、通才 #1、邊界 #2、#3)] 計劃正文不含的二級節要容前後綴:`## 審計修正紀錄(r1)`、`## 審計修正紀錄(lumos-design-loop)`、
+    全形括號、`## T3 審計修正紀錄`、`## §2 預期值表`、`## 驗收條款(全部有真測試、綠)` 都不算正文;一般的 `## 範圍` 照收;一級標題前後兩段〈前言〉
+    段名不重複(第二段是〈前言〉#2)。判準來源:實際計劃的標題寫法(審查席引的例子)。翻紅釘:整串相等比對 → 變體那幾節被收而紅;初始段名沒登記 → 兩個〈前言〉而紅。"""
+    m = _load_lumos_inproc()
+    text = ("---\ntype: project\n---\n開頭一句\n# 標題\n標題底下一句\n## 範圍\n正文一句\n## 驗收條款(全部有真測試、綠)\n- [S1] 條款\n## §2 預期值表\n| a |\n"
+            "## 審計修正紀錄(r1)\n舊紀錄甲\n## 審計修正紀錄(lumos-design-loop)\n舊紀錄乙\n## 審計修正紀錄(r2)\n舊紀錄丙\n## T3 審計修正紀錄\n舊紀錄丁\n### 子節\n舊紀錄戊\n"
+            "## 不做\n不做一句\n")
+    secs = m._choice_plan_sections(text)
+    names = [n for n, _t in secs]
+    body = "\n".join(t for _n, t in secs)
+    check("M1 變體標題的審計修正紀錄(含子節)不算正文", "舊紀錄" not in body, str(secs))
+    check("M1 r4 讀取器讀不到的驗收條款、預期值表變體留在正文(內容不會兩邊都看不到)", "- [S1]" in body and "| a |" in body, str(secs))
+    check("M1 一般的節照收(〈範圍〉、〈不做〉)", "〈範圍〉" in names and "〈不做〉" in names, str(names))
+    check("M1 一級標題前後的文字合成一段〈前言〉(r2 N2 起一級標題不切段)、段名不重複", names[0] == "〈前言〉" and "開頭一句" in secs[0][1]
+          and "標題底下一句" in secs[0][1] and len(names) == len(set(names)), str(names))
+
+
+def t_choice_layer_write_preflight():
+    """[第三段 r1 M3(邊界 #1、正確性 #2)] 判讀記錄寫任何東西之前先把每份判讀檔組好、整份預檢大小:任一份超過 _CHOICE_LAYER_DOC_MAX → 整份拒收、一份檔都不寫;
+    quote 另有原始字元上限(夾大量空白的引句實字數過得了,原始長度過不了)。翻紅釘:邊寫邊檢 → 第一份已寫而紅;quote 只限實字數 → 夾空白那案被收而紅。"""
+    import types
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckl-"))
+    try:
+        subprocess.run(["git", "init", "-q", str(tmp)], check=True)
+        ctx = types.SimpleNamespace(deps=lambda d: "d" * 32)
+        lst = {"id": "a" * 12, "at_sha": "b" * 40, "items": {"F.kt\tf1": {"new_sha": "n", "plans": ["P.md"]}, "F.kt\tf2": {"new_sha": "n", "plans": ["P.md"]}}}
+        res = [{"file": "F.kt", "fp": "f1", "layer": 4, "before": "a", "after": "b", "basis": [], "question": "", "reason": "理由" * 6},
+               {"file": "F.kt", "fp": "f2", "layer": 4, "before": "長" * 900, "after": "b", "basis": [], "question": "", "reason": "理由" * 6}]
+        o = m._CHOICE_LAYER_DOC_MAX
+        m._CHOICE_LAYER_DOC_MAX = 2000
+        try:
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as er:
+                rc = m._choice_layer_write(tmp, lst, res, ctx)
+        finally:
+            m._CHOICE_LAYER_DOC_MAX = o
+        d = tmp / "governance" / "choice-layers"
+        check("M3 第二份超過單份上限 → 整份拒收 rc2、一份判讀檔都不寫", rc == 2 and not (d.exists() and any(d.iterdir())), f"{rc} {er.getvalue()}")
+        q = "當使用者開啟頁面,系統" + " " * 3000 + "應 顯示輸入框"
+        v = {"clauses": {"S1": "- [S1] 當使用者開啟頁面,系統 應 顯示輸入框 [test:alphaCase]"}, "sections": [], "bound": {"S1"}}
+        cx = types.SimpleNamespace(view=lambda p: v)
+        errs, _ok = m._choice_layer_basis_errs([{"plan": "P.md", "where": "S1", "quote": q}], ["P.md"], cx)
+        check("M3 quote 夾大量空白(實字數合格)→ 原始字元超過上限而拒收", any("引句" in e and "上限" in e for e in errs), str(errs))
+    finally:
+        _ck_cleanup(tmp)
+
+
+def t_choice_layer_split_shared_plan():
+    """[第三段 r2 N3(資源 #1、通才 #1;編排者實驗專案用 r1 版實跑 75 個存活仍切成 43 份)] 共用的計劃材料(條款、預期值表、正文)跟存活自己的材料分開算:
+    共用材料超過 _CHOICE_LAYER_SHARED_MAX(份上限的一半)的計劃整份另存一支旁檔、整份清單共用,材料只附指路與條款號;份上限只拿存活自己的材料比,超過才減半,
+    單一存活自己就超過時那份只放它一個、原因寫存活材料太大。三案:大計劃加 25 個小存活 → 2 份、計劃走旁檔;小計劃加一個超大宣告的存活 → 那個存活單獨一份、
+    原因是存活材料太大;小計劃加 25 個小存活 → 照 20 個一份、不走旁檔。翻紅釘:計劃材料算進份上限 → 第一案切碎而紅;單一存活超過標成計劃太大 → 第二案紅。"""
+    import types
+    m = _load_lumos_inproc()
+    big = m._CHOICE_LAYER_PART_BYTES
+    xs = [{"line": i} for i in range(25)]
+    small = lambda its: 1000 * len(its)
+    parts = m._choice_layer_split([("P", xs)], small)
+    vbig = {"clauses": {"S1": "- [S1] " + "很長的條款" * 40000}, "bound": set(), "expected": "", "sections": []}
+    vsmall = {"clauses": {"S1": "- [S1] 短條款"}, "bound": set(), "expected": "", "sections": [("〈範圍〉", "一句")]}
+    sides = m._choice_layer_plan_sides(types.SimpleNamespace(view=lambda p: vbig if p == "Big.md" else vsmall), ["Big.md", "Small.md"], "a" * 12)
+    check("N3 大計劃(共用材料超過門檻)→ 走旁檔、小計劃不走;25 個小存活 → 2 份(20、5)、沒有超過原因",
+          set(sides) == {"Big.md"} and sides["Big.md"].endswith(".md") and [len(p[0]) for p in parts] == [20, 5] and not any(p[1] for p in parts),
+          f"{sides} {[(len(p[0]), p[1]) for p in parts]}")
+    huge = lambda its: sum((big + 5) if x["line"] == 3 else 1000 for x in its)
+    parts = m._choice_layer_split([("P", xs[:6])], huge)
+    alone = [p for p in parts if any(x["line"] == 3 for x in p[0])]
+    check("N3 一個存活自己就超過 → 它單獨一份、原因寫存活材料太大(不是計劃太大)", len(alone) == 1 and len(alone[0][0]) == 1 and "存活" in alone[0][1]
+          and "計劃" not in alone[0][1] and sum(len(p[0]) for p in parts) == 6, str([(len(p[0]), p[1]) for p in parts]))
+    parts = m._choice_layer_split([("P", xs)], small)
+    check("N3 ★對照★ 小計劃加 25 個小存活 → 照 20 個一份", [len(p[0]) for p in parts] == [20, 5], str([len(p[0]) for p in parts]))
+
+
+def t_choice_layer_template_parts():
+    """[第三段 r1 合約 #3、O1、正確性 #5] 端到端:清單真的有 2 份時 --part 2 --list 取到原本第 2 份(內容雜湊同清單記的);計劃正文太大另存時,同一份計劃的
+    正文旁檔整份清單只寫一份、各份共用;讀回第 1 份失敗 → rc2 印原因、不印字面 None。翻紅釘:旁檔每份各寫一份 → 兩個旁檔而紅。"""
+    import json as _j
+    roots = []
+    try:
+        clauses = _CKL_CLAUSES + "\n## 背景\n\n" + ("很長的背景說明一句話。" * 12000) + "\n"
+        root, fake = _ck_repo(4, {"alphaCase": {"kill": [1]}}, clauses=clauses)
+        roots += [root, fake]
+        _ck_run(root, fake)
+
+        def go(mm):
+            mm._CHOICE_LAYER_PART_MAX = 2
+            return mm.cmd_choice_layer(mm.Env(Path(root) / _KSP_V), template=True, diff="main..HEAD")
+        rc, _out, err = _ckm_inproc(root, fake, go)
+        lid = _ckl_lid(types_ns(stderr=err))
+        wd = Path(root) / ".lumos" / "note-audit" / "choice-layer"
+        lst = _j.loads((wd / f"{lid}.json").read_text(encoding="utf-8")) if lid else {}
+        sides = sorted(wd.glob(f"{lid}-plan-*.md")) if lid else []
+        check("合約 #3 前置:3 個存活、每份最多 2 → 2 份", rc == 0 and len(lst.get("parts") or []) == 2, f"{rc} {err[-400:]}")
+        p2 = _ckl_cmd(root, fake, "--part", "2", "--list", lid)
+        import hashlib
+        check("合約 #3 --part 2 --list 取到原本第 2 份(內容雜湊同清單記的)", p2.returncode == 0
+              and hashlib.sha256(p2.stdout.encode("utf-8")).hexdigest()[:32] == lst["parts"][1]["sha"], p2.stderr[-300:])
+        check("O1 計劃正文另存:同一份計劃的旁檔整份清單只寫一份、兩份材料都指到它", len(sides) == 1 and all(str(sides[0].name) in (wd / f"{lid}-{n}.md").read_text(encoding="utf-8")
+                                                                         for n in (1, 2)), f"{sides} {err[-300:]}")
+
+        def bad(mm):
+            mm._choice_layer_read_part = lambda wd_, lid_, n: (None, "那一份的內容跟清單記的不同")
+            return mm.cmd_choice_layer(mm.Env(Path(root) / _KSP_V), template=True, diff="main..HEAD", redo=[_ck_loc(2)])
+        rc2, out2, err2 = _ckm_inproc(root, fake, bad)
+        check("正確性 #5 讀回第 1 份失敗 → rc2、印原因、不印 None", rc2 == 2 and "None" not in out2 and "內容跟清單記的不同" in err2, f"{rc2} {out2[-200:]} {err2[-300:]}")
+    finally:
+        _ck_cleanup(*roots)
+
+
+def types_ns(**kw):
+    import types
+    return types.SimpleNamespace(**kw)
+
+
+def t_choice_layer_minor_r1():
+    """[第三段 r1 邊界 #4、#6、通才 #2、架構對齊 #2] 份清單 parts/items 內層形狀不對 → rc2「清單不在了」不丟堆疊;顯示用的出處取記錄時驗過的那一項(cite),
+    取不到不印 None;待複核的重跑提示只加在存活子原因;整份拒收的輸出照情境題盲判:前綴「擋下:」、最多 10 條再印另有 N 處、結果檔帶 BOM 照讀。
+    翻紅釘:各道拿掉 → 對應那條紅。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    roots = []
+    try:
+        root, fake, lid, _t, _rec, _a = _ckl_setup(3, {}, record=False)
+        roots += [root, fake]
+        wd = Path(root) / ".lumos" / "note-audit" / "choice-layer"
+        good = (wd / f"{lid}.json").read_text(encoding="utf-8")
+        many = [dict(_CKL_ANS[1], file=_CHOICE_MAIN, fp=f"nope{i}") for i in range(12)]
+        bom = Path(root).parent / f"{Path(root).name}-bom.json"
+        bom.write_text(_j.dumps(many, ensure_ascii=False), encoding="utf-8-sig")
+        r = _ckl_cmd(root, fake, str(bom), "--list", lid)
+        check("架構對齊 #2 帶 BOM 的結果檔照讀;拒收前綴「擋下:」、列 10 條、另有 2 處", r.returncode == 2 and r.stderr.startswith("擋下:")
+              and r.stderr.count("第 ") >= 10 and "另有 2 處" in r.stderr and "第 11 筆" not in r.stderr, r.stderr[-800:])
+        d = _j.loads(good)
+        d["items"] = {"x": 3}
+        (wd / f"{lid}.json").write_text(_j.dumps(d), encoding="utf-8")
+        r2 = _ckl_cmd(root, fake, str(_ckl_write(root, _ckl_ans(3, {2: 1}))), "--list", lid)
+        d["items"], d["parts"] = _j.loads(good)["items"], [3]
+        (wd / f"{lid}.json").write_text(_j.dumps(d), encoding="utf-8")
+        r3 = _ckl_cmd(root, fake, "--part", "1", "--list", lid)
+        check("邊界 #4 清單 items 或 parts 內層形狀不對 → rc2「清單不在了」、不丟堆疊", all(x.returncode == 2 and "清單不在了" in x.stderr and "Traceback" not in x.stderr
+                                                                      for x in (r2, r3)), r2.stderr[-300:] + r3.stderr[-300:])
+    finally:
+        _ck_cleanup(*roots)
+    doc = {"layer": 3, "basis": [{"plan": "Projects/P.md", "where": "S9", "quote": "q" * 10}, {"plan": "Projects/P.md", "where": "S1", "quote": "q" * 10}], "cite": 1}
+    t = m._choice_layer_text({"layer": 3, "pending": False, "doc": doc})
+    t0 = m._choice_layer_text({"layer": 2, "pending": False, "doc": {"layer": 2, "basis": []}})
+    check("邊界 #6 顯示取記錄時驗過的那一項(cite);取不到不印 None", t.endswith("Projects/P#S1") and "None" not in t0, f"{t} | {t0}")
+    aux = {("F.kt", "f"): {"seg": ({"layer": 3, "pending": True, "doc": doc}, None, False)}}
+    xs = [{"file": "F.kt", "fp": "f"}]
+    check("通才 #2 待複核的重跑提示只加在存活子原因", "複核" in m._choice_push_fix("存活·第3層", xs, aux) and "複核" not in m._choice_push_fix("跑不出結果", xs, aux), "")
+
+
+def t_choice_layer_gov_layer_range():
+    """[第三段 r1 邊界 #5] gov 的 layer_last 只收 0 到 4(跟讀側 _choice_ledger_aux 同一判法):layer 7 的事件不算。翻紅釘:不限範圍 → 判讀那行多出第 7 層的筆數而紅。"""
+    m = _load_lumos_inproc()
+    c = {"layer_last": {}}
+    m._gov_choice_count_layer(c, {}, {"file": "F", "fp": "a", "layer": 7})
+    m._gov_choice_count_layer(c, {}, {"file": "F", "fp": "b", "layer": 2})
+    check("邊界 #5 layer 7 不收、layer 2 收", c["layer_last"] == {("F", "b"): 2}, str(c))
+
+
+def t_choice_layer_bookkeeping():
+    """[第三段 r1 合約 #4] governance/choice-layers/ 在簿記豁免裡:只新增判讀檔的提交不讓代碼審留痕失效、不算小改動閘的改動量;放在別的 governance 夾的同一個檔
+    (對照組)會讓留痕失效。寫法照 t_note_audit_reread_verdicts_bookkeeping。"""
+    m = _load_lumos_inproc()
+    check("①在簿記目錄清單裡", "governance/choice-layers/" in m._BOOKKEEPING_DIRS, str(m._BOOKKEEPING_DIRS))
+    root, base = _na_repo()
+    body = '{"layer": 3, "basis": [{"quote": "subprocess.run(password) UPDATE users SET a=1; eval(y)"}]}\n'
+    name = "a" * 64 + ".json"
+    _nh_file(root, f"governance/choice-layers/{name}", body)
+    _nh_commit(root, "judgment only")
+    tip = _na_head(root)
+    files, _why = m._sc_changed_files(root, f"{base}..{tip}", _NA_VAULT)
+    check("②小改動閘的改動量不算判讀檔", files is not None and not any("choice-layers" in f[0] for f in files), str(files))
+    ok, why = m._codeloop_record_valid(root, base, tip)
+    check("③只新增判讀檔不讓代碼審留痕失效", ok, why)
+    root2, base2 = _na_repo()
+    _nh_file(root2, f"governance/other/{name}", body)
+    _nh_commit(root2, "not bookkeeping")
+    ok2, why2 = m._codeloop_record_valid(root2, base2, _na_head(root2))
+    check("④對照組:別的 governance 夾的同一個檔會讓留痕失效", not ok2, why2)
+
+
+def t_choice_kill_survivor_list_swapped():
+    """[第三段 r1 正確性 #4、通才 #4] choice-kill 跑完印的「存活與分類」對這次換過候選的行用換後的壞法:候選 1 編不過、換候選 2、開覆蓋判沒有條款經過 →
+    清單那一行印「沒有條款經過 未判讀」(用候選 1 的 new_sha 算 cov_sha 會對不上、印成未分類)。翻紅釘:清單用掃描時的壞法 → 未分類而紅。"""
+    import json as _j
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    roots = [tmp]
+    try:
+        cat = _ckcc_cat(tmp)
+        root, fake = _ckc_repo(1, {"__cov__": {"pass": {}}})
+        roots += [root, fake]
+        _cp, _ln, ops = _ckcc_points(root, fake, cat)
+        cc = tmp / "cc.json"
+        cc.write_text(_j.dumps({"bad": [f"a1 {ops.get(_ck_loc(1))} b1"]}), encoding="utf-8")
+        r = _ckc_run(root, fake, LUMOS_KT_CATALOG=str(cat), CK_COMPILE=str(cc))
+        lines = [ln for ln in r.stdout.splitlines() if ln.startswith("    " + _CHOICE_MAIN)]
+        check("正確性 #4 換過候選的行在存活清單印分類(沒有條款經過 未判讀)", _ck_gov(root, kind="invalid") and lines and lines[0].endswith("沒有條款經過 未判讀"),
+              f"{lines}\n{r.stdout[-800:]}\n{r.stderr[-300:]}")
+    finally:
+        _ck_cleanup(*roots)
+
+
+def t_choice_compile_suspect_cap():
+    """[第三段 r1 資源 #2] 同一支檔嫌疑多時,每批單獨確認最多 _CHOICE_COMPILE_SOLO_MAX 個,依跟錯誤行的距離排(最近的先);其餘照現在交給測試階段。
+    12 個同檔壞法、只有 1 個真的編不過(錯誤報在它上一行)→ 單獨編不超過上限、那一個記 invalid。翻紅釘:不限次 → 單獨編 12 次而紅;不照距離排 → 那一個沒輪到而紅。"""
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    try:
+        n = 12
+        files = {"A.kt": "".join(f"val v{i} = 1\n" for i in range(n))}
+        plist = [{"group": f"A:{i}", "file": "A.kt", "old": f"val v{i} = 1", "new": f"val v{i} = {'BAD' if i == n - 1 else 2}", "test": "t"} for i in range(n)]
+        kc, calls, log = _ckcc_unit(m, tmp, files, plist, shift=-1)
+        kc.batches(kc.units())
+        snaps = len(log.read_text(encoding="utf-8").splitlines())
+        check("資源 #2 單獨確認不超過上限、最近錯誤行的那一個記 invalid", calls == [(f"A:{n - 1}", False)] and snaps <= 1 + m._CHOICE_COMPILE_SOLO_MAX + 1,
+              f"{calls} {snaps}")
+    finally:
+        _ck_cleanup(tmp)
+
+
+def t_kill_mtime_settle_shared():
+    """[第三段 r1 架構對齊 #1] 還原後讀回修改時間只有一份(_kill_mtime_settle):_kill_revert 的後半、合批編譯 git checkout 失敗改直接寫回原文那條路都走它。
+    翻紅釘:restore 那條路改回手寫 → 寫回原文那案沒記到而紅。"""
+    import types
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-ckcc-"))
+    seen = []
+    orig = m._kill_mtime_settle
+    try:
+        m._kill_mtime_settle = lambda t, ms: (seen.append(Path(t).name), orig(t, ms))[1]
+        (tmp / "A.kt").write_text("val a = 3\n", encoding="utf-8")
+        c = types.SimpleNamespace(wt=str(tmp), wt_real=_os_mod.path.realpath(str(tmp)), mstate={"w": 0, "r": 0, "unsure": set()}, results=[], plat="p",
+                                  run_cmd="x", floor=20.0, run_dir=str(tmp), plist=[])
+        kc = m._KillCompile(m._KillPrep(_ckm_time.monotonic() + 600, set(), {}, None), c)
+        t = _os_mod.path.realpath(str(tmp / "A.kt"))
+        kc.restore([t], {t: "val a = 1\n"})
+        check("架構對齊 #1 git checkout 失敗、直接寫回原文 → 修改時間走 _kill_mtime_settle、內容回原版", seen == ["A.kt"]
+              and (tmp / "A.kt").read_text(encoding="utf-8") == "val a = 1\n", str(seen))
+    finally:
+        m._kill_mtime_settle = orig
+        _ck_cleanup(tmp)
+
+
+def t_choice_plan_sections_exact_names():
+    """[第三段 r2 N1(邊界 #1、通才 #3、架構對齊 #1)] 不算正文的節要「整個標題就是那個節名」:可帶一個節號前綴(§數字或大寫字母加數字的代號)加空白、節名後只容空白
+    或一個括號說明(半形或全形括號到行尾)。該排除:審計修正紀錄(r1)、審計修正紀錄（design-loop，…）、T3 審計修正紀錄、§5 審計修正紀錄、驗收條款(全部有真測試、綠)、
+    預期值表;不該排除:審計修正紀錄外篇、驗收條款與範例、預期值表格式說明、預期值表的說明、非驗收條款。翻紅釘:只錨開頭 → 不該排除那組被排除而紅。"""
+    m = _load_lumos_inproc()
+    out_ = ["審計修正紀錄(r1)", "審計修正紀錄（design-loop，r3）", "T3 審計修正紀錄", "§5 審計修正紀錄", "預期值表",
+            "審計修正紀錄外篇"]   # r3 H 起含「審計修正紀錄」一律排除(明文取捨,見 _choice_layer_not_body)
+    keep = ["驗收條款與範例", "預期值表格式說明", "預期值表的說明", "非驗收條款", "驗收條款(全部有真測試、綠)"]   # r4:讀取器讀不到的留在正文
+    text = "".join(f"## {t}\n內文{k}\n" for k, t in enumerate(out_ + keep))
+    names = [n for n, _t in m._choice_plan_sections(text)]
+    check("N1 該排除的一個都不在正文", not any(f"〈{t}〉" in names for t in out_), str(names))
+    check("N1 不該排除的都在正文", all(f"〈{t}〉" in names for t in keep), str(names))
+
+
+def t_choice_plan_sections_preface():
+    """[第三段 r2 N2(邊界 #2)] 第一個二級標題之前的文字(一級標題前後都算)合成同一段〈前言〉,一級標題不切段:只有一級標題下有導言 → 一段〈前言〉;
+    一級標題前後都有文字 → 一段〈前言〉含兩句;沒有導言 → 不產生空的〈前言〉。翻紅釘:一級標題切段 → 第二案兩段或段名帶 #2 而紅。"""
+    m = _load_lumos_inproc()
+    a = m._choice_plan_sections("---\ntype: project\n---\n# 標題\n導言一句\n## 範圍\n正文\n")
+    b = m._choice_plan_sections("---\ntype: project\n---\n開頭一句\n# 標題\n導言一句\n## 範圍\n正文\n")
+    c = m._choice_plan_sections("---\ntype: project\n---\n# 標題\n## 範圍\n正文\n")
+    check("N2 只有一級標題下有導言 → 一段〈前言〉", a == [("〈前言〉", "導言一句"), ("〈範圍〉", "正文")], str(a))
+    check("N2 一級標題前後都有文字 → 合成一段〈前言〉", [n for n, _t in b] == ["〈前言〉", "〈範圍〉"] and "開頭一句" in b[0][1] and "導言一句" in b[0][1], str(b))
+    check("N2 沒有導言 → 不產生空的〈前言〉", c == [("〈範圍〉", "正文")], str(c))
+
+
+def t_choice_layer_text_old_doc():
+    """[第三段 r2 正確性 #1、通才 #2] 舊判讀檔沒有 cite 欄位時退回舊判法(取第一個符合該層條件的 basis 項:第 3 層是條款號、第 2 層是段名),不顯示「(出處讀不到)」;
+    有 cite 照 cite。翻紅釘:沒有 cite 就印出處讀不到 → 兩案紅。"""
+    m = _load_lumos_inproc()
+    d3 = {"layer": 3, "basis": [{"plan": "Projects/P.md", "where": "〈範圍〉", "quote": "q" * 10}, {"plan": "Projects/P.md", "where": "S4", "quote": "q" * 10}]}
+    d2 = {"layer": 2, "basis": [{"plan": "Projects/P.md", "where": "S1", "quote": "q" * 10}, {"plan": "Projects/P.md", "where": "〈範圍〉", "quote": "那一句" * 4}]}
+    t3 = m._choice_layer_text({"layer": 3, "pending": False, "doc": d3})
+    t2 = m._choice_layer_text({"layer": 2, "pending": False, "doc": d2})
+    check("正確性 #1 沒有 cite 的舊檔 → 第 3 層取第一個條款號、第 2 層取第一個段名", t3.endswith("Projects/P#S4") and "〈範圍〉「那一句" in t2
+          and "讀不到" not in t3 + t2, f"{t3} | {t2}")
+
+
+# 第三段 r3 H:repo 裡真的計劃二級標題(2026-11-27 從 docs/lumos-toolchain-knowledge/Projects/ grep 出全部含這三個詞的),逐條歸類。True = 不算正文(整節排除)。
+_CKL_REAL_HEADS = {
+    "M1 審計修正紀錄": True, "M2 審計修正紀錄": True, "T3 審計修正紀錄": True, "r1/r2 審計修正紀錄": True, "審計修正紀錄": True,
+    "審計修正紀錄(lumos-design-loop)": True, "審計修正紀錄(r1)": True, "審計修正紀錄（design-loop，loop=multiplatform-test-binding，2026-07-02）": True,
+    "補設計審裁定與審計修正紀錄": True,
+    "設計(第三版:light r1 十一條+std r1 十七條折入,各條出處見〈審計修正紀錄〉)": False,   # 〈…〉裡是交叉引用,這一節是設計正文
+    "預期值表": True, "驗收條款": True,
+    # r4 架構對齊 #1:驗收條款、預期值表照讀取器判(_KT_SIT_ACCEPT_H2_RE、_EXPECTED_H2_RE);讀取器讀不到的帶說明標題留在正文,內容才不會兩邊都看不到
+    "驗收條款(2026-09-17 落地版;每條綁一支 fixture 測試,全綠;S6/S7 各併了草稿兩條)": False, "驗收條款(全部有真測試、綠)": False,
+    "驗收條款(半套;17 條測試已寫且綠,2026-09-17;r5 加 S12–S14;相依回歸 S15–S17)": False, "驗收條款：候選規格，實作前轉成真測試綁定": False,
+}
+
+
+def t_choice_plan_sections_real_heads():
+    """[第三段 r3 H(邊界 #1、通才 #2、合約 #1);r4、r5 改判法] 二級標題文字裡含「審計修正紀錄」就整節排除(〈…〉交叉引用不算);驗收條款、預期值表照讀取器
+    (_KT_SIT_ACCEPT_H2_RE、_EXPECTED_H2_RE)那幾節的整段排除,讀取器讀不到的帶說明標題(例「驗收條款(全部有真測試、綠)」)留在正文。語料是 repo 裡真的計劃標題
+    (_CKL_REAL_HEADS,逐條歸類),另加人造反例:r1/r2、§5.1、t3 前綴、審計修正紀錄——r1、審計修正紀錄外篇(明文取捨:排除)都排除;§2 預期值表、驗收條款與範例、
+    預期值表格式說明、預期值表的說明、非驗收條款是正文。
+    翻紅釘:改判法讓任一條歸類變了 → 那一條紅。"""
+    m = _load_lumos_inproc()
+    fake = {"§5.1 審計修正紀錄": True, "t3 審計修正紀錄": True, "審計修正紀錄——r1": True, "審計修正紀錄外篇": True, "§2 預期值表": False,
+            "〈審計修正紀錄〉": True, "〈審計修正紀錄 〈x〉": True, "〈審計修正紀錄 〈x〉 附錄": True, "驗收條款 ": True,
+            "驗收條款與範例": False, "預期值表格式說明": False, "預期值表的說明": False, "非驗收條款": False, "範圍": False}
+    heads = {**_CKL_REAL_HEADS, **fake}
+    text = "".join(f"## {t}\n內文 {k}\n" for k, t in enumerate(heads))
+    got = {n for n, _t in m._choice_plan_sections(text)}
+    wrong = [t for t, out in heads.items() if (f"〈{t}〉" in got) == out]
+    check("H 真實標題與反例逐條歸類對", not wrong, str(wrong))
+
+
+def t_choice_plan_sections_reader_complement():
+    """[第三段 r5 C(通才 #1、正確性 #1、邊界 #1、架構對齊 #1、合約 #2)] 計劃正文 = 讀取器沒讀走的行:每一行內容不是在正文、就是被驗收條款或預期值表的讀取器
+    (_h2_section_lines 配 _KT_SIT_ACCEPT_H2_RE、_EXPECTED_H2_RE)讀走,恰好一邊。語料:repo 真標題(_CKL_REAL_HEADS 裡驗收條款、預期值表那幾條)加 CommonMark 合法的
+    結尾井號(`## 驗收條款 ##`、`## 預期值表 #`)、前面沒有二級標題的 `### 驗收條款`、tab 與全形空白。翻紅釘:正文改回照標題字面判 → 結尾井號那幾案兩邊都沒有而紅。
+    [r6 F(合約 #1)] 讀取器只回圍欄外的行,正文改扣讀取器那幾節的整段區間(_h2_section_lines 的 spans):節中間、節尾、檔尾、同名兩節的圍欄都不進正文;
+    翻紅釘:區間在下一節、同名新節、檔尾任一處不收 → 對應那案紅。"""
+    m = _load_lumos_inproc()
+    heads = [f"## {t}" for t in _CKL_REAL_HEADS if "審計修正紀錄" not in t] + [
+        "## 驗收條款 ##", "## 預期值表 #", "## 驗收條款 #####", "##\t驗收條款", "## 驗收條款\u3000", "## 驗收條款 ## x", "## 預期值表 \\#"]
+    bad = []
+    for k, h in enumerate(heads):
+        for pre in ("", "# 標題\n\n", "### 驗收條款\n前文\n"):
+            text = f"---\ntype: project\n---\n{pre}{h}\n- [S1] 內容{k}號\n\n## 範圍\n範圍{k}號\n"
+            body = "\n".join(t for _n, t in m._choice_plan_sections(text))
+            read = "\n".join(ln for rx in (m._KT_SIT_ACCEPT_H2_RE, m._EXPECTED_H2_RE) for _no, ln in (m._h2_section_lines(text, rx) or []))
+            for word in (f"內容{k}號", f"範圍{k}號", "前文" if pre.startswith("###") else None):
+                if word and (word in body) == (word in read):
+                    bad.append((h, pre[:6], word, word in body))
+    check("C 每一行恰好在正文或讀取器其中一邊", not bad, str(bad[:6]))
+    t = "## 驗收條款\n- [S1] 甲\n### 子節\n乙\n## 範圍\n丙\n"
+    got = dict(m._choice_plan_sections(t))
+    check("C ★對照★ 讀取器讀得到的驗收條款(含三級子節)不進正文,範圍照收", got == {"〈範圍〉": "丙"}, str(got))
+    fenced = {"節中間": "## 驗收條款\n- [S1] 甲\n```\n圍欄內字\n```\n乙\n## 範圍\n丙\n",
+              "節尾": "## 預期值表\n| a |\n~~~\n圍欄內字\n~~~\n## 範圍\n丙\n",
+              "檔尾": "## 範圍\n丙\n## 驗收條款\n- [S1] 甲\n```\n圍欄內字\n```\n",
+              "兩節": "## 驗收條款\n- [S1] 甲\n```\n圍欄內字\n```\n## 驗收條款\n- [S2] 乙\n## 範圍\n丙\n"}
+    leak = {k: m._choice_plan_sections(t) for k, t in fenced.items()}
+    leak = {k: v for k, v in leak.items() if dict(v) != {"〈範圍〉": "丙"}}
+    check("C 驗收條款、預期值表節裡的圍欄(節中間、節尾、檔尾)整段不進正文", not leak, str(leak))
+
+
+def t_choice_plan_view_body_drops_clause_lines():
+    """[第三段 r7 W(世界 #1)] 條款定義行只歸條款:驗收條款標題帶說明(讀取器讀不到那一節)時,條款讀取器 clause_bindings 照樣從全文抓到定義行,
+    計劃正文要扣掉這些行(條款旁的說明句照樣留在正文),第 2 層才不會把條款原文當成「正文寫了」。語料:自造一份加 repo 裡真的 Projects/逃逸自動記_計劃
+    (## 驗收條款(全部有真測試、綠))。翻紅釘:正文不扣條款定義行 → 兩案的條款原文都出現在正文而紅。"""
+    m = _load_lumos_inproc()
+    root = Path(__file__).resolve().parent.parent
+    tidx = m._platform_test_index(root)
+    text = "---\ntype: project\n---\n## 驗收條款(全部有真測試、綠)\n- [S1] 條款甲原文 [manual:人工看一次]\n說明句留在正文\n## 範圍\n丙\n"
+    v = m._choice_plan_view(text, tidx)
+    body = "\n".join(t for _n, t in v["sections"])
+    check("W 自造:條款定義行不在正文、說明句與範圍在正文", v["clauses"].get("S1", "").find("條款甲原文") >= 0 and "條款甲原文" not in body
+          and "說明句留在正文" in body and "丙" in body, f"{v['clauses']} {v['sections']}")
+    real = root / "docs" / "lumos-toolchain-knowledge" / "Projects" / "逃逸自動記_計劃.md"
+    rt = real.read_text(encoding="utf-8")
+    rv = m._choice_plan_view(rt, tidx)
+    rbody = "\n".join(t for _n, t in rv["sections"])
+    leaked = [c for c, raw in rv["clauses"].items() if raw.strip() and raw.strip() in rbody]
+    check("W 真計劃:每條條款定義行都不在正文", rv["clauses"] and not leaked, str(leaked[:3]))
+
+
+def t_choice_plan_view_continuation_is_body():
+    """[第三段 r8 W(世界 #1)] 條款只算定義那一行(跟條款讀取器 clause_bindings「一行一條」、規格閘算綁定同一個口徑):定義行底下的縮排續行與子項歸計劃正文,
+    子項自己的 [test:] 也不算進那條條款的綁定——第 2 層把它判成「正文寫了、條款沒收」、建議補成獨立條款,跟規格閘一致(條款寫在驗收條款節裡時,續行跟整節一起排除,釘現狀)。兩邊口徑一起斷言:
+    改成把續行併進條款(正文扣掉續行)而條款讀取器沒跟著改 → 正文那條紅;條款讀取器改成收續行的綁定 → 綁定那條紅,提醒正文要一起改。"""
+    m = _load_lumos_inproc()
+    tidx = m._platform_test_index(Path(__file__).resolve().parent.parent)
+    text = "---\ntype: project\n---\n## 範圍\n- [S1] 條款甲 [manual:人工看一次]\n  - 子項乙只在安卓 [test:t_not_a_real_test_xyz]\n丙\n"
+    v = m._choice_plan_view(text, tidx)
+    body = "\n".join(t for _n, t in v["sections"])
+    _pd, split, default, methods_for, hay_for, _l = tidx
+    s1 = [r for r in m.clause_bindings(text, split, default, methods_for, hay_for) if r["id"] == "S1"]
+    check("W 子項不算條款 S1 的綁定(條款讀取器一行一條)", s1 and not any("t_not_a_real_test_xyz" in str(x) for x in s1[0].get("refs") or []), str(s1))
+    check("W 一般段落裡的條款:續行子項歸正文、條款只有定義行", "子項乙只在安卓" in body and "子項乙" not in v["clauses"].get("S1", "")
+          and "條款甲" not in body and "丙" in body, f"{v['clauses']} {v['sections']}")
+    t2 = "---\ntype: project\n---\n## 驗收條款\n- [S1] 條款甲 [manual:人工看一次]\n  - 子項乙只在安卓\n## 範圍\n丙\n"
+    v2 = m._choice_plan_view(t2, tidx)
+    check("W ★現狀★ 驗收條款節裡的續行跟整節一起排除(不在正文;要不要給判讀看見另議,見 Issues 第 20 條)",
+          dict(v2["sections"]) == {"〈範圍〉": "丙"}, str(v2["sections"]))
+
+
+def t_choice_layer_plan_sides_total():
+    """[第三段 r3 S(正確性 #1、#2;資源 #1、邊界 #2、通才 #3)] 旁檔看「這一組實際附上的計劃加總」:依共用材料大小由大到小逐一改成旁檔,直到內嵌加總 ≤
+    _CHOICE_LAYER_SHARED_MAX。5 份各約 84KB 的計劃 → 至少 4 份改旁檔、內嵌加總 ≤ 上限;單一小計劃 → 不產生旁檔。走旁檔的計劃材料仍附段名清單、開頭寫「只看這份材料
+    與它指到的旁檔」。翻紅釘:照單份大小判 → 第一案 0 份旁檔而紅。"""
+    import types
+    m = _load_lumos_inproc()
+    views = {f"P{i}.md": {"clauses": {"S1": "- [S1] " + "條" * 28000}, "bound": set(), "expected": "", "sections": [("〈範圍〉", "一句")]} for i in range(5)}
+    views["Small.md"] = {"clauses": {"S1": "- [S1] 短"}, "bound": set(), "expected": "", "sections": [("〈範圍〉", "一句")]}
+    ctx = types.SimpleNamespace(view=lambda p: views.get(p))
+    sides = m._choice_layer_plan_sides(ctx, [f"P{i}.md" for i in range(5)], "a" * 12)
+    inline = sum(len("\n".join(m._choice_layer_plan_md(p, views[p])).encode("utf-8")) for p in views if p.startswith("P") and p not in sides)
+    check("S 五份約 84KB 的計劃 → 至少 4 份旁檔、內嵌加總 ≤ 上限", len(sides) >= 4 and inline <= m._CHOICE_LAYER_SHARED_MAX, f"{len(sides)} {inline}")
+    check("S ★對照★ 單一小計劃 → 不產生旁檔", m._choice_layer_plan_sides(ctx, ["Small.md"], "a" * 12) == {}, "")
+    md = "\n".join(m._choice_layer_plan_md("P0.md", views["P0.md"], "x/side.md"))
+    check("S 走旁檔的計劃材料:指路、條款號、段名清單都在,沒有條款全文", "x/side.md" in md and "S1" in md and "〈範圍〉" in md and "條" * 100 not in md, md[:400])
+    check("S 材料開頭改成「只看這份材料與它指到的旁檔」", "只看這份材料與它指到的旁檔" in m._CHOICE_LAYER_INTRO, "")
+
+
+def t_choice_layer_side_content():
+    """[第三段 r3 T(通才 #1)] 旁檔內容:那份計劃的每條條款原文、預期值表、每一段正文(拿 _choice_plan_view 算出的內容逐項比)都在;走旁檔的材料裡有指路、條款號清單、
+    段名清單,沒有正文全文。翻紅釘:旁檔寫成空殼 → 逐項比那條紅。"""
+    roots = []
+    try:
+        clauses = _CKL_CLAUSES + "\n## 背景\n\n" + ("很長的背景說明一句話。" * 12000) + "\n"
+        root, fake = _ck_repo(3, {"alphaCase": {"kill": [1]}}, clauses=clauses)
+        roots += [root, fake]
+        _ck_run(root, fake)
+        t = _ckl_cmd(root, fake, "--template", "--diff", "main..HEAD")
+        lid = _ckl_lid(t)
+        wd = Path(root) / ".lumos" / "note-audit" / "choice-layer"
+        sides = sorted(wd.glob(f"{lid}-plan-*.md"))
+        m = _load_lumos_inproc()
+        tidx = m._platform_test_index(Path(root))
+        v = m._choice_plan_view((Path(root) / _KSP_V / _CKL_PLAN_REL).read_text(encoding="utf-8"), tidx)
+        side = sides[0].read_text(encoding="utf-8") if sides else ""
+        miss = [c for c, raw in v["clauses"].items() if raw not in side] + (["預期值表"] if v["expected"] not in side else []) \
+            + [n for n, txt in v["sections"] if n not in side or txt not in side]
+        check("T 旁檔有每條條款原文、預期值表、每一段正文", len(sides) == 1 and not miss and v["sections"], f"{len(sides)} {miss}")
+        out = t.stdout
+        check("T 走旁檔的材料:有指路、條款號清單、段名清單,沒有正文全文", sides and sides[0].name in out and "S1" in out and "〈背景〉" in out
+              and "很長的背景說明一句話。" * 3 not in out, out[:1500])
     finally:
         _ck_cleanup(*roots)
 
